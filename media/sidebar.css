@@ -1,0 +1,304 @@
+:root {
+	color-scheme: light dark;
+}
+
+html,
+body {
+	height: 100%;
+}
+
+body {
+	display: flex;
+	flex-direction: column;
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size);
+	color: var(--vscode-foreground);
+	padding: 0;
+}
+
+#app {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
+/* 顶部标签栏 */
+.tabs {
+	display: flex;
+	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorGroup-border, transparent));
+	position: sticky;
+	top: 0;
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	z-index: 1;
+}
+
+.tab {
+	flex: 1;
+	padding: 8px 4px;
+	text-align: center;
+	font-size: 12px;
+	cursor: pointer;
+	border: none;
+	background: transparent;
+	color: var(--vscode-foreground);
+	opacity: 0.65;
+	border-bottom: 2px solid transparent;
+	width: auto;
+}
+
+.tab:hover {
+	opacity: 1;
+	background: var(--vscode-list-hoverBackground);
+}
+
+.tab.active {
+	opacity: 1;
+	border-bottom-color: var(--vscode-focusBorder);
+}
+
+.page {
+	padding: 8px;
+}
+
+.page[hidden] {
+	display: none;
+}
+
+/* 工作台：纵向撑满，素材库占位区弹性填充，把 dock 顶到底部 */
+.page[data-page="workbench"]:not([hidden]) {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
+/* 工作台中部素材库占位 */
+.gallery-placeholder {
+	flex: 1;
+	min-height: 120px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	border: 1px dashed var(--vscode-panel-border, transparent);
+	border-radius: 4px;
+	opacity: 0.5;
+	font-size: 12px;
+	margin: 8px 0;
+}
+
+/* 工作台底部操作条 */
+.dock {
+	border-top: 1px solid var(--vscode-panel-border, transparent);
+	padding-top: 8px;
+	margin-top: 8px;
+}
+
+.link {
+	display: inline-block;
+	margin-top: 4px;
+	font-size: 12px;
+	color: var(--vscode-textLink-foreground);
+	cursor: pointer;
+	text-decoration: none;
+}
+
+.link:hover {
+	color: var(--vscode-textLink-activeForeground);
+	text-decoration: underline;
+}
+
+h2 {
+	font-size: 11px;
+	text-transform: uppercase;
+	opacity: 0.7;
+	margin: 14px 0 6px;
+	letter-spacing: 0.04em;
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	margin-bottom: 8px;
+}
+
+.field label {
+	font-size: 12px;
+	opacity: 0.85;
+}
+
+input,
+select {
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	color: var(--vscode-foreground);
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
+	padding: 4px 6px;
+	border-radius: 2px;
+	font-size: 12px;
+	box-sizing: border-box;
+	width: 100%;
+}
+
+input:focus,
+select:focus {
+	outline: none;
+	border-color: var(--vscode-focusBorder);
+}
+
+/* 两列并排 */
+.row {
+	display: flex;
+	gap: 8px;
+}
+
+.row > .field {
+	flex: 1;
+	min-width: 0;
+}
+
+/* 数字步进器 */
+.stepper {
+	display: flex;
+	align-items: stretch;
+}
+
+.stepper input {
+	text-align: center;
+	border-radius: 0;
+	-moz-appearance: textfield;
+	appearance: textfield;
+}
+
+.stepper input::-webkit-outer-spin-button,
+.stepper input::-webkit-inner-spin-button {
+	-webkit-appearance: none;
+	margin: 0;
+}
+
+.stepper .step {
+	width: 28px;
+	flex: 0 0 28px;
+	padding: 0;
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	color: var(--vscode-foreground);
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
+	font-size: 14px;
+	line-height: 1;
+}
+
+.stepper .step:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+.stepper .step:first-child {
+	border-radius: 2px 0 0 2px;
+	border-right: none;
+}
+
+.stepper .step:last-child {
+	border-radius: 0 2px 2px 0;
+	border-left: none;
+}
+
+button {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border: none;
+	padding: 6px 10px;
+	border-radius: 2px;
+	cursor: pointer;
+	font-size: 12px;
+	width: 100%;
+}
+
+button:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+/* 生成按钮：固定大小，不占满整行 */
+.gen-btn {
+	width: auto;
+	align-self: flex-start;
+	padding: 6px 16px;
+	margin-top: 8px;
+}
+
+button.secondary {
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	margin-top: 6px;
+}
+
+.status {
+	font-size: 12px;
+	min-height: 16px;
+	margin: 6px 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.status.error {
+	color: var(--vscode-errorForeground);
+}
+
+.active-md {
+	font-size: 12px;
+	opacity: 0.8;
+	margin-bottom: 6px;
+	word-break: break-all;
+}
+
+.task {
+	margin-bottom: 12px;
+}
+
+.task .folder {
+	font-size: 11px;
+	opacity: 0.6;
+	margin-bottom: 4px;
+}
+
+.thumbs {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+	gap: 6px;
+}
+
+/* 任务页：每行 2 张，保留图片真实比例 */
+.thumbs-lg {
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+}
+
+.thumbs img {
+	width: 100%;
+	aspect-ratio: 1;
+	object-fit: cover;
+	border-radius: 3px;
+	border: 1px solid var(--vscode-panel-border, transparent);
+	cursor: pointer;
+	background: var(--vscode-editor-background);
+}
+
+/* 任务页缩略图：覆盖上面的正方形裁剪，按真实比例显示（须写在 .thumbs img 之后才能生效） */
+.thumbs-lg img {
+	aspect-ratio: auto;
+	height: auto;
+	object-fit: contain;
+}
+
+.thumbs img:hover {
+	outline: 2px solid var(--vscode-focusBorder);
+}
+
+.empty {
+	font-size: 12px;
+	opacity: 0.6;
+}
