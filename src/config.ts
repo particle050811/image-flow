@@ -16,6 +16,16 @@ export const CONFIG_OPTIONS: ConfigOptions = {
 const STATE_KEY = 'image-flow.config';
 const SECRET_KEY = 'image-flow.apiKey';
 
+/**
+ * 模型 → 内置注入句的初始种子。
+ * gpt-image 系列生成非真实图片易出噪点，预置抑噪句；nano-banana 系列不需要，不在表内即不种入。
+ * 仅种入「配置里尚不存在」的模型键，用户改动（含清空为空串）后不再被覆盖。
+ */
+const MODEL_INJECTION_SEEDS: Record<string, string> = {
+	'gpt-image-2': '整体画面弱化微小细节，避免过度刻画。',
+	'gpt-image-2-vip': '整体画面弱化微小细节，避免过度刻画。',
+};
+
 /** globalState 里持久化的部分（不含 apiKey） */
 type StoredConfig = Omit<ImageFlowConfig, 'apiKey'>;
 
@@ -27,6 +37,7 @@ const DEFAULTS: StoredConfig = {
 	concurrency: 1,
 	workbenchThumbSize: 72,
 	tasksThumbSize: 140,
+	modelInjections: {},
 };
 
 /** 读取完整配置：非敏感项来自 globalState，apiKey 来自加密的 secrets */
@@ -48,6 +59,26 @@ export async function writeConfig(
 	if (Object.keys(rest).length) {
 		const stored = context.globalState.get<Partial<StoredConfig>>(STATE_KEY, {});
 		await context.globalState.update(STATE_KEY, { ...stored, ...rest });
+	}
+}
+
+/**
+ * 首次激活时把内置注入种子写入配置：仅补「配置中尚不存在」的模型键，
+ * 已存在的（含用户清空后的空串）保持不动。让 gpt-image 等模型的默认抑噪句在输入框里可见可改。
+ */
+export async function seedModelInjections(context: vscode.ExtensionContext): Promise<void> {
+	const stored = context.globalState.get<Partial<StoredConfig>>(STATE_KEY, {});
+	const current = stored.modelInjections ?? {};
+	const merged = { ...current };
+	let changed = false;
+	for (const [model, seed] of Object.entries(MODEL_INJECTION_SEEDS)) {
+		if (!(model in merged)) {
+			merged[model] = seed;
+			changed = true;
+		}
+	}
+	if (changed) {
+		await context.globalState.update(STATE_KEY, { ...stored, modelInjections: merged });
 	}
 }
 

@@ -14,6 +14,8 @@ export interface ImageFlowConfig {
 	workbenchThumbSize: number;
 	/** 任务栏缩略图边长（px） */
 	tasksThumbSize: number;
+	/** 模型 → 用户自定义注入句的覆盖表；缺省回退内置默认表 */
+	modelInjections: Record<string, string>;
 }
 
 export interface BaseUrlOption {

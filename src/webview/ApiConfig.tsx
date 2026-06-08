@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { vscode, type Config, type ConfigOptions } from './vscode';
-import { Select, TextField, NumberField } from './fields';
+import { Select, TextField, NumberField, TextArea } from './fields';
 
 const GET_KEY_URL = 'https://grsai.ai/zh/dashboard/api-keys';
 
@@ -19,6 +20,8 @@ export function ApiConfig({
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
 	onPreview: () => void;
 }) {
+	// 设置页独立选择要编辑哪个模型的注入提示词，默认当前工作台模型，与工作台选择解耦
+	const [injectModel, setInjectModel] = useState(config.model);
 	return (
 		<div className="page" data-page="api" hidden={hidden}>
 			<TextField
@@ -53,6 +56,20 @@ export function ApiConfig({
 				min={40}
 				max={400}
 				onChange={(v) => onChange('tasksThumbSize', v)}
+			/>
+			<Select
+				label="模型注入提示词 — 选择模型"
+				value={injectModel}
+				options={options.model}
+				onChange={setInjectModel}
+			/>
+			<TextArea
+				label={`注入到「${injectModel}」的提示词`}
+				value={config.modelInjections[injectModel] ?? ''}
+				placeholder="此模型无注入提示词，可在此填写"
+				onChange={(v) =>
+					onChange('modelInjections', { ...config.modelInjections, [injectModel]: v })
+				}
 			/>
 			<div className="preview-row">
 				<span className="active-md">

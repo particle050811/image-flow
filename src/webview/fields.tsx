@@ -58,6 +58,30 @@ export function TextField({
 	);
 }
 
+/** 多行文本输入 */
+export function TextArea({
+	label,
+	value,
+	placeholder,
+	onChange,
+}: {
+	label: string;
+	value: string;
+	placeholder?: string;
+	onChange: (value: string) => void;
+}) {
+	return (
+		<Field label={label}>
+			<textarea
+				rows={3}
+				value={value}
+				placeholder={placeholder}
+				onChange={(e) => onChange(e.target.value)}
+			/>
+		</Field>
+	);
+}
+
 /** 数字输入框：编辑时保留原始文本，失焦才按 [min,max] 约束并提交，避免边打字边被夹断 */
 export function NumberField({
 	label,

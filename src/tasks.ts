@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { submitGeneration, queryResult, TransientError } from './api';
 import { buildPrompt, createTaskFolder, downloadImages, formatStamp } from './command';
 import { readConfig } from './config';
+import { buildInjectedPrompt } from './inject';
 import type { ImageFlowConfig, PendingTask, PendingJob } from './shared';
 
 /** globalState 中存放未完成任务的键 */
@@ -101,7 +102,8 @@ export class TaskManager {
 			throw new Error('Markdown 文件内容为空，无法生成。');
 		}
 
-		const { prompt, images } = await buildPrompt(mdUri, content);
+		const { prompt: basePrompt, images } = await buildPrompt(mdUri, content);
+		const prompt = await buildInjectedPrompt(config, basePrompt);
 		const count = Math.max(1, config.concurrency);
 
 		const settled = await Promise.allSettled(

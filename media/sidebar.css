@@ -202,7 +202,8 @@ h2 {
 }
 
 input,
-select {
+select,
+textarea {
 	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 	color: var(--vscode-foreground);
 	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
@@ -213,8 +214,14 @@ select {
 	width: 100%;
 }
 
+textarea {
+	font-family: inherit;
+	resize: none;
+}
+
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
 	outline: none;
 	border-color: var(--vscode-focusBorder);
 }

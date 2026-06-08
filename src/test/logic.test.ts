@@ -14,6 +14,7 @@ const baseConfig: ImageFlowConfig = {
 	concurrency: 1,
 	workbenchThumbSize: 72,
 	tasksThumbSize: 140,
+	modelInjections: {},
 };
 
 suite('images', () => {

@@ -1,11 +1,16 @@
 import * as vscode from 'vscode';
 import { previewRequestCommand } from './command';
+import { seedModelInjections } from './config';
 import { SidebarProvider } from './sidebarProvider';
 import { TaskManager } from './tasks';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
+	// 首次激活把内置注入种子写入配置，让默认抑噪句在侧栏输入框可见可改。
+	// 必须在注册侧栏 provider 前 await：否则 webview 可能先读到尚未种入的 config，默认句首次不显示。
+	await seedModelInjections(context);
+
 	// 异步任务管理器：提交/轮询/持久化。配合 onStartupFinished 激活，开机即 resume 续拉重启前未完成的任务。
 	const taskManager = new TaskManager(context);
 	context.subscriptions.push(taskManager);

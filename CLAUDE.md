@@ -45,7 +45,7 @@ npm test               # 运行扩展测试（vscode-test，会下载并启动 V
 
 生成走**异步任务机制**（`src/tasks.ts` 的 `TaskManager`）：点生成 → 按并发数用 `replyType:'async'` 并发提交拿 job id → 任务记录持久化进 `globalState` → 单个定时器（4s）轮询 `GET /v1/api/result`，某 job 成功就把图下载到 `task-<时间戳>-<seq>` 文件夹 → 全部 job 终结后从持久化移除。重启时 `resume()` 续拉未完成任务。任务进行中卡片在「任务」标签页顶部展示，`listHistory` 用 `activeFolders()` 排除进行中文件夹避免与待办重复。
 
-API 调用封装在 `src/api.ts`（`submitGeneration` / `queryResult`），Markdown 正文解析与参考图处理在 `src/command.ts`（`buildPrompt` 把 `![](路径)` 解析为有序参考图 base64 + 替换为 `[imageN]` 引用），素材库扫描在 `src/materials.ts`。新增 webview 前端代码无需改 `esbuild.js`（webview 入口已是 `src/webview/index.tsx` 单 bundle，新组件 import 进去即可）。
+API 调用封装在 `src/api.ts`（`submitGeneration` / `queryResult`），Markdown 正文解析与参考图处理在 `src/command.ts`（`buildPrompt` 把 `![](路径)` 解析为有序参考图 base64 + 替换为 `[imageN]` 引用），素材库扫描在 `src/materials.ts`。提示词注入在 `src/inject.ts`（`buildInjectedPrompt` 把「模型注入句 + 工作区根 IMAGES.md + 正文」拼成最终 prompt，模型注入句按模型内置兜底、可在侧栏覆盖），提交（`tasks.ts`）与预览（`command.ts`）两处都在 `buildPrompt` 之后各调一次。新增 webview 前端代码无需改 `esbuild.js`（webview 入口已是 `src/webview/index.tsx` 单 bundle，新组件 import 进去即可）。
 
 ## 代码约定
 

@@ -5,6 +5,7 @@ import { buildRequestBody, fetchWithTimeout } from './api';
 import { readConfig } from './config';
 import { isImageExt, mimeOf } from './images';
 import { uriStem } from './paths';
+import { buildInjectedPrompt } from './inject';
 
 /**
  * Markdown 图片语法的正则：匹配 `![alt](路径)`，路径可选 `<>` 包裹。
@@ -229,7 +230,8 @@ export async function openRequestPreview(
 	if (!content) {
 		throw new Error('Markdown 文件内容为空。');
 	}
-	const { prompt, images } = await buildPrompt(mdUri, content);
+	const { prompt: basePrompt, images } = await buildPrompt(mdUri, content);
+	const prompt = await buildInjectedPrompt(config, basePrompt);
 	const text = buildPreviewText(config, prompt, images);
 	const doc = await vscode.workspace.openTextDocument({ content: text, language: 'markdown' });
 	await vscode.window.showTextDocument(doc, { preview: true });
