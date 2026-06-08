@@ -9,7 +9,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -36,8 +38,8 @@
         "title": "Image Flow: 生成 AI 图片"
       },
       {
-        "command": "image-flow.previewPrompt",
-        "title": "Image Flow: 预览替换后的提示词"
+        "command": "image-flow.previewRequest",
+        "title": "Image Flow: 预览请求"
       }
     ],
     "menus": {
@@ -48,7 +50,7 @@
           "group": "image-flow@1"
         },
         {
-          "command": "image-flow.previewPrompt",
+          "command": "image-flow.previewRequest",
           "when": "resourceExtname == .md",
           "group": "image-flow@2"
         }
@@ -60,7 +62,7 @@
           "group": "image-flow@1"
         },
         {
-          "command": "image-flow.previewPrompt",
+          "command": "image-flow.previewRequest",
           "when": "resourceExtname == .md",
           "group": "image-flow@2"
         }

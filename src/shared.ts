@@ -10,6 +10,10 @@ export interface ImageFlowConfig {
 	aspectRatio: string;
 	imageSize: string;
 	concurrency: number;
+	/** 工作台缩略图边长（px） */
+	workbenchThumbSize: number;
+	/** 任务栏缩略图边长（px） */
+	tasksThumbSize: number;
 }
 
 export interface BaseUrlOption {
@@ -47,21 +51,79 @@ export interface WebviewTask {
 	images: WebviewImage[];
 }
 
+/** 一个素材库（对应一个文件夹，递归扫描出的图片） */
+export interface MaterialLibrary {
+	folder: string;
+	name: string;
+	images: TaskImage[];
+}
+
+/** 发往 webview 的素材库：图片带 asWebviewUri 转换后的 src */
+export interface WebviewLibrary {
+	folder: string;
+	name: string;
+	images: WebviewImage[];
+}
+
+/** 异步生成中单个 job 的状态（对应一次 generate 提交、一个远端 job id） */
+export type JobStatus = 'running' | 'succeeded' | 'failed' | 'violation';
+
+/** 一次异步提交对应的 job：远端 id + 状态。succeeded 后不再轮询即不会重复下载 */
+export interface PendingJob {
+	id: string;
+	status: JobStatus;
+	error?: string;
+}
+
+/**
+ * 一个进行中的生成任务（一次点击 = N 个并发 job，落到同一 task 文件夹）。
+ * 持久化进 globalState，重启后据此续拉。
+ */
+export interface PendingTask {
+	id: string;
+	folder: string;
+	mdUri: string;
+	model: string;
+	jobs: PendingJob[];
+	/** 已成功下载到文件夹的图片，随 job 完成累加 */
+	images: TaskImage[];
+	/** 创建时间（ms），用于超时兜底 */
+	createdAt: number;
+}
+
+/** 发往 webview 的进行中任务：聚合进度 + 已存缩略图（带 src） */
+export interface WebviewPendingTask {
+	id: string;
+	folder: string;
+	model: string;
+	total: number;
+	done: number;
+	failed: number;
+	errors: string[];
+	images: WebviewImage[];
+}
+
 /** 扩展 → 前端 */
 export type InboundMessage =
 	| { type: 'config'; config: ImageFlowConfig; options: ConfigOptions }
 	| { type: 'activeMd'; name: string | null }
 	| { type: 'history'; tasks: WebviewTask[] }
-	| { type: 'done'; task: WebviewTask }
+	| { type: 'pendingTasks'; tasks: WebviewPendingTask[] }
 	| { type: 'status'; message: string }
 	| { type: 'error'; message: string }
-	| { type: 'busy'; busy: boolean };
+	| { type: 'busy'; busy: boolean }
+	| { type: 'libraries'; libraries: WebviewLibrary[] }
+	| { type: 'autoLibraries'; libraries: WebviewLibrary[] };
 
 /** 前端 → 扩展 */
 export type OutboundMessage =
 	| { type: 'init' }
 	| { type: 'saveConfig'; patch: Partial<ImageFlowConfig> }
 	| { type: 'generate' }
+	| { type: 'previewRequest' }
 	| { type: 'openImage'; uri: string }
+	| { type: 'insertImage'; uri: string }
 	| { type: 'openExternal'; url: string }
-	| { type: 'refreshHistory' };
+	| { type: 'refreshHistory' }
+	| { type: 'addLibrary' }
+	| { type: 'removeLibrary'; folder: string };

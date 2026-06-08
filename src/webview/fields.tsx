@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 /** 带标签的字段容器 */
 export function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -54,6 +54,52 @@ export function TextField({
 	return (
 		<Field label={label}>
 			<input type={type} value={value} onChange={(e) => onChange(e.target.value)} />
+		</Field>
+	);
+}
+
+/** 数字输入框：编辑时保留原始文本，失焦才按 [min,max] 约束并提交，避免边打字边被夹断 */
+export function NumberField({
+	label,
+	value,
+	min,
+	max,
+	onChange,
+}: {
+	label: string;
+	value: number;
+	min: number;
+	max: number;
+	onChange: (value: number) => void;
+}) {
+	const [text, setText] = useState(String(value));
+	// 外部值变化（如初始加载）时同步本地文本
+	useEffect(() => setText(String(value)), [value]);
+
+	const commit = () => {
+		const n = Number(text);
+		const clamped = Math.max(min, Math.min(max, Number.isNaN(n) ? value : n));
+		setText(String(clamped));
+		if (clamped !== value) {
+			onChange(clamped);
+		}
+	};
+
+	return (
+		<Field label={label}>
+			<input
+				type="number"
+				min={min}
+				max={max}
+				value={text}
+				onChange={(e) => setText(e.target.value)}
+				onBlur={commit}
+				onKeyDown={(e) => {
+					if (e.key === 'Enter') {
+						e.currentTarget.blur();
+					}
+				}}
+			/>
 		</Field>
 	);
 }

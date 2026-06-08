@@ -5,6 +5,8 @@ import {
 	type ConfigOptions,
 	type InboundMessage,
 	type WebviewTask,
+	type WebviewPendingTask,
+	type WebviewLibrary,
 } from './vscode';
 import { Workbench } from './Workbench';
 import { Tasks } from './Tasks';
@@ -15,7 +17,7 @@ type TabId = 'workbench' | 'tasks' | 'api';
 const TABS: { id: TabId; label: string }[] = [
 	{ id: 'workbench', label: '工作台' },
 	{ id: 'tasks', label: '任务' },
-	{ id: 'api', label: 'API 配置' },
+	{ id: 'api', label: '设置' },
 ];
 
 export function App() {
@@ -24,6 +26,9 @@ export function App() {
 	const [options, setOptions] = useState<ConfigOptions | null>(null);
 	const [activeMd, setActiveMd] = useState<string | null>(null);
 	const [tasks, setTasks] = useState<WebviewTask[]>([]);
+	const [pendingTasks, setPendingTasks] = useState<WebviewPendingTask[]>([]);
+	const [libraries, setLibraries] = useState<WebviewLibrary[]>([]);
+	const [autoLibraries, setAutoLibraries] = useState<WebviewLibrary[]>([]);
 	const [busy, setBusy] = useState(false);
 	const [status, setStatus] = useState<{ text: string; error: boolean }>({ text: '', error: false });
 
@@ -42,8 +47,14 @@ export function App() {
 				case 'history':
 					setTasks(msg.tasks);
 					break;
-				case 'done':
-					setStatus({ text: `已生成 ${msg.task.images.length} 张图片。`, error: false });
+				case 'pendingTasks':
+					setPendingTasks(msg.tasks);
+					break;
+				case 'libraries':
+					setLibraries(msg.libraries);
+					break;
+				case 'autoLibraries':
+					setAutoLibraries(msg.libraries);
 					break;
 				case 'status':
 					setStatus({ text: msg.message, error: false });
@@ -79,6 +90,15 @@ export function App() {
 		vscode.postMessage({ type: 'generate' });
 	};
 
+	const previewRequest = () => {
+		setStatus({ text: '', error: false });
+		vscode.postMessage({ type: 'previewRequest' });
+	};
+
+	const addLibrary = () => vscode.postMessage({ type: 'addLibrary' });
+	const removeLibrary = (folder: string) =>
+		vscode.postMessage({ type: 'removeLibrary', folder });
+
 	if (!config || !options) {
 		return <div className="page">加载中…</div>;
 	}
@@ -104,15 +124,28 @@ export function App() {
 				activeMd={activeMd}
 				busy={busy}
 				status={status}
+				libraries={libraries}
+				autoLibraries={autoLibraries}
+				thumbSize={config.workbenchThumbSize}
 				onChange={saveField}
 				onGenerate={generate}
+				onPreview={previewRequest}
+				onAddLibrary={addLibrary}
+				onRemoveLibrary={removeLibrary}
 			/>
-			<Tasks hidden={tab !== 'tasks'} tasks={tasks} />
+			<Tasks
+				hidden={tab !== 'tasks'}
+				tasks={tasks}
+				pendingTasks={pendingTasks}
+				thumbSize={config.tasksThumbSize}
+			/>
 			<ApiConfig
 				hidden={tab !== 'api'}
 				config={config}
 				options={options}
+				activeMd={activeMd}
 				onChange={saveField}
+				onPreview={previewRequest}
 			/>
 		</>
 	);

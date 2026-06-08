@@ -8,6 +8,8 @@ export type {
 	BaseUrlOption,
 	WebviewImage,
 	WebviewTask,
+	WebviewPendingTask,
+	WebviewLibrary,
 	InboundMessage,
 	OutboundMessage,
 } from '../shared';

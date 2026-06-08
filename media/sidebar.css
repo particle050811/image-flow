@@ -37,7 +37,7 @@ body {
 	flex: 1;
 	padding: 8px 4px;
 	text-align: center;
-	font-size: 12px;
+	font-size: 15px;
 	cursor: pointer;
 	border: none;
 	background: transparent;
@@ -73,19 +73,91 @@ body {
 	min-height: 0;
 }
 
-/* 工作台中部素材库占位 */
-.gallery-placeholder {
+/* 工作台中部素材库区：弹性填充并可滚动，把 dock 顶到底部 */
+.gallery {
 	flex: 1;
 	min-height: 120px;
+	overflow-y: auto;
+	margin: 8px 0;
+}
+
+/* 素材库头部：标题 + 添加按钮 */
+.materials-head {
 	display: flex;
 	align-items: center;
-	justify-content: center;
-	text-align: center;
-	border: 1px dashed var(--vscode-panel-border, transparent);
-	border-radius: 4px;
-	opacity: 0.5;
-	font-size: 12px;
-	margin: 8px 0;
+	justify-content: space-between;
+	margin-bottom: 6px;
+}
+
+.materials-title {
+	font-size: 14px;
+	text-transform: uppercase;
+	opacity: 0.7;
+	letter-spacing: 0.04em;
+}
+
+.lib-add {
+	width: auto;
+	padding: 2px 8px;
+	font-size: 14px;
+}
+
+/* 单个素材库 */
+.lib {
+	margin-bottom: 6px;
+}
+
+.lib-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 2px;
+	cursor: pointer;
+	border-radius: 3px;
+	font-size: 15px;
+}
+
+.lib-head:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+.lib-caret {
+	width: 12px;
+	opacity: 0.7;
+	flex: 0 0 12px;
+}
+
+.lib-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.lib-count {
+	font-size: 14px;
+	opacity: 0.6;
+}
+
+.lib-remove {
+	width: auto;
+	flex: 0 0 auto;
+	padding: 0 6px;
+	background: transparent;
+	color: var(--vscode-foreground);
+	opacity: 0.6;
+	font-size: 17px;
+	line-height: 1;
+}
+
+.lib-remove:hover {
+	background: var(--vscode-list-hoverBackground);
+	opacity: 1;
+}
+
+.lib .thumbs {
+	padding: 4px 2px 2px;
 }
 
 /* 工作台底部操作条 */
@@ -98,7 +170,7 @@ body {
 .link {
 	display: inline-block;
 	margin-top: 4px;
-	font-size: 12px;
+	font-size: 15px;
 	color: var(--vscode-textLink-foreground);
 	cursor: pointer;
 	text-decoration: none;
@@ -110,7 +182,7 @@ body {
 }
 
 h2 {
-	font-size: 11px;
+	font-size: 14px;
 	text-transform: uppercase;
 	opacity: 0.7;
 	margin: 14px 0 6px;
@@ -125,7 +197,7 @@ h2 {
 }
 
 .field label {
-	font-size: 12px;
+	font-size: 15px;
 	opacity: 0.85;
 }
 
@@ -136,7 +208,7 @@ select {
 	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
 	padding: 4px 6px;
 	border-radius: 2px;
-	font-size: 12px;
+	font-size: 15px;
 	box-sizing: border-box;
 	width: 100%;
 }
@@ -156,6 +228,11 @@ select:focus {
 .row > .field {
 	flex: 1;
 	min-width: 0;
+}
+
+/* 工作台 dock 行：模型名长，加宽模型列、压缩其余 */
+.dock .row > .field:first-child {
+	flex: 2;
 }
 
 /* 数字步进器 */
@@ -184,7 +261,7 @@ select:focus {
 	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 	color: var(--vscode-foreground);
 	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
-	font-size: 14px;
+	font-size: 17px;
 	line-height: 1;
 }
 
@@ -209,7 +286,7 @@ button {
 	padding: 6px 10px;
 	border-radius: 2px;
 	cursor: pointer;
-	font-size: 12px;
+	font-size: 15px;
 	width: 100%;
 }
 
@@ -222,11 +299,39 @@ button:disabled {
 	cursor: default;
 }
 
+/* 生成行：文件名与按钮居中并拉开距离 */
+.gen-row {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 16px;
+	margin-top: 8px;
+}
+
 /* 生成按钮：固定大小，不占满整行 */
 .gen-btn {
 	width: auto;
-	align-self: flex-start;
+	flex: 0 0 auto;
 	padding: 6px 16px;
+	margin-top: 0;
+}
+
+/* 预览请求按钮：次要样式，与生成按钮同排 */
+.preview-btn {
+	width: auto;
+	flex: 0 0 auto;
+	padding: 6px 16px;
+	margin-top: 0;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+/* 设置页预览区：文案在上、按钮换到第二行，整体居中 */
+.preview-row {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
 	margin-top: 8px;
 }
 
@@ -237,7 +342,7 @@ button.secondary {
 }
 
 .status {
-	font-size: 12px;
+	font-size: 15px;
 	min-height: 16px;
 	margin: 6px 0;
 	white-space: pre-wrap;
@@ -249,7 +354,7 @@ button.secondary {
 }
 
 .active-md {
-	font-size: 12px;
+	font-size: 15px;
 	opacity: 0.8;
 	margin-bottom: 6px;
 	word-break: break-all;
@@ -260,31 +365,45 @@ button.secondary {
 }
 
 .task .folder {
-	font-size: 11px;
+	font-size: 15px;
 	opacity: 0.6;
 	margin-bottom: 4px;
+	cursor: pointer;
+	user-select: none;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.task .folder:hover {
+	opacity: 0.9;
+}
+
+.task-caret {
+	flex: 0 0 12px;
+	width: 12px;
 }
 
 .thumbs {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+	grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size, 72px), 1fr));
 	gap: 6px;
 }
 
-/* 任务页：每行 2 张，保留图片真实比例 */
+/* 任务页：缩略图尺寸由 --thumb-size 控制，按真实比例显示 */
 .thumbs-lg {
-	grid-template-columns: 1fr 1fr;
+	grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size, 140px), 1fr));
 	gap: 8px;
 }
 
 .thumbs img {
 	width: 100%;
 	aspect-ratio: 1;
-	object-fit: cover;
+	object-fit: contain;
 	border-radius: 3px;
 	border: 1px solid var(--vscode-panel-border, transparent);
 	cursor: pointer;
-	background: var(--vscode-editor-background);
+	background: #000;
 }
 
 /* 任务页缩略图：覆盖上面的正方形裁剪，按真实比例显示（须写在 .thumbs img 之后才能生效） */
@@ -299,6 +418,24 @@ button.secondary {
 }
 
 .empty {
-	font-size: 12px;
+	font-size: 15px;
 	opacity: 0.6;
+}
+
+/* 进行中任务卡片：左侧高亮条 + 进度/失败提示 */
+.task.pending {
+	border-left: 2px solid var(--vscode-progressBar-background, var(--vscode-focusBorder));
+	padding-left: 8px;
+}
+
+.pending-hint {
+	font-size: 14px;
+	opacity: 0.7;
+	margin-top: 4px;
+}
+
+.pending-err {
+	font-size: 14px;
+	color: var(--vscode-errorForeground);
+	margin-top: 4px;
 }

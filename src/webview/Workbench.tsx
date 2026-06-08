@@ -1,5 +1,6 @@
-import type { Config, ConfigOptions } from './vscode';
+import type { Config, ConfigOptions, WebviewLibrary } from './vscode';
 import { Select, Stepper } from './fields';
+import { Materials } from './Materials';
 
 export function Workbench({
 	hidden,
@@ -8,8 +9,14 @@ export function Workbench({
 	activeMd,
 	busy,
 	status,
+	libraries,
+	autoLibraries,
+	thumbSize,
 	onChange,
 	onGenerate,
+	onPreview,
+	onAddLibrary,
+	onRemoveLibrary,
 }: {
 	hidden: boolean;
 	config: Config;
@@ -17,16 +24,26 @@ export function Workbench({
 	activeMd: string | null;
 	busy: boolean;
 	status: { text: string; error: boolean };
+	libraries: WebviewLibrary[];
+	autoLibraries: WebviewLibrary[];
+	thumbSize: number;
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
 	onGenerate: () => void;
+	onPreview: () => void;
+	onAddLibrary: () => void;
+	onRemoveLibrary: (folder: string) => void;
 }) {
 	return (
 		<div className="page" data-page="workbench" hidden={hidden}>
-			<div className="active-md">
-				{activeMd ? `当前文件：${activeMd}` : '未打开 Markdown 文件'}
+			<div className="gallery">
+				<Materials
+					autoLibraries={autoLibraries}
+					libraries={libraries}
+					thumbSize={thumbSize}
+					onAdd={onAddLibrary}
+					onRemove={onRemoveLibrary}
+				/>
 			</div>
-
-			<div className="gallery-placeholder">素材库（即将上线）</div>
 
 			<div className="dock">
 				<div className="row">
@@ -35,6 +52,12 @@ export function Workbench({
 						value={config.model}
 						options={options.model}
 						onChange={(v) => onChange('model', v)}
+					/>
+					<Select
+						label="分辨率"
+						value={config.imageSize}
+						options={options.imageSize}
+						onChange={(v) => onChange('imageSize', v)}
 					/>
 					<Select
 						label="比例"
@@ -51,9 +74,17 @@ export function Workbench({
 					/>
 				</div>
 
-				<button className="gen-btn" disabled={busy} onClick={onGenerate}>
-					{busy ? '生成中…' : '对当前 Markdown 生成'}
-				</button>
+				<div className="gen-row">
+					<span className="active-md">
+						{activeMd ? `当前文件：${activeMd}` : '未打开 Markdown 文件'}
+					</span>
+					<button className="preview-btn" onClick={onPreview}>
+						预览请求
+					</button>
+					<button className="gen-btn" disabled={busy} onClick={onGenerate}>
+						{busy ? '生成中…' : '生成'}
+					</button>
+				</div>
 
 				<div className={`status${status.error ? ' error' : ''}`}>{status.text}</div>
 			</div>

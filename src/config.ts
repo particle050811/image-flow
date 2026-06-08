@@ -25,6 +25,8 @@ const DEFAULTS: StoredConfig = {
 	aspectRatio: '3:4',
 	imageSize: '1K',
 	concurrency: 1,
+	workbenchThumbSize: 72,
+	tasksThumbSize: 140,
 };
 
 /** 读取完整配置：非敏感项来自 globalState，apiKey 来自加密的 secrets */
@@ -49,40 +51,3 @@ export async function writeConfig(
 	}
 }
 
-const MIGRATED_KEY = 'image-flow.migratedLegacySettings';
-
-/**
- * 一次性迁移：把旧版本写在 settings.json 里的 image-flow.* 配置导入到 globalState/secrets。
- * 旧配置项已从 package.json 移除，这里用 inspect 直接读用户/工作区设置值，迁移后打标记不再执行。
- */
-export async function migrateLegacySettings(context: vscode.ExtensionContext): Promise<void> {
-	if (context.globalState.get<boolean>(MIGRATED_KEY)) {
-		return;
-	}
-	const legacy = vscode.workspace.getConfiguration('image-flow');
-	const read = <T>(key: string): T | undefined => {
-		const v = legacy.inspect<T>(key);
-		return v?.workspaceValue ?? v?.globalValue;
-	};
-
-	const patch: Partial<ImageFlowConfig> = {};
-	for (const key of ['baseUrl', 'model', 'aspectRatio', 'imageSize'] as const) {
-		const v = read<string>(key);
-		if (v !== undefined) {
-			patch[key] = v;
-		}
-	}
-	const concurrency = read<number>('concurrency');
-	if (concurrency !== undefined) {
-		patch.concurrency = concurrency;
-	}
-	const apiKey = read<string>('apiKey');
-	if (apiKey) {
-		patch.apiKey = apiKey;
-	}
-
-	if (Object.keys(patch).length) {
-		await writeConfig(context, patch);
-	}
-	await context.globalState.update(MIGRATED_KEY, true);
-}
