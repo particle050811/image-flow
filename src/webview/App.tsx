@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import * as Tabs from '@radix-ui/react-tabs';
 import {
 	vscode,
 	type Config,
@@ -65,6 +66,9 @@ export function App() {
 				case 'busy':
 					setBusy(msg.busy);
 					break;
+				case 'navigate':
+					setTab(msg.tab);
+					break;
 			}
 		};
 		window.addEventListener('message', onMessage);
@@ -104,49 +108,56 @@ export function App() {
 	}
 
 	return (
-		<>
-			<div className="tabs">
+		<Tabs.Root
+			className="tabs-root"
+			value={tab}
+			onValueChange={(v) => switchTab(v as TabId)}
+		>
+			<Tabs.List className="tabs" aria-label="功能切换">
 				{TABS.map((t) => (
-					<button
-						key={t.id}
-						className={`tab${tab === t.id ? ' active' : ''}`}
-						onClick={() => switchTab(t.id)}
-					>
+					<Tabs.Trigger key={t.id} value={t.id} className="tab">
 						{t.label}
-					</button>
+					</Tabs.Trigger>
 				))}
-			</div>
+			</Tabs.List>
 
-			<Workbench
-				hidden={tab !== 'workbench'}
-				config={config}
-				options={options}
-				activeMd={activeMd}
-				busy={busy}
-				status={status}
-				libraries={libraries}
-				autoLibraries={autoLibraries}
-				thumbSize={config.workbenchThumbSize}
-				onChange={saveField}
-				onGenerate={generate}
-				onPreview={previewRequest}
-				onAddLibrary={addLibrary}
-				onRemoveLibrary={removeLibrary}
-			/>
-			<Tasks
-				hidden={tab !== 'tasks'}
-				tasks={tasks}
-				pendingTasks={pendingTasks}
-				thumbSize={config.tasksThumbSize}
-			/>
-			<ApiConfig
-				hidden={tab !== 'api'}
-				config={config}
-				options={options}
-				activeMd={activeMd}
-				onChange={saveField}
-				onPreview={previewRequest}
-			/>
-		</>
+			{/* 各页用 Tabs.Content + forceMount 承载：补全 tabpanel 语义与 aria-controls 关联，
+			    forceMount 保留未激活页的组件内部状态（展开态等）。.tabpanel 用 display:contents
+			    令包裹层对 #app 的 flex 布局透明，不破坏工作台撑满。子组件仍各自按 hidden 渲染。 */}
+			<Tabs.Content value="workbench" forceMount className="tabpanel">
+				<Workbench
+					hidden={tab !== 'workbench'}
+					config={config}
+					options={options}
+					activeMd={activeMd}
+					busy={busy}
+					status={status}
+					libraries={libraries}
+					autoLibraries={autoLibraries}
+					cols={config.workbenchCols}
+					onChange={saveField}
+					onGenerate={generate}
+					onPreview={previewRequest}
+					onAddLibrary={addLibrary}
+					onRemoveLibrary={removeLibrary}
+				/>
+			</Tabs.Content>
+			<Tabs.Content value="tasks" forceMount className="tabpanel">
+				<Tasks
+					hidden={tab !== 'tasks'}
+					tasks={tasks}
+					pendingTasks={pendingTasks}
+					cols={config.tasksCols}
+				/>
+			</Tabs.Content>
+			<Tabs.Content value="api" forceMount className="tabpanel">
+				<ApiConfig
+					hidden={tab !== 'api'}
+					config={config}
+					options={options}
+					onChange={saveField}
+				/>
+			</Tabs.Content>
+		</Tabs.Root>
 	);
 }

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import * as Collapsible from '@radix-ui/react-collapsible';
 import type { WebviewLibrary } from './vscode';
 import { vscode } from './vscode';
 
@@ -15,25 +16,29 @@ function LibRow({
 	onRemove?: () => void;
 }) {
 	return (
-		<div className="lib">
-			<div className="lib-head" onClick={onToggle}>
-				<span className="lib-caret">{open ? '▾' : '▸'}</span>
-				<span className="lib-name">{lib.name}</span>
-				<span className="lib-count">{lib.images.length}</span>
-				{onRemove && (
-					<button
-						className="lib-remove"
-						title="移除素材库"
-						onClick={(e) => {
-							e.stopPropagation();
-							onRemove();
-						}}
-					>
-						×
-					</button>
-				)}
-			</div>
-			{open && (
+		<Collapsible.Root className="lib" open={open} onOpenChange={onToggle}>
+			<Collapsible.Trigger asChild>
+				<div className="lib-head">
+					<span className="lib-caret" data-open={open}>
+						▸
+					</span>
+					<span className="lib-name">{lib.name}</span>
+					<span className="lib-count">{lib.images.length}</span>
+					{onRemove && (
+						<button
+							className="lib-remove"
+							title="移除素材库"
+							onClick={(e) => {
+								e.stopPropagation();
+								onRemove();
+							}}
+						>
+							×
+						</button>
+					)}
+				</div>
+			</Collapsible.Trigger>
+			<Collapsible.Content>
 				<div className="thumbs">
 					{lib.images.map((img) => (
 						<img
@@ -48,8 +53,8 @@ function LibRow({
 						/>
 					))}
 				</div>
-			)}
-		</div>
+			</Collapsible.Content>
+		</Collapsible.Root>
 	);
 }
 
@@ -57,13 +62,13 @@ function LibRow({
 export function Materials({
 	autoLibraries,
 	libraries,
-	thumbSize,
+	cols,
 	onAdd,
 	onRemove,
 }: {
 	autoLibraries: WebviewLibrary[];
 	libraries: WebviewLibrary[];
-	thumbSize: number;
+	cols: number;
 	onAdd: () => void;
 	onRemove: (folder: string) => void;
 }) {
@@ -78,7 +83,7 @@ export function Materials({
 		});
 
 	return (
-		<div className="materials" style={{ ['--thumb-size' as string]: `${thumbSize}px` }}>
+		<div className="materials" style={{ ['--cols' as string]: cols }}>
 			<div className="materials-head">
 				<span className="materials-title">当前路径</span>
 			</div>

@@ -1,9 +1,9 @@
 import * as assert from 'assert';
 import { toVipPixels, buildRequestBody, TransientError } from '../api';
-import { formatStamp, parseImageRefs } from '../command';
-import { isImageExt, mimeOf } from '../images';
-import { isTransientNetworkError } from '../tasks';
-import type { ImageFlowConfig } from '../shared';
+import { formatStamp, parseImageRefs, replaceImageRefs } from '../command';
+import { isImageExt, isImageFileName, mimeOf } from '../images';
+import { isTransientNetworkError, isTaskActive, aggregateProgress } from '../tasks';
+import type { ImageFlowConfig, PendingTask, PendingJob } from '../shared';
 
 const baseConfig: ImageFlowConfig = {
 	apiKey: 'k',
@@ -12,8 +12,8 @@ const baseConfig: ImageFlowConfig = {
 	aspectRatio: '3:4',
 	imageSize: '1K',
 	concurrency: 1,
-	workbenchThumbSize: 72,
-	tasksThumbSize: 140,
+	workbenchCols: 4,
+	tasksCols: 2,
 	modelInjections: {},
 };
 
@@ -27,6 +27,12 @@ suite('images', () => {
 	test('mimeOf 已知映射与未知回退', () => {
 		assert.strictEqual(mimeOf('.jpeg'), 'image/jpeg');
 		assert.strictEqual(mimeOf('.bmp'), 'image/png');
+	});
+	test('isImageFileName 按文件名扩展名判断', () => {
+		assert.ok(isImageFileName('a.png'));
+		assert.ok(isImageFileName('封面.JPEG'));
+		assert.ok(!isImageFileName('readme.md'));
+		assert.ok(!isImageFileName('noext'));
 	});
 });
 
@@ -109,5 +115,54 @@ suite('isTransientNetworkError', () => {
 	});
 	test('响应格式校验失败不可重试', () => {
 		assert.ok(!isTransientNetworkError(new Error('接口返回格式异常：非对象')));
+	});
+});
+
+suite('replaceImageRefs', () => {
+	test('按编号表替换为 [imageN](文件名)', () => {
+		const { indexByPath } = parseImageRefs('![a](pics/x.png) 文 ![b](y.jpg) 再 ![c](pics/x.png)');
+		const out = replaceImageRefs('![a](pics/x.png) 文 ![b](y.jpg) 再 ![c](pics/x.png)', indexByPath);
+		assert.strictEqual(out, '[image1](x) 文 [image2](y) 再 [image1](x)');
+	});
+	test('尖括号路径（含空格/半角括号）能解析并替换（F009 回归）', () => {
+		const src = '![a](<../my image (1).png>)';
+		const { indexByPath } = parseImageRefs(src);
+		assert.strictEqual(replaceImageRefs(src, indexByPath), '[image1](my image (1))');
+	});
+	test('无图片原样返回', () => {
+		assert.strictEqual(replaceImageRefs('纯文本', new Map()), '纯文本');
+	});
+});
+
+suite('isTaskActive', () => {
+	const task = (statuses: PendingJob['status'][]): PendingTask =>
+		({ jobs: statuses.map((status) => ({ status })) } as PendingTask);
+	test('有 submitting 或 running 即活跃', () => {
+		assert.ok(isTaskActive(task(['submitting'])));
+		assert.ok(isTaskActive(task(['succeeded', 'running'])));
+	});
+	test('全部终结则不活跃', () => {
+		assert.ok(!isTaskActive(task(['succeeded', 'failed', 'violation'])));
+	});
+});
+
+suite('aggregateProgress', () => {
+	const jobs = (xs: Partial<PendingJob>[]): PendingJob[] =>
+		xs.map((x) => ({ status: 'running', ...x })) as PendingJob[];
+	test('空 jobs 返回 0', () => {
+		assert.strictEqual(aggregateProgress([]), 0);
+	});
+	test('终结 job 记满分、running 取远端进度、submitting 记 0 后均摊', () => {
+		// 100(succeeded) + 50(running) + 0(submitting) = 150 / 3 = 50
+		assert.strictEqual(
+			aggregateProgress(jobs([{ status: 'succeeded' }, { status: 'running', progress: 50 }, { status: 'submitting' }])),
+			50
+		);
+	});
+	test('running 无远端进度按 0', () => {
+		assert.strictEqual(aggregateProgress(jobs([{ status: 'running' }, { status: 'succeeded' }])), 50);
+	});
+	test('failed/violation 也记满分', () => {
+		assert.strictEqual(aggregateProgress(jobs([{ status: 'failed' }, { status: 'violation' }])), 100);
 	});
 });

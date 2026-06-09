@@ -33,9 +33,9 @@ npm test               # 运行扩展测试（vscode-test，会下载并启动 V
 
 ### 扩展生命周期
 
-`src/extension.ts` 导出 `activate(context)` 与 `deactivate()`。`activate` 里做四件事：迁移旧版 settings、创建 `TaskManager`（异步任务管理器）、注册 `SidebarProvider`（侧栏 Webview）与命令、最后调 `taskManager.resume()` 续拉重启前未完成的任务。命令在 `package.json` 的 `contributes.commands` 中声明，并在 `activate` 内用 `vscode.commands.registerCommand` 注册——两处命令 ID（`image-flow.generateImage`、`image-flow.previewRequest`）必须完全一致。所有可释放对象（命令、监听器、TaskManager 等）都要 push 进 `context.subscriptions`，由宿主在停用时统一释放。
+`src/extension.ts` 导出 `activate(context)` 与 `deactivate()`。`activate` 里做四件事：种入模型注入句（`seedModelInjections`，await 确保侧栏首读 config 时默认句已就位）、创建 `TaskManager`（异步任务管理器）、注册 `SidebarProvider`（侧栏 Webview）与命令、最后调 `taskManager.resume()` 续拉重启前未完成的任务。命令在 `package.json` 的 `contributes.commands` 中声明，并在 `activate` 内用 `vscode.commands.registerCommand` 注册——两处命令 ID（`image-flow.generateImage`、`image-flow.previewRequest`）必须完全一致。所有可释放对象（命令、监听器、TaskManager 等）都要 push 进 `context.subscriptions`，由宿主在停用时统一释放。
 
-`activationEvents` 为空数组：扩展靠 `contributes.views` 贡献的侧栏视图在用户打开活动栏图标时激活，无需显式事件。注意 `resume()` 因此依赖侧栏视图容器被加载——若需要「即使从未展开侧栏也启动续拉」，要给 `activationEvents` 补 `onStartupFinished`。
+`activationEvents` 配置了 `onStartupFinished`：VS Code 启动完成即激活扩展，无需用户展开侧栏，`resume()` 因此能在开机后立即续拉重启前未完成的任务。扩展同时也会在用户打开活动栏图标、加载 `contributes.views` 贡献的侧栏视图时激活。
 
 新增命令的标准流程：(1) 在 `package.json` 的 `contributes.commands` 声明；(2) 在 `activate` 中注册同 ID 的实现；(3) 如需特定时机激活，配置 `activationEvents`。
 
@@ -52,6 +52,10 @@ API 调用封装在 `src/api.ts`（`submitGeneration` / `queryResult`），Markd
 ESLint（`eslint.config.mjs`，flat config，作用于 `**/*.{ts,tsx}`）强制：`curly`、`eqeqeq`、`no-throw-literal`、`semi` 均为 warn；import 命名须为 camelCase 或 PascalCase。lint 是 `compile`/`package` 的前置步骤，不要留 warning。
 
 Webview 侧栏样式在 `media/sidebar.css`（静态文件，不经 esbuild，改完重载窗口即生效，无需重新打包）。
+
+## 工作流
+
+每完成一轮修改、改到可提交的程度时，自动用 `/requesting-code-review` 审核代码；按审核意见修复，确认没问题后自动提交。
 
 ## 参考文档
 

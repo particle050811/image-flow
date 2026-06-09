@@ -1,5 +1,34 @@
+/* ============================================================
+   Image Flow 侧栏设计系统
+   原生精修·紧凑专业：全部继承 VS Code 主题变量，只定义节奏与质感
+   ============================================================ */
+
 :root {
 	color-scheme: light dark;
+
+	/* 间距节奏：4 的倍数，统一留白语言 */
+	--sp-1: 4px;
+	--sp-2: 8px;
+	--sp-3: 12px;
+	--sp-4: 16px;
+	--sp-5: 20px;
+
+	/* 字体层级：沿用原有字号，不改大小，仅作语义命名 */
+	--fs-title: 14px;
+	--fs-body: 15px;
+	--fs-sub: 14px;
+	--fs-label: 14px;
+
+	/* 圆角与过渡 */
+	--radius: 5px;
+	--radius-sm: 4px;
+	--ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+	--dur: 0.16s;
+
+	/* 描边：弱化的中性分隔线 */
+	--hair: var(--vscode-panel-border, var(--vscode-editorGroup-border, rgba(128, 128, 128, 0.22)));
+	--field-bg: var(--vscode-input-background, var(--vscode-sideBar-background, var(--vscode-editor-background)));
+	--field-border: var(--vscode-input-border, var(--vscode-panel-border, rgba(128, 128, 128, 0.3)));
 }
 
 html,
@@ -12,6 +41,7 @@ body {
 	flex-direction: column;
 	font-family: var(--vscode-font-family);
 	font-size: var(--vscode-font-size);
+	line-height: 1.5;
 	color: var(--vscode-foreground);
 	padding: 0;
 }
@@ -23,42 +53,70 @@ body {
 	min-height: 0;
 }
 
-/* 顶部标签栏 */
+/* Tabs.Root 接力 #app 的 flex 撑满链；.tabpanel（Radix Tabs.Content 包裹层）
+   用 display:contents 对布局透明，让内部 .page 直接成为弹性子项，
+   保持工作台撑满与 dock 贴底。forceMount 下 Content 恒渲染，显隐由内层 .page[hidden] 控制。 */
+.tabs-root {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
+.tabpanel {
+	display: contents;
+}
+
+/* ---------- 顶部标签栏 ---------- */
 .tabs {
 	display: flex;
-	border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorGroup-border, transparent));
+	gap: var(--sp-1);
+	padding: var(--sp-2) var(--sp-2) 0;
+	border-bottom: 1px solid var(--hair);
 	position: sticky;
 	top: 0;
 	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
-	z-index: 1;
+	z-index: 2;
 }
 
 .tab {
 	flex: 1;
-	padding: 8px 4px;
+	padding: var(--sp-2) var(--sp-1) var(--sp-2);
 	text-align: center;
-	font-size: 15px;
+	font-size: var(--fs-body);
+	font-weight: 500;
 	cursor: pointer;
 	border: none;
 	background: transparent;
 	color: var(--vscode-foreground);
-	opacity: 0.65;
+	opacity: 0.6;
 	border-bottom: 2px solid transparent;
 	width: auto;
+	border-radius: 0;
+	transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease),
+		border-color var(--dur) var(--ease);
 }
 
 .tab:hover {
-	opacity: 1;
-	background: var(--vscode-list-hoverBackground);
+	opacity: 0.9;
+	background: transparent;
 }
 
-.tab.active {
+.tab[data-state='active'] {
 	opacity: 1;
-	border-bottom-color: var(--vscode-focusBorder);
+	color: var(--vscode-foreground);
+	border-bottom-color: var(--vscode-focusBorder, var(--vscode-button-background));
 }
 
+.tab:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -2px;
+	border-radius: var(--radius-sm);
+}
+
+/* ---------- 页面容器 ---------- */
 .page {
-	padding: 8px;
+	padding: var(--sp-3);
 }
 
 .page[hidden] {
@@ -66,55 +124,75 @@ body {
 }
 
 /* 工作台：纵向撑满，素材库占位区弹性填充，把 dock 顶到底部 */
-.page[data-page="workbench"]:not([hidden]) {
+.page[data-page='workbench']:not([hidden]) {
 	display: flex;
 	flex-direction: column;
 	flex: 1;
 	min-height: 0;
+	padding-bottom: 0;
 }
 
-/* 工作台中部素材库区：弹性填充并可滚动，把 dock 顶到底部 */
+/* 中部素材库区：弹性填充并可滚动 */
 .gallery {
 	flex: 1;
 	min-height: 120px;
 	overflow-y: auto;
-	margin: 8px 0;
+	margin: 0 calc(-1 * var(--sp-1));
+	padding: 0 var(--sp-1);
 }
 
-/* 素材库头部：标题 + 添加按钮 */
+/* ---------- 区块标题 ---------- */
 .materials-head {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	margin-bottom: 6px;
+	margin: var(--sp-3) 0 var(--sp-2);
+}
+
+.materials-head:first-child {
+	margin-top: var(--sp-1);
 }
 
 .materials-title {
-	font-size: 14px;
+	font-size: var(--fs-label);
+	font-weight: 600;
 	text-transform: uppercase;
-	opacity: 0.7;
-	letter-spacing: 0.04em;
+	opacity: 0.55;
+	letter-spacing: 0.07em;
 }
 
 .lib-add {
 	width: auto;
-	padding: 2px 8px;
-	font-size: 14px;
+	padding: 3px var(--sp-2);
+	font-size: var(--fs-sub);
+	background: transparent;
+	color: var(--vscode-foreground);
+	border: 1px solid var(--field-border);
+	border-radius: var(--radius-sm);
+	opacity: 0.85;
+	transition: background var(--dur) var(--ease), opacity var(--dur) var(--ease);
 }
 
-/* 单个素材库 */
+.lib-add:hover {
+	background: var(--vscode-list-hoverBackground);
+	opacity: 1;
+}
+
+/* ---------- 单个素材库（Radix Collapsible） ---------- */
 .lib {
-	margin-bottom: 6px;
+	margin-bottom: var(--sp-1);
 }
 
 .lib-head {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 4px 2px;
+	gap: var(--sp-2);
+	padding: 5px var(--sp-2);
 	cursor: pointer;
-	border-radius: 3px;
-	font-size: 15px;
+	border-radius: var(--radius-sm);
+	font-size: var(--fs-body);
+	user-select: none;
+	transition: background var(--dur) var(--ease);
 }
 
 .lib-head:hover {
@@ -123,8 +201,15 @@ body {
 
 .lib-caret {
 	width: 12px;
-	opacity: 0.7;
 	flex: 0 0 12px;
+	opacity: 0.6;
+	font-size: 11px;
+	transition: transform var(--dur) var(--ease);
+}
+
+.lib-caret[data-open='true'],
+.task-caret[data-open='true'] {
+	transform: rotate(90deg);
 }
 
 .lib-name {
@@ -136,8 +221,9 @@ body {
 }
 
 .lib-count {
-	font-size: 14px;
-	opacity: 0.6;
+	font-size: var(--fs-sub);
+	opacity: 0.5;
+	font-variant-numeric: tabular-nums;
 }
 
 .lib-remove {
@@ -146,77 +232,135 @@ body {
 	padding: 0 6px;
 	background: transparent;
 	color: var(--vscode-foreground);
-	opacity: 0.6;
+	opacity: 0;
 	font-size: 17px;
 	line-height: 1;
+	border-radius: var(--radius-sm);
+	transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.lib-head:hover .lib-remove {
+	opacity: 0.55;
 }
 
 .lib-remove:hover {
 	background: var(--vscode-list-hoverBackground);
-	opacity: 1;
+	opacity: 1 !important;
+}
+
+/* Collapsible 内容展开/收起动画。
+   Radix 给 Content 元素加 data-state 并暴露 --radix-collapsible-content-height；
+   用 :not() 排除同样带 data-state 的 Trigger（.lib-head / .folder），只命中内容容器。 */
+.lib > [data-state]:not(.lib-head),
+.task > [data-state]:not(.folder) {
+	overflow: hidden;
+}
+
+.lib > [data-state='open']:not(.lib-head),
+.task > [data-state='open']:not(.folder) {
+	animation: collapsible-down var(--dur) var(--ease);
+}
+
+.lib > [data-state='closed']:not(.lib-head),
+.task > [data-state='closed']:not(.folder) {
+	animation: collapsible-up var(--dur) var(--ease);
+}
+
+@keyframes collapsible-down {
+	from {
+		height: 0;
+	}
+	to {
+		height: var(--radix-collapsible-content-height);
+	}
+}
+
+@keyframes collapsible-up {
+	from {
+		height: var(--radix-collapsible-content-height);
+	}
+	to {
+		height: 0;
+	}
 }
 
 .lib .thumbs {
-	padding: 4px 2px 2px;
+	padding: var(--sp-1) var(--sp-2) var(--sp-2);
 }
 
-/* 工作台底部操作条 */
+/* ---------- 工作台底部操作条 ---------- */
 .dock {
-	border-top: 1px solid var(--vscode-panel-border, transparent);
-	padding-top: 8px;
-	margin-top: 8px;
+	border-top: 1px solid var(--hair);
+	padding: var(--sp-3) 0;
+	margin-top: var(--sp-2);
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 }
 
 .link {
 	display: inline-block;
-	margin-top: 4px;
-	font-size: 15px;
+	margin-top: var(--sp-1);
+	font-size: var(--fs-body);
 	color: var(--vscode-textLink-foreground);
 	cursor: pointer;
 	text-decoration: none;
+	background: transparent;
+	border: none;
+	width: auto;
+	padding: 2px 0;
 }
 
 .link:hover {
 	color: var(--vscode-textLink-activeForeground);
 	text-decoration: underline;
+	background: transparent;
 }
 
 h2 {
-	font-size: 14px;
+	font-size: var(--fs-title);
+	font-weight: 600;
 	text-transform: uppercase;
-	opacity: 0.7;
-	margin: 14px 0 6px;
-	letter-spacing: 0.04em;
+	opacity: 0.55;
+	margin: var(--sp-4) 0 var(--sp-2);
+	letter-spacing: 0.07em;
 }
 
+/* ---------- 字段 ---------- */
 .field {
 	display: flex;
 	flex-direction: column;
-	gap: 3px;
-	margin-bottom: 8px;
+	gap: var(--sp-1);
+	margin-bottom: var(--sp-3);
 }
 
 .field label {
-	font-size: 15px;
-	opacity: 0.85;
+	font-size: var(--fs-label);
+	opacity: 0.8;
+	font-weight: 500;
 }
 
+/* ---------- 原生输入控件 ---------- */
 input,
 select,
 textarea {
-	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	background: var(--field-bg);
 	color: var(--vscode-foreground);
-	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
-	padding: 4px 6px;
-	border-radius: 2px;
-	font-size: 15px;
+	border: 1px solid var(--field-border);
+	padding: 5px 8px;
+	border-radius: var(--radius-sm);
+	font-size: var(--fs-body);
+	font-family: inherit;
 	box-sizing: border-box;
 	width: 100%;
+	transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 
 textarea {
-	font-family: inherit;
 	resize: none;
+}
+
+input:hover,
+textarea:hover {
+	border-color: var(--vscode-inputOption-hoverBackground, var(--vscode-focusBorder));
 }
 
 input:focus,
@@ -224,12 +368,111 @@ select:focus,
 textarea:focus {
 	outline: none;
 	border-color: var(--vscode-focusBorder);
+	box-shadow: 0 0 0 1px var(--vscode-focusBorder);
 }
 
-/* 两列并排 */
+input::placeholder,
+textarea::placeholder {
+	color: var(--vscode-input-placeholderForeground, var(--vscode-foreground));
+	opacity: 0.45;
+}
+
+/* ---------- Radix Select ---------- */
+.rx-select-trigger {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--sp-2);
+	width: 100%;
+	background: var(--field-bg);
+	color: var(--vscode-foreground);
+	border: 1px solid var(--field-border);
+	padding: 5px 8px;
+	border-radius: var(--radius-sm);
+	font-size: var(--fs-body);
+	font-family: inherit;
+	cursor: pointer;
+	text-align: left;
+	line-height: 1.4;
+	transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.rx-select-trigger:hover {
+	border-color: var(--vscode-focusBorder);
+}
+
+.rx-select-trigger:focus,
+.rx-select-trigger[data-state='open'] {
+	outline: none;
+	border-color: var(--vscode-focusBorder);
+	box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+}
+
+.rx-select-trigger > span:first-child {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.rx-select-icon {
+	flex: 0 0 auto;
+	font-size: 11px;
+	opacity: 0.6;
+	transition: transform var(--dur) var(--ease);
+}
+
+.rx-select-trigger[data-state='open'] .rx-select-icon {
+	transform: rotate(180deg);
+}
+
+.rx-select-content {
+	background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background, var(--field-bg)));
+	border: 1px solid var(--vscode-dropdown-border, var(--field-border));
+	border-radius: var(--radius);
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.32);
+	overflow: hidden;
+	z-index: 50;
+	min-width: var(--radix-select-trigger-width);
+	max-height: var(--radix-select-content-available-height);
+}
+
+.rx-select-viewport {
+	padding: var(--sp-1);
+}
+
+.rx-select-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--sp-2);
+	padding: 5px 8px;
+	font-size: var(--fs-body);
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	user-select: none;
+	outline: none;
+	color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+}
+
+.rx-select-item[data-highlighted] {
+	background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+	color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+
+.rx-select-item[data-state='checked'] {
+	font-weight: 600;
+}
+
+.rx-select-check {
+	flex: 0 0 auto;
+	font-size: 11px;
+	opacity: 0.9;
+}
+
+/* ---------- 两列并排 ---------- */
 .row {
 	display: flex;
-	gap: 8px;
+	gap: var(--sp-2);
 }
 
 .row > .field {
@@ -237,12 +480,17 @@ textarea:focus {
 	min-width: 0;
 }
 
-/* 工作台 dock 行：模型名长，加宽模型列、压缩其余 */
+/* dock 行：模型名长，加宽模型列 */
 .dock .row > .field:first-child {
 	flex: 2;
 }
 
-/* 数字步进器 */
+/* dock 行：并发数列内含加减按钮（各 34px），加宽避免输入框被挤窄 */
+.dock .row > .field:last-child {
+	flex: 1.6;
+}
+
+/* ---------- 数字步进器 ---------- */
 .stepper {
 	display: flex;
 	align-items: stretch;
@@ -253,6 +501,9 @@ textarea:focus {
 	border-radius: 0;
 	-moz-appearance: textfield;
 	appearance: textfield;
+	font-variant-numeric: tabular-nums;
+	flex: 1;
+	min-width: 0;
 }
 
 .stepper input::-webkit-outer-spin-button,
@@ -262,14 +513,18 @@ textarea:focus {
 }
 
 .stepper .step {
-	width: 28px;
-	flex: 0 0 28px;
+	width: 34px;
+	flex: 0 0 34px;
 	padding: 0;
-	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	background: var(--field-bg);
 	color: var(--vscode-foreground);
-	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
-	font-size: 17px;
+	border: 1px solid var(--field-border);
+	font-size: 18px;
 	line-height: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: background var(--dur) var(--ease);
 }
 
 .stepper .step:hover {
@@ -277,143 +532,266 @@ textarea:focus {
 }
 
 .stepper .step:first-child {
-	border-radius: 2px 0 0 2px;
+	border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 	border-right: none;
 }
 
 .stepper .step:last-child {
-	border-radius: 0 2px 2px 0;
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 	border-left: none;
 }
 
+/* ---------- 按钮 ---------- */
 button {
 	background: var(--vscode-button-background);
 	color: var(--vscode-button-foreground);
-	border: none;
-	padding: 6px 10px;
-	border-radius: 2px;
+	border: 1px solid transparent;
+	padding: 6px 12px;
+	border-radius: var(--radius-sm);
 	cursor: pointer;
-	font-size: 15px;
+	font-size: var(--fs-body);
+	font-family: inherit;
+	font-weight: 500;
 	width: 100%;
+	transition: background var(--dur) var(--ease), opacity var(--dur) var(--ease);
 }
 
 button:hover {
 	background: var(--vscode-button-hoverBackground);
 }
 
+button:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 2px;
+}
+
+button:active {
+	transform: translateY(0.5px);
+}
+
 button:disabled {
-	opacity: 0.5;
+	opacity: 0.45;
 	cursor: default;
 }
 
-/* 生成行：文件名与按钮居中并拉开距离 */
+button:disabled:active {
+	transform: none;
+}
+
+/* 生成行：文件名 + 双按钮，三者垂直居中对齐 */
 .gen-row {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	gap: 16px;
-	margin-top: 8px;
+	gap: var(--sp-3);
+	margin-top: var(--sp-3);
 }
 
-/* 生成按钮：固定大小，不占满整行 */
+/* 行内的激活文件名：wrapper 承担 flex 收缩与 tooltip 定位，内层 .active-md 负责省略号 */
+.gen-row .tip {
+	flex: 0 1 auto;
+	min-width: 0;
+}
+
+.gen-row .active-md {
+	display: block;
+	margin-bottom: 0;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .gen-btn {
 	width: auto;
 	flex: 0 0 auto;
-	padding: 6px 16px;
-	margin-top: 0;
+	padding: 6px 20px;
 }
 
-/* 预览请求按钮：次要样式，与生成按钮同排 */
 .preview-btn {
 	width: auto;
 	flex: 0 0 auto;
 	padding: 6px 16px;
-	margin-top: 0;
 	background: var(--vscode-button-secondaryBackground);
 	color: var(--vscode-button-secondaryForeground);
 }
 
-/* 设置页预览区：文案在上、按钮换到第二行，整体居中 */
-.preview-row {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 6px;
-	margin-top: 8px;
+.preview-btn:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-secondaryBackground));
+	opacity: 0.85;
 }
 
 button.secondary {
 	background: var(--vscode-button-secondaryBackground);
 	color: var(--vscode-button-secondaryForeground);
-	margin-top: 6px;
+	margin-top: var(--sp-2);
+}
+
+/* 纯 CSS tooltip：黑底跟随主题，避免原生 title 的系统白框 */
+.tip {
+	position: relative;
+}
+
+.tip::after {
+	content: attr(data-tip);
+	position: absolute;
+	left: 0;
+	bottom: calc(100% + var(--sp-1));
+	z-index: 10;
+	padding: var(--sp-1) var(--sp-2);
+	max-width: 200px;
+	white-space: normal;
+	border-radius: var(--radius-sm);
+	background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #1e1e1e));
+	color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+	border: 1px solid var(--vscode-editorHoverWidget-border, var(--hair));
+	font-size: var(--fs-sub);
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity var(--dur) var(--ease);
+}
+
+.tip:hover::after {
+	opacity: 1;
 }
 
 .status {
-	font-size: 15px;
+	font-size: var(--fs-body);
 	min-height: 16px;
-	margin: 6px 0;
+	margin: var(--sp-2) 0 0;
 	white-space: pre-wrap;
 	word-break: break-word;
+	opacity: 0.85;
 }
 
 .status.error {
 	color: var(--vscode-errorForeground);
+	opacity: 1;
 }
 
 .active-md {
-	font-size: 15px;
-	opacity: 0.8;
-	margin-bottom: 6px;
+	font-size: var(--fs-body);
+	opacity: 0.65;
+	margin-bottom: var(--sp-2);
 	word-break: break-all;
 }
 
+.empty {
+	font-size: var(--fs-body);
+	opacity: 0.5;
+	padding: var(--sp-2) 0;
+	line-height: 1.6;
+}
+
+/* ---------- 任务卡片 ---------- */
 .task {
-	margin-bottom: 12px;
+	margin-bottom: var(--sp-3);
 }
 
 .task .folder {
-	font-size: 15px;
-	opacity: 0.6;
-	margin-bottom: 4px;
+	font-size: var(--fs-body);
+	opacity: 0.7;
+	margin-bottom: var(--sp-1);
 	cursor: pointer;
 	user-select: none;
 	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: var(--sp-2);
+	padding: 5px var(--sp-2);
+	border-radius: var(--radius-sm);
+	transition: background var(--dur) var(--ease), opacity var(--dur) var(--ease);
 }
 
 .task .folder:hover {
-	opacity: 0.9;
+	opacity: 1;
+	background: var(--vscode-list-hoverBackground);
 }
 
 .task-caret {
 	flex: 0 0 12px;
 	width: 12px;
+	font-size: 11px;
+	opacity: 0.6;
+	transition: transform var(--dur) var(--ease);
 }
 
+/* 进行中任务：左侧高亮条 */
+.task.pending {
+	border-left: 2px solid var(--vscode-progressBar-background, var(--vscode-focusBorder));
+	padding-left: var(--sp-2);
+	margin-left: 1px;
+}
+
+.pending-hint {
+	font-size: var(--fs-sub);
+	opacity: 0.65;
+	margin: var(--sp-1) 0 0 var(--sp-2);
+}
+
+.pending-err {
+	font-size: var(--fs-sub);
+	color: var(--vscode-errorForeground);
+	margin: var(--sp-1) 0 0 var(--sp-2);
+}
+
+/* 进行中任务：进度条 */
+.progress-row {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	margin: var(--sp-1) 0 var(--sp-2) var(--sp-2);
+}
+
+.progress-bar {
+	flex: 1;
+	height: 4px;
+	border-radius: 2px;
+	overflow: hidden;
+	background: var(--vscode-editorWidget-border, var(--vscode-panel-border));
+}
+
+.progress-fill {
+	height: 100%;
+	border-radius: 2px;
+	background: var(--vscode-progressBar-background, var(--vscode-focusBorder));
+	transition: width var(--dur) var(--ease);
+}
+
+.progress-pct {
+	flex: 0 0 auto;
+	font-size: var(--fs-sub);
+	opacity: 0.65;
+	font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 缩略图网格 ---------- */
+/* 列数由 --cols 精确控制（每行固定张数），不再用最小宽度自动填充 */
 .thumbs {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size, 72px), 1fr));
-	gap: 6px;
+	grid-template-columns: repeat(var(--cols, 4), 1fr);
+	gap: var(--sp-1);
 }
 
-/* 任务页：缩略图尺寸由 --thumb-size 控制，按真实比例显示 */
 .thumbs-lg {
-	grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size, 140px), 1fr));
-	gap: 8px;
+	grid-template-columns: repeat(var(--cols, 2), 1fr);
+	gap: var(--sp-2);
 }
 
 .thumbs img {
 	width: 100%;
 	aspect-ratio: 1;
 	object-fit: contain;
-	border-radius: 3px;
-	border: 1px solid var(--vscode-panel-border, transparent);
+	border-radius: var(--radius-sm);
+	border: 1px solid var(--hair);
 	cursor: pointer;
 	background: #000;
+	transition: outline-color var(--dur) var(--ease), transform var(--dur) var(--ease),
+		box-shadow var(--dur) var(--ease);
+	outline: 2px solid transparent;
+	outline-offset: -2px;
 }
 
-/* 任务页缩略图：覆盖上面的正方形裁剪，按真实比例显示（须写在 .thumbs img 之后才能生效） */
+/* 任务页缩略图：按真实比例显示 */
 .thumbs-lg img {
 	aspect-ratio: auto;
 	height: auto;
@@ -421,28 +799,18 @@ button.secondary {
 }
 
 .thumbs img:hover {
-	outline: 2px solid var(--vscode-focusBorder);
+	outline-color: var(--vscode-focusBorder);
+	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+	transform: translateY(-1px);
 }
 
-.empty {
-	font-size: 15px;
-	opacity: 0.6;
-}
-
-/* 进行中任务卡片：左侧高亮条 + 进度/失败提示 */
-.task.pending {
-	border-left: 2px solid var(--vscode-progressBar-background, var(--vscode-focusBorder));
-	padding-left: 8px;
-}
-
-.pending-hint {
-	font-size: 14px;
-	opacity: 0.7;
-	margin-top: 4px;
-}
-
-.pending-err {
-	font-size: 14px;
-	color: var(--vscode-errorForeground);
-	margin-top: 4px;
+/* 尊重用户的减弱动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+	* {
+		transition: none !important;
+		animation: none !important;
+	}
+	.thumbs img:hover {
+		transform: none;
+	}
 }

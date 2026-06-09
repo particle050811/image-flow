@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import type { MaterialLibrary, TaskImage } from './shared';
-import { isImageExt } from './images';
+import { isImageFileName } from './images';
 import { uriBaseName } from './paths';
 
 /** 素材库文件夹列表（file Uri 字符串）存于 workspaceState——按工作区隔离，不同项目互不混用 */
@@ -12,10 +11,6 @@ const MAX_DEPTH = 3;
 
 /** 单个素材库扫描的条目数上限——防止用户误把 C 盘等超大目录加入导致卡死 */
 const MAX_ENTRIES = 500;
-
-function isImage(name: string): boolean {
-	return isImageExt(path.extname(name));
-}
 
 /** 读取已保存的素材库文件夹 Uri 列表 */
 export function getLibraryFolders(context: vscode.ExtensionContext): string[] {
@@ -69,7 +64,7 @@ async function scanImages(
 		const child = vscode.Uri.joinPath(dir, name);
 		if (type === vscode.FileType.Directory) {
 			images.push(...(await scanImages(child, depth + 1, counter)));
-		} else if (type === vscode.FileType.File && isImage(name)) {
+		} else if (type === vscode.FileType.File && isImageFileName(name)) {
 			images.push({ name, uri: child.toString() });
 		}
 	}
@@ -106,7 +101,7 @@ async function scanDirImages(dir: vscode.Uri): Promise<TaskImage[]> {
 			break;
 		}
 		scanned++;
-		if (type === vscode.FileType.File && isImage(name)) {
+		if (type === vscode.FileType.File && isImageFileName(name)) {
 			images.push({ name, uri: vscode.Uri.joinPath(dir, name).toString() });
 		}
 	}

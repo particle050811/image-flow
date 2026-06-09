@@ -3,7 +3,7 @@ import * as path from 'path';
 import type { ImageFlowConfig, Task, TaskImage } from './shared';
 import { buildRequestBody, fetchWithTimeout } from './api';
 import { readConfig } from './config';
-import { isImageExt, mimeOf } from './images';
+import { isImageExt, isImageFileName, mimeOf } from './images';
 import { uriStem } from './paths';
 import { buildInjectedPrompt } from './inject';
 
@@ -41,6 +41,23 @@ interface PromptResult {
 }
 
 /**
+ * 把正文里的每处图片语法替换为模型可理解的有序引用 `[imageN](文件名)`，其余正文保持不变。
+ * 纯函数（不读盘），与 parseImageRefs 共用同一正则，保证「解析顺序」与「替换编号」一致。
+ * 未在编号表中的引用（理论上不会出现）原样保留。
+ */
+export function replaceImageRefs(content: string, indexByPath: Map<string, number>): string {
+	return content.replace(IMAGE_REGEX, (full, bracketed?: string, plain?: string) => {
+		const relPath = (bracketed ?? plain ?? '').trim();
+		const index = indexByPath.get(relPath);
+		if (index === undefined) {
+			return full;
+		}
+		const baseName = path.basename(relPath, path.extname(relPath));
+		return `[image${index}](${baseName})`;
+	});
+}
+
+/**
  * 解析 Markdown 正文中的图片语法 `![alt](相对路径)`：
  * - 按首次出现顺序去重编号（同一图片复用同一序号）；
  * - 相对 Markdown 所在目录读取图片，转成 base64 data URI 作为参考图；
@@ -67,15 +84,7 @@ export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<P
 	}
 
 	// 第二遍：把图片语法替换为有序引用 [imageN](文件名)
-	const prompt = content.replace(IMAGE_REGEX, (full, bracketed?: string, plain?: string) => {
-		const relPath = (bracketed ?? plain ?? '').trim();
-		const index = indexByPath.get(relPath);
-		if (index === undefined) {
-			return full;
-		}
-		const baseName = path.basename(relPath, path.extname(relPath));
-		return `[image${index}](${baseName})`;
-	});
+	const prompt = replaceImageRefs(content, indexByPath);
 
 	return { prompt, images };
 }
@@ -142,11 +151,6 @@ export async function downloadImages(
 	return images;
 }
 
-/** 扩展名为图片的判断 */
-function isImageFile(name: string): boolean {
-	return isImageExt(path.extname(name));
-}
-
 /**
  * 扫描 Markdown 同级目录下所有 task-* 文件夹，读取其中图片为缩略图，
  * 按文件夹名（含时间戳）倒序返回——较新的任务在前。
@@ -179,7 +183,7 @@ export async function listHistory(mdUri: vscode.Uri, exclude?: Set<string>): Pro
 		}
 		const images: TaskImage[] = [];
 		for (const [name, type] of files.sort()) {
-			if (type !== vscode.FileType.File || !isImageFile(name)) {
+			if (type !== vscode.FileType.File || !isImageFileName(name)) {
 				continue;
 			}
 			const fileUri = vscode.Uri.joinPath(dir, name);

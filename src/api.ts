@@ -31,7 +31,8 @@ export async function fetchWithTimeout(
 
 /** generate / result 接口返回结构（与 nano-banana、gpt-image-2 共用） */
 interface GenerateResponse {
-	id: string;
+	/** generate 返回的任务 id；result 接口不带，故可选 */
+	id?: string;
 	status: 'running' | 'violation' | 'succeeded' | 'failed';
 	results?: { url: string }[];
 	progress?: number;
@@ -40,7 +41,11 @@ interface GenerateResponse {
 
 const VALID_STATUS = new Set(['running', 'violation', 'succeeded', 'failed']);
 
-/** 校验并收窄接口返回：信任边界，字段缺失/类型不符即抛明确错误，不裸 as 断言 */
+/**
+ * 校验并收窄接口返回：信任边界。status 必校验；id/results/error 若存在则校验其形状，
+ * 缺省（undefined）放行——这样返回类型 GenerateResponse 的每个字段都名副其实，
+ * 调用方据此取值不会撞上「类型说有、运行时没有」的隐性炸点，而非裸 as 一概断言。
+ */
 function parseGenerateResponse(data: unknown): GenerateResponse {
 	if (!data || typeof data !== 'object') {
 		throw new Error('接口返回格式异常：非对象');
@@ -48,6 +53,19 @@ function parseGenerateResponse(data: unknown): GenerateResponse {
 	const obj = data as Record<string, unknown>;
 	if (typeof obj.status !== 'string' || !VALID_STATUS.has(obj.status)) {
 		throw new Error(`接口返回的 status 异常：${String(obj.status)}`);
+	}
+	if (obj.id !== undefined && typeof obj.id !== 'string') {
+		throw new Error('接口返回的 id 类型异常');
+	}
+	if (obj.error !== undefined && typeof obj.error !== 'string') {
+		throw new Error('接口返回的 error 类型异常');
+	}
+	if (
+		obj.results !== undefined &&
+		(!Array.isArray(obj.results) ||
+			obj.results.some((r) => !r || typeof r !== 'object' || typeof (r as { url?: unknown }).url !== 'string'))
+	) {
+		throw new Error('接口返回的 results 结构异常');
 	}
 	return obj as unknown as GenerateResponse;
 }
@@ -57,6 +75,8 @@ export interface JobResult {
 	status: 'running' | 'succeeded' | 'failed' | 'violation';
 	urls: string[];
 	error?: string;
+	/** running 态的生成进度 0~100（远端返回，可能缺省） */
+	progress?: number;
 }
 
 /**
@@ -171,5 +191,5 @@ export async function queryResult(config: ImageFlowConfig, id: string): Promise<
 		}
 		return { status: 'succeeded', urls };
 	}
-	return { status: 'running', urls: [] };
+	return { status: 'running', urls: [], progress: typeof data.progress === 'number' ? data.progress : undefined };
 }

@@ -35,8 +35,8 @@ const DEFAULTS: StoredConfig = {
 	aspectRatio: '3:4',
 	imageSize: '1K',
 	concurrency: 1,
-	workbenchThumbSize: 72,
-	tasksThumbSize: 140,
+	workbenchCols: 4,
+	tasksCols: 2,
 	modelInjections: {},
 };
 

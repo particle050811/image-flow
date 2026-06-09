@@ -32,6 +32,28 @@ export function isTransientNetworkError(err: unknown): boolean {
 	return err.name === 'TypeError' && /fetch failed/i.test(err.message);
 }
 
+/** 任务是否仍活跃：有 job 处于 submitting（提交中）或 running（轮询中）即未终结 */
+export function isTaskActive(task: PendingTask): boolean {
+	return task.jobs.some((j) => j.status === 'submitting' || j.status === 'running');
+}
+
+/**
+ * 整任务聚合进度 0~100：每个 job 占 1/total，终结(成功/失败/违规)的 job 记满分，
+ * running 取远端进度(缺省按 0)，submitting 记 0，再均摊到百分比。
+ */
+export function aggregateProgress(jobs: PendingJob[]): number {
+	if (!jobs.length) {
+		return 0;
+	}
+	const jobScore = (j: PendingJob): number =>
+		j.status === 'running'
+			? Math.min(100, Math.max(0, j.progress ?? 0))
+			: j.status === 'submitting'
+				? 0
+				: 100;
+	return Math.round(jobs.reduce((sum, j) => sum + jobScore(j), 0) / jobs.length);
+}
+
 /**
  * 异步生成任务管理器：负责提交（replyType:async）、持久化、定时轮询拉结果、
  * 完成下载与重启续拉。所有进行中任务共用一个定时器。
@@ -70,6 +92,19 @@ export class TaskManager {
 		await this.context.globalState.update(PENDING_KEY, this.tasks);
 	}
 
+	/** 删除任务的空文件夹：submit 时已建夹，若任务无任何成图就移除，避免磁盘累积空 task-* 目录 */
+	private async cleanupEmptyFolder(task: PendingTask): Promise<void> {
+		if (task.images.length) {
+			return;
+		}
+		try {
+			const dir = vscode.Uri.joinPath(vscode.Uri.parse(task.mdUri), '..', task.folder);
+			await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
+		} catch {
+			// 目录不存在或删除失败不影响主流程
+		}
+	}
+
 	private emit(): void {
 		// 监听器回调可能是 async（侧栏的 pushHistory 要扫盘）；包一层吞掉 reject，避免 unhandled rejection
 		for (const fn of this.listeners) {
@@ -79,7 +114,7 @@ export class TaskManager {
 		}
 	}
 
-	/** 有进行中任务时确保轮询定时器在跑；无任务时停掉 */
+	/** 有可轮询的 running job 时确保轮询定时器在跑；无则停掉（submitting 态尚无 id，不轮询） */
 	private ensureTimer(): void {
 		const hasRunning = this.tasks.some((t) => t.jobs.some((j) => j.status === 'running'));
 		if (hasRunning && !this.timer) {
@@ -91,8 +126,9 @@ export class TaskManager {
 	}
 
 	/**
-	 * 提交一次生成：解析提示词 → 按并发数并发 async 提交拿 job id → 建任务文件夹 → 持久化并启动轮询。
-	 * 立即返回，不等图片生成。任一 job 提交失败不影响其余，全部失败才抛错。
+	 * 提交一次生成：本地准备（读文件 → 解析提示词 → 建文件夹）后立即建卡入列返回，
+	 * 不干等网络往返。N 个 generate 请求在后台并发发出，拿到 job id 再把 job 由
+	 * submitting 转 running 并启动轮询。这样「生成中…」按钮几乎不阻塞。
 	 */
 	async submit(mdUri: vscode.Uri): Promise<void> {
 		const config = await readConfig(this.context);
@@ -106,22 +142,6 @@ export class TaskManager {
 		const prompt = await buildInjectedPrompt(config, basePrompt);
 		const count = Math.max(1, config.concurrency);
 
-		const settled = await Promise.allSettled(
-			Array.from({ length: count }, () => submitGeneration(config, prompt, images))
-		);
-		const jobs: PendingJob[] = [];
-		const errors: string[] = [];
-		for (const r of settled) {
-			if (r.status === 'fulfilled') {
-				jobs.push({ id: r.value, status: 'running' });
-			} else {
-				errors.push(r.reason instanceof Error ? r.reason.message : String(r.reason));
-			}
-		}
-		if (!jobs.length) {
-			throw new Error(`全部 ${count} 次提交均失败：${errors.join('；')}`);
-		}
-
 		const seq = this.seq++;
 		const [folder] = await createTaskFolder(mdUri, seq);
 		const task: PendingTask = {
@@ -129,11 +149,54 @@ export class TaskManager {
 			folder,
 			mdUri: mdUri.toString(),
 			model: config.model,
-			jobs,
+			jobs: Array.from({ length: count }, () => ({ status: 'submitting' as const })),
 			images: [],
 			createdAt: Date.now(),
+			startedAt: Date.now(),
 		};
 		this.tasks.unshift(task);
+		await this.persist();
+		this.emit();
+
+		// 后台并发提交，拿到 id 即转 running；不 await，调用方立即返回。
+		void this.submitJobs(config, task, prompt, images);
+	}
+
+	/**
+	 * 后台并发发出 N 个 generate 请求，逐个回填 job id（submitting → running）。
+	 * 全部失败则整任务作废并提示；否则启动轮询拉结果。
+	 */
+	private async submitJobs(
+		config: ImageFlowConfig,
+		task: PendingTask,
+		prompt: string,
+		images: string[]
+	): Promise<void> {
+		const submitting = task.jobs.filter((j) => j.status === 'submitting');
+		await Promise.all(
+			submitting.map(async (job) => {
+				try {
+					job.id = await submitGeneration(config, prompt, images);
+					job.status = 'running';
+				} catch (err) {
+					job.status = 'failed';
+					job.error = err instanceof Error ? err.message : String(err);
+				}
+			})
+		);
+
+		// 不变量：自 Promise.all 解析起到下面的 filter 之间不得有 await。
+		// 否则 4s 轮询定时器可能插进来，观察到「全 failed 但仍在列表」的任务，
+		// 既 notifyFinished 又移除它，与此处的弹窗 + 移除重复（双弹窗/双移除）。
+		if (task.jobs.every((j) => j.status === 'failed')) {
+			// 全部提交失败：无产出，直接从列表移除（无 running job，轮询不会接管它）并弹错误
+			const errors = [...new Set(task.jobs.map((j) => j.error).filter((e): e is string => !!e))];
+			this.tasks = this.tasks.filter((t) => t !== task);
+			void this.cleanupEmptyFolder(task);
+			void vscode.window.showErrorMessage(
+				`Image Flow：${task.folder} 全部 ${task.jobs.length} 次提交失败：${errors.join('；')}`
+			);
+		}
 		await this.persist();
 		this.ensureTimer();
 		this.emit();
@@ -145,8 +208,18 @@ export class TaskManager {
 			// 超时基于「本次会话起算」而非创建时间：关机时长不计入，否则离线超 10 分钟的可恢复任务会被误判超时丢弃
 			const now = Date.now();
 			for (const task of this.tasks) {
+				// 旧版持久化记录无 startedAt：用其原 createdAt（重置前的真实提交时间）兜底回填
+				task.startedAt ??= task.createdAt;
 				task.createdAt = now;
+				// 提交途中扩展被关闭：submitting job 没有 id 无从轮询，重启即判失败，避免永久卡住
+				for (const job of task.jobs) {
+					if (job.status === 'submitting') {
+						job.status = 'failed';
+						job.error = '提交未完成（扩展重启）';
+					}
+				}
 			}
+			void this.persist();
 			this.ensureTimer();
 			this.emit();
 			void this.poll();
@@ -204,13 +277,15 @@ export class TaskManager {
 			}
 		}
 
-		// 移除所有 job 都终结的任务；若含失败/违规，移除前弹通知让用户看到原因
+		// 移除已终结的任务（无 running、也无 submitting）；含失败/违规则移除前弹通知
 		const before = this.tasks.length;
-		const finished = this.tasks.filter((t) => !t.jobs.some((j) => j.status === 'running'));
+		const finished = this.tasks.filter((t) => !isTaskActive(t));
 		for (const task of finished) {
 			this.notifyFinished(task);
+			// 全失败、无成图的任务留下空文件夹，移除前一并清理
+			void this.cleanupEmptyFolder(task);
 		}
-		this.tasks = this.tasks.filter((t) => t.jobs.some((j) => j.status === 'running'));
+		this.tasks = this.tasks.filter((t) => isTaskActive(t));
 		if (this.tasks.length !== before) {
 			changed = true;
 		}
@@ -241,8 +316,14 @@ export class TaskManager {
 
 	/** 查询并处理单个 job：成功则下载落盘。返回是否有状态变更 */
 	private async pollJob(config: ImageFlowConfig, task: PendingTask, job: PendingJob): Promise<boolean> {
-		const result = await queryResult(config, job.id);
+		// 仅 running job 进入这里，id 必已回填；断言收窄可选类型
+		const result = await queryResult(config, job.id!);
 		if (result.status === 'running') {
+			// 进度有变化才算「变更」，驱动侧栏刷新；无变化则不触发整轮 emit，避免空刷
+			if (typeof result.progress === 'number' && result.progress !== job.progress) {
+				job.progress = result.progress;
+				return true;
+			}
 			return false;
 		}
 		if (result.status === 'failed' || result.status === 'violation') {

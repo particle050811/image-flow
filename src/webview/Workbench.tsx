@@ -11,7 +11,7 @@ export function Workbench({
 	status,
 	libraries,
 	autoLibraries,
-	thumbSize,
+	cols,
 	onChange,
 	onGenerate,
 	onPreview,
@@ -26,7 +26,7 @@ export function Workbench({
 	status: { text: string; error: boolean };
 	libraries: WebviewLibrary[];
 	autoLibraries: WebviewLibrary[];
-	thumbSize: number;
+	cols: number;
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
 	onGenerate: () => void;
 	onPreview: () => void;
@@ -39,7 +39,7 @@ export function Workbench({
 				<Materials
 					autoLibraries={autoLibraries}
 					libraries={libraries}
-					thumbSize={thumbSize}
+					cols={cols}
 					onAdd={onAddLibrary}
 					onRemove={onRemoveLibrary}
 				/>
@@ -75,8 +75,14 @@ export function Workbench({
 				</div>
 
 				<div className="gen-row">
-					<span className="active-md">
-						{activeMd ? `当前文件：${activeMd}` : '未打开 Markdown 文件'}
+					<span
+						className="tip"
+						data-tip="默认选择主界面最左侧 Markdown"
+						aria-label="默认选择主界面最左侧 Markdown"
+					>
+						<span className="active-md">
+							{activeMd ? `当前文件：${activeMd}` : '未打开 Markdown 文件'}
+						</span>
 					</span>
 					<button className="preview-btn" onClick={onPreview}>
 						预览请求

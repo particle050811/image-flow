@@ -10,10 +10,10 @@ export interface ImageFlowConfig {
 	aspectRatio: string;
 	imageSize: string;
 	concurrency: number;
-	/** 工作台缩略图边长（px） */
-	workbenchThumbSize: number;
-	/** 任务栏缩略图边长（px） */
-	tasksThumbSize: number;
+	/** 工作台素材库每行显示几张 */
+	workbenchCols: number;
+	/** 任务栏每行显示几张 */
+	tasksCols: number;
 	/** 模型 → 用户自定义注入句的覆盖表；缺省回退内置默认表 */
 	modelInjections: Record<string, string>;
 }
@@ -68,13 +68,18 @@ export interface WebviewLibrary {
 }
 
 /** 异步生成中单个 job 的状态（对应一次 generate 提交、一个远端 job id） */
-export type JobStatus = 'running' | 'succeeded' | 'failed' | 'violation';
+// submitting：本地已建卡、generate 请求尚未拿到 job id 的中间态。
+// 这样点生成可立即建卡返回，不必干等网络往返；拿到 id 后转 running。
+export type JobStatus = 'submitting' | 'running' | 'succeeded' | 'failed' | 'violation';
 
 /** 一次异步提交对应的 job：远端 id + 状态。succeeded 后不再轮询即不会重复下载 */
 export interface PendingJob {
-	id: string;
+	/** 远端任务 id；submitting 态尚未拿到，转 running 时写入 */
+	id?: string;
 	status: JobStatus;
 	error?: string;
+	/** 远端返回的生成进度 0~100，仅 running 态有意义 */
+	progress?: number;
 }
 
 /**
@@ -89,8 +94,10 @@ export interface PendingTask {
 	jobs: PendingJob[];
 	/** 已成功下载到文件夹的图片，随 job 完成累加 */
 	images: TaskImage[];
-	/** 创建时间（ms），用于超时兜底 */
+	/** 创建时间（ms），用于超时兜底。注意 resume() 会按会话起算重置它，不代表真实墙钟年龄 */
 	createdAt: number;
+	/** 任务首次提交时间（ms），仅用于显示已进行时间；resume() 不重置，保留真实墙钟年龄 */
+	startedAt: number;
 }
 
 /** 发往 webview 的进行中任务：聚合进度 + 已存缩略图（带 src） */
@@ -101,6 +108,12 @@ export interface WebviewPendingTask {
 	total: number;
 	done: number;
 	failed: number;
+	/** 仍在提交（尚未拿到 job id）的数量，>0 时卡片显示「提交中」 */
+	submitting: number;
+	/** 整任务聚合进度 0~100：已完成 job 记满分，running job 取远端进度均摊 */
+	progress: number;
+	/** 任务首次提交时间（ms），前端据此显示已进行时间（真实墙钟，不随重启重置） */
+	startedAt: number;
 	errors: string[];
 	images: WebviewImage[];
 }
@@ -114,6 +127,7 @@ export type InboundMessage =
 	| { type: 'status'; message: string }
 	| { type: 'error'; message: string }
 	| { type: 'busy'; busy: boolean }
+	| { type: 'navigate'; tab: 'workbench' | 'tasks' | 'api' }
 	| { type: 'libraries'; libraries: WebviewLibrary[] }
 	| { type: 'autoLibraries'; libraries: WebviewLibrary[] };
 

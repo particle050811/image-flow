@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
+import { NativeSelect } from './primitives';
 
 /** 带标签的字段容器 */
 export function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -10,7 +11,7 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 	);
 }
 
-/** 下拉选择，选项可为字符串或 {value,label} */
+/** 下拉选择，选项可为字符串或 {value,label}；底层用 Radix Select（可访问、键盘可达） */
 export function Select({
 	label,
 	value,
@@ -24,17 +25,7 @@ export function Select({
 }) {
 	return (
 		<Field label={label}>
-			<select value={value} onChange={(e) => onChange(e.target.value)}>
-				{options.map((opt) => {
-					const v = typeof opt === 'string' ? opt : opt.value;
-					const text = typeof opt === 'string' ? opt : `${opt.label}（${opt.value}）`;
-					return (
-						<option key={v} value={v}>
-							{text}
-						</option>
-					);
-				})}
-			</select>
+			<NativeSelect value={value} options={options} onChange={onChange} ariaLabel={label} />
 		</Field>
 	);
 }
@@ -77,52 +68,6 @@ export function TextArea({
 				value={value}
 				placeholder={placeholder}
 				onChange={(e) => onChange(e.target.value)}
-			/>
-		</Field>
-	);
-}
-
-/** 数字输入框：编辑时保留原始文本，失焦才按 [min,max] 约束并提交，避免边打字边被夹断 */
-export function NumberField({
-	label,
-	value,
-	min,
-	max,
-	onChange,
-}: {
-	label: string;
-	value: number;
-	min: number;
-	max: number;
-	onChange: (value: number) => void;
-}) {
-	const [text, setText] = useState(String(value));
-	// 外部值变化（如初始加载）时同步本地文本
-	useEffect(() => setText(String(value)), [value]);
-
-	const commit = () => {
-		const n = Number(text);
-		const clamped = Math.max(min, Math.min(max, Number.isNaN(n) ? value : n));
-		setText(String(clamped));
-		if (clamped !== value) {
-			onChange(clamped);
-		}
-	};
-
-	return (
-		<Field label={label}>
-			<input
-				type="number"
-				min={min}
-				max={max}
-				value={text}
-				onChange={(e) => setText(e.target.value)}
-				onBlur={commit}
-				onKeyDown={(e) => {
-					if (e.key === 'Enter') {
-						e.currentTarget.blur();
-					}
-				}}
 			/>
 		</Field>
 	);
