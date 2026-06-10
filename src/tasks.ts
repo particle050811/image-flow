@@ -1,9 +1,32 @@
 import * as vscode from 'vscode';
 import { submitGeneration, queryResult, TransientError } from './api';
-import { buildPrompt, createTaskFolder, downloadImages, formatStamp } from './command';
+import { buildPrompt, createTaskFolder, downloadImages, mdBaseName } from './command';
 import { readConfig } from './config';
 import { buildInjectedPrompt } from './inject';
+import { tasksRoot } from './storage';
+import { archiveInputs, buildPromptFileContent, writePromptFile } from './taskFiles';
 import type { ImageFlowConfig, PendingTask, PendingJob } from './shared';
+
+/** TaskManager.start 的参数：与任务来源（生成/编辑）无关的公共提交要素 */
+interface StartOptions {
+	kind: 'generate' | 'edit';
+	/** 产出图片文件名前缀 */
+	prefix: string;
+	/** 来源 md（仅 generate） */
+	mdUri?: string;
+	/** 任务文件夹内提示词文件名（生成 = <md名>.md，编辑 = edit.md） */
+	promptFileName: string;
+	/** 提示词文件 frontmatter 的 source 值 */
+	source: string;
+	/** 本次生效的配置（编辑任务传入 editConfigView 结果） */
+	config: ImageFlowConfig;
+	/** 注入后的最终提示词 */
+	prompt: string;
+	/** 参考图 data URI（按序） */
+	images: string[];
+	/** 参考图原文件名（与 images 等长，归档用） */
+	names: string[];
+}
 
 /** globalState 中存放未完成任务的键 */
 const PENDING_KEY = 'image-flow.pendingTasks';
@@ -65,11 +88,12 @@ export class TaskManager {
 	private listeners = new Set<() => void>();
 	/** 轮询重入锁：一轮 poll 的下载可能超过定时器间隔，禁止并发轮询，否则同任务多 job 共享 images.length 计数会下成同名图互相覆盖 */
 	private polling = false;
-	/** 任务本地 id 的去重序号；重启归零，靠文件夹时间戳保唯一 */
-	private seq = 0;
 
 	constructor(private readonly context: vscode.ExtensionContext) {
-		this.tasks = context.globalState.get<PendingTask[]>(PENDING_KEY, []);
+		// 旧版（任务建在 md 同级）持久化记录无 kind 字段，目录定位已失效，直接丢弃不续拉
+		this.tasks = context.globalState
+			.get<PendingTask[]>(PENDING_KEY, [])
+			.filter((t) => t.kind === 'generate' || t.kind === 'edit');
 	}
 
 	/** 订阅任务变更，返回取消订阅函数 */
@@ -92,13 +116,13 @@ export class TaskManager {
 		await this.context.globalState.update(PENDING_KEY, this.tasks);
 	}
 
-	/** 删除任务的空文件夹：submit 时已建夹，若任务无任何成图就移除，避免磁盘累积空 task-* 目录 */
+	/** 删除任务的空文件夹：submit 时已建夹，若任务无任何成图就移除（含提示词文件与 input/ 归档） */
 	private async cleanupEmptyFolder(task: PendingTask): Promise<void> {
 		if (task.images.length) {
 			return;
 		}
 		try {
-			const dir = vscode.Uri.joinPath(vscode.Uri.parse(task.mdUri), '..', task.folder);
+			const dir = vscode.Uri.joinPath(tasksRoot(), task.folder);
 			await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
 		} catch {
 			// 目录不存在或删除失败不影响主流程
@@ -126,9 +150,7 @@ export class TaskManager {
 	}
 
 	/**
-	 * 提交一次生成：本地准备（读文件 → 解析提示词 → 建文件夹）后立即建卡入列返回，
-	 * 不干等网络往返。N 个 generate 请求在后台并发发出，拿到 job id 再把 job 由
-	 * submitting 转 running 并启动轮询。这样「生成中…」按钮几乎不阻塞。
+	 * 提交一次 Markdown 生成：读文件 → 解析提示词 → 走公共提交流程。
 	 */
 	async submit(mdUri: vscode.Uri): Promise<void> {
 		const config = await readConfig(this.context);
@@ -138,17 +160,39 @@ export class TaskManager {
 			throw new Error('Markdown 文件内容为空，无法生成。');
 		}
 
-		const { prompt: basePrompt, images } = await buildPrompt(mdUri, content);
+		const { prompt: basePrompt, images, names } = await buildPrompt(mdUri, content);
 		const prompt = await buildInjectedPrompt(config, basePrompt);
-		const count = Math.max(1, config.concurrency);
-
-		const seq = this.seq++;
-		const [folder] = await createTaskFolder(mdUri, seq);
-		const task: PendingTask = {
-			id: `${formatStamp(new Date())}-${seq}`,
-			folder,
+		const prefix = mdBaseName(mdUri);
+		await this.start({
+			kind: 'generate',
+			prefix,
 			mdUri: mdUri.toString(),
-			model: config.model,
+			promptFileName: `${prefix}.md`,
+			source: vscode.workspace.asRelativePath(mdUri),
+			config,
+			prompt,
+			images,
+			names,
+		});
+	}
+
+	/**
+	 * 公共提交流程：建任务文件夹 → 写提示词文件 + 归档参考图 → 建卡入列 →
+	 * 后台并发提交（不 await，调用方立即返回）。
+	 */
+	private async start(opts: StartOptions): Promise<void> {
+		const [folder, dir] = await createTaskFolder();
+		await writePromptFile(dir, opts.promptFileName, buildPromptFileContent(opts.source, opts.prompt));
+		await archiveInputs(dir, opts.names.map((name, i) => ({ name, data: opts.images[i] })));
+
+		const count = Math.max(1, opts.config.concurrency);
+		const task: PendingTask = {
+			id: folder,
+			kind: opts.kind,
+			folder,
+			prefix: opts.prefix,
+			mdUri: opts.mdUri,
+			model: opts.config.model,
 			jobs: Array.from({ length: count }, () => ({ status: 'submitting' as const })),
 			images: [],
 			createdAt: Date.now(),
@@ -158,8 +202,7 @@ export class TaskManager {
 		await this.persist();
 		this.emit();
 
-		// 后台并发提交，拿到 id 即转 running；不 await，调用方立即返回。
-		void this.submitJobs(config, task, prompt, images);
+		void this.submitJobs(opts.config, task, opts.prompt, opts.images);
 	}
 
 	/**
@@ -332,8 +375,8 @@ export class TaskManager {
 			return true;
 		}
 		// succeeded：下载到任务文件夹，接续已有图片编号避免重名
-		const mdUri = vscode.Uri.parse(task.mdUri);
-		const saved = await downloadImages(mdUri, task.folder, result.urls, task.images.length);
+		const taskDir = vscode.Uri.joinPath(tasksRoot(), task.folder);
+		const saved = await downloadImages(taskDir, task.prefix, result.urls, task.images.length);
 		task.images.push(...saved);
 		job.status = 'succeeded';
 		return true;

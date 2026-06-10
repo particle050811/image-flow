@@ -38,6 +38,10 @@ const DEFAULTS: StoredConfig = {
 	workbenchCols: 4,
 	tasksCols: 2,
 	modelInjections: {},
+	editModel: 'nano-banana-2',
+	editAspectRatio: '3:4',
+	editImageSize: '1K',
+	editConcurrency: 1,
 };
 
 /** 读取完整配置：非敏感项来自 globalState，apiKey 来自加密的 secrets */
@@ -80,5 +84,16 @@ export async function seedModelInjections(context: vscode.ExtensionContext): Pro
 	if (changed) {
 		await context.globalState.update(STATE_KEY, { ...stored, modelInjections: merged });
 	}
+}
+
+/** 用编辑页专属参数覆盖主参数，得到可直接喂给 api/预览层的配置视图 */
+export function editConfigView(config: ImageFlowConfig): ImageFlowConfig {
+	return {
+		...config,
+		model: config.editModel,
+		imageSize: config.editImageSize,
+		aspectRatio: config.editAspectRatio,
+		concurrency: config.editConcurrency,
+	};
 }
 

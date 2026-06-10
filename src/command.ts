@@ -6,6 +6,7 @@ import { readConfig } from './config';
 import { isImageExt, isImageFileName, mimeOf } from './images';
 import { uriStem } from './paths';
 import { buildInjectedPrompt } from './inject';
+import { tasksRoot } from './storage';
 
 /**
  * Markdown 图片语法的正则：匹配 `![alt](路径)`，路径可选 `<>` 包裹。
@@ -34,10 +35,11 @@ export function parseImageRefs(content: string): { order: string[]; indexByPath:
 	return { order, indexByPath };
 }
 
-/** 解析后的提示词：替换图片语法后的正文，以及按顺序读取的参考图 base64 列表 */
+/** 解析后的提示词：替换图片语法后的正文、按序参考图 base64、参考图原文件名（与 images 等长，归档用） */
 interface PromptResult {
 	prompt: string;
 	images: string[];
+	names: string[];
 }
 
 /**
@@ -68,6 +70,7 @@ export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<P
 
 	// 按顺序读取每张参考图，转 base64
 	const images: string[] = [];
+	const names: string[] = [];
 	const failed: string[] = [];
 	for (const relPath of order) {
 		const fileUri = vscode.Uri.joinPath(mdUri, '..', relPath);
@@ -75,6 +78,7 @@ export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<P
 			const bytes = await vscode.workspace.fs.readFile(fileUri);
 			const mime = mimeOf(path.extname(relPath));
 			images.push(`data:${mime};base64,${Buffer.from(bytes).toString('base64')}`);
+			names.push(path.basename(relPath));
 		} catch {
 			failed.push(relPath);
 		}
@@ -86,10 +90,10 @@ export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<P
 	// 第二遍：把图片语法替换为有序引用 [imageN](文件名)
 	const prompt = replaceImageRefs(content, indexByPath);
 
-	return { prompt, images };
+	return { prompt, images, names };
 }
 
-/** 把 Date 格式化为 yyMMddHHmmSS */
+/** 把 Date 格式化为 yyMMddHHmmssSSS（毫秒级，任务文件夹名唯一性依赖它） */
 export function formatStamp(d: Date): string {
 	const p = (n: number) => String(n).padStart(2, '0');
 	return (
@@ -98,7 +102,8 @@ export function formatStamp(d: Date): string {
 		p(d.getDate()) +
 		p(d.getHours()) +
 		p(d.getMinutes()) +
-		p(d.getSeconds())
+		p(d.getSeconds()) +
+		String(d.getMilliseconds()).padStart(3, '0')
 	);
 }
 
@@ -108,15 +113,12 @@ export function mdBaseName(mdUri: vscode.Uri): string {
 }
 
 /**
- * 在 Markdown 同级创建任务文件夹，返回 [文件夹名, 目录 Uri]。
- * 时间戳仅精确到秒，同一秒内的连续提交靠 seq 后缀区分，避免撞同一文件夹导致结果互相覆盖。
+ * 在 .image-flow/tasks/ 下创建任务文件夹，返回 [文件夹名, 目录 Uri]。
+ * 文件夹名 = 毫秒级时间戳；createDirectory 会递归补建父目录。
  */
-export async function createTaskFolder(
-	mdUri: vscode.Uri,
-	seq: number
-): Promise<[string, vscode.Uri]> {
-	const folder = `task-${formatStamp(new Date())}-${seq}`;
-	const dir = vscode.Uri.joinPath(mdUri, '..', folder);
+export async function createTaskFolder(): Promise<[string, vscode.Uri]> {
+	const folder = formatStamp(new Date());
+	const dir = vscode.Uri.joinPath(tasksRoot(), folder);
 	await vscode.workspace.fs.createDirectory(dir);
 	return [folder, dir];
 }
@@ -126,13 +128,11 @@ export async function createTaskFolder(
  * @param startIndex 已有图片数，用于接续编号，避免不同 job 的图片重名
  */
 export async function downloadImages(
-	mdUri: vscode.Uri,
-	folder: string,
+	taskDir: vscode.Uri,
+	prefix: string,
 	urls: string[],
 	startIndex: number
 ): Promise<TaskImage[]> {
-	const dir = vscode.Uri.joinPath(mdUri, '..', folder);
-	const prefix = mdBaseName(mdUri);
 	const images: TaskImage[] = [];
 	for (let i = 0; i < urls.length; i++) {
 		const res = await fetchWithTimeout(urls[i]);
@@ -144,7 +144,7 @@ export async function downloadImages(
 		const rawExt = '.' + (urls[i].split('?')[0].split('.').pop()?.toLowerCase() || 'png');
 		const ext = isImageExt(rawExt) ? rawExt.slice(1) : 'png';
 		const name = `${prefix}-${startIndex + i + 1}.${ext}`;
-		const fileUri = vscode.Uri.joinPath(dir, name);
+		const fileUri = vscode.Uri.joinPath(taskDir, name);
 		await vscode.workspace.fs.writeFile(fileUri, data);
 		images.push({ name, uri: fileUri.toString() });
 	}
@@ -152,21 +152,27 @@ export async function downloadImages(
 }
 
 /**
- * 扫描 Markdown 同级目录下所有 task-* 文件夹，读取其中图片为缩略图，
- * 按文件夹名（含时间戳）倒序返回——较新的任务在前。
+ * 扫描 .image-flow/tasks/ 下所有任务文件夹，读取其中图片为缩略图，
+ * 按文件夹名（毫秒时间戳）倒序返回——较新的任务在前。
+ * 非递归、仅收图片文件：提示词 .md 与 input/ 归档子目录天然被忽略。
  * @param exclude 进行中任务的文件夹名集合，这些由顶部待办卡片实时展示，历史里跳过避免重复。
  */
-export async function listHistory(mdUri: vscode.Uri, exclude?: Set<string>): Promise<Task[]> {
-	const parent = vscode.Uri.joinPath(mdUri, '..');
+export async function listHistory(exclude?: Set<string>): Promise<Task[]> {
+	let root: vscode.Uri;
+	try {
+		root = tasksRoot();
+	} catch {
+		return []; // 无工作区：无历史可言
+	}
 	let entries: [string, vscode.FileType][];
 	try {
-		entries = await vscode.workspace.fs.readDirectory(parent);
+		entries = await vscode.workspace.fs.readDirectory(root);
 	} catch {
 		return [];
 	}
 
 	const folders = entries
-		.filter(([name, type]) => type === vscode.FileType.Directory && name.startsWith('task-'))
+		.filter(([, type]) => type === vscode.FileType.Directory)
 		.map(([name]) => name)
 		.filter((name) => !exclude?.has(name))
 		.sort()
@@ -174,7 +180,7 @@ export async function listHistory(mdUri: vscode.Uri, exclude?: Set<string>): Pro
 
 	const tasks: Task[] = [];
 	for (const folder of folders) {
-		const dir = vscode.Uri.joinPath(parent, folder);
+		const dir = vscode.Uri.joinPath(root, folder);
 		let files: [string, vscode.FileType][];
 		try {
 			files = await vscode.workspace.fs.readDirectory(dir);
@@ -237,6 +243,11 @@ export async function openRequestPreview(
 	const { prompt: basePrompt, images } = await buildPrompt(mdUri, content);
 	const prompt = await buildInjectedPrompt(config, basePrompt);
 	const text = buildPreviewText(config, prompt, images);
+	await openTextPreview(text);
+}
+
+/** 把文本打开成 markdown 预览文档（不落盘） */
+export async function openTextPreview(text: string): Promise<void> {
 	const doc = await vscode.workspace.openTextDocument({ content: text, language: 'markdown' });
 	await vscode.window.showTextDocument(doc, { preview: true });
 }

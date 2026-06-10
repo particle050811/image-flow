@@ -2,6 +2,10 @@ import * as assert from 'assert';
 import { toVipPixels, buildRequestBody, TransientError } from '../api';
 import { formatStamp, parseImageRefs, replaceImageRefs } from '../command';
 import { isImageExt, isImageFileName, mimeOf } from '../images';
+import { editConfigView } from '../config';
+import { imageRefSnippet } from '../refs';
+import { buildEditPrompt } from '../edit';
+import { buildPromptFileContent, dataUriBytes } from '../taskFiles';
 import { isTransientNetworkError, isTaskActive, aggregateProgress } from '../tasks';
 import type { ImageFlowConfig, PendingTask, PendingJob } from '../shared';
 
@@ -15,6 +19,10 @@ const baseConfig: ImageFlowConfig = {
 	workbenchCols: 4,
 	tasksCols: 2,
 	modelInjections: {},
+	editModel: 'gpt-image-2',
+	editAspectRatio: '16:9',
+	editImageSize: '2K',
+	editConcurrency: 3,
 };
 
 suite('images', () => {
@@ -71,8 +79,9 @@ suite('buildRequestBody', () => {
 });
 
 suite('formatStamp', () => {
-	test('补零到 yyMMddHHmmSS', () => {
-		assert.strictEqual(formatStamp(new Date(2026, 0, 2, 3, 4, 5)), '260102030405');
+	test('补零到 yyMMddHHmmssSSS（毫秒级）', () => {
+		assert.strictEqual(formatStamp(new Date(2026, 0, 2, 3, 4, 5, 6)), '260102030405006');
+		assert.strictEqual(formatStamp(new Date(2026, 11, 31, 23, 59, 59, 999)), '261231235959999');
 	});
 });
 
@@ -164,5 +173,63 @@ suite('aggregateProgress', () => {
 	});
 	test('failed/violation 也记满分', () => {
 		assert.strictEqual(aggregateProgress(jobs([{ status: 'failed' }, { status: 'violation' }])), 100);
+	});
+});
+
+suite('editConfigView', () => {
+	test('用编辑专属参数覆盖主参数，其余字段保留', () => {
+		const view = editConfigView(baseConfig);
+		assert.strictEqual(view.model, 'gpt-image-2');
+		assert.strictEqual(view.aspectRatio, '16:9');
+		assert.strictEqual(view.imageSize, '2K');
+		assert.strictEqual(view.concurrency, 3);
+		assert.strictEqual(view.apiKey, 'k');
+		assert.strictEqual(view.baseUrl, 'https://example.com');
+	});
+});
+
+suite('imageRefSnippet', () => {
+	test('普通文件名直接拼接', () => {
+		assert.strictEqual(imageRefSnippet('猫.png'), '![](猫.png)');
+	});
+	test('含空格或半角括号用尖括号包裹', () => {
+		assert.strictEqual(imageRefSnippet('my cat (1).png'), '![](<my cat (1).png>)');
+	});
+});
+
+suite('buildEditPrompt', () => {
+	const names = ['猫.png', '狗 (1).png'];
+	test('按编辑区顺序替换为 [imageN](名去扩展)', () => {
+		const out = buildEditPrompt('把 ![](<狗 (1).png>) 放进 ![](猫.png) 的场景', names);
+		// 序号按编辑区顺序：猫=1、狗=2，与文本出现顺序无关
+		assert.strictEqual(out, '把 [image2](狗 (1)) 放进 [image1](猫) 的场景');
+	});
+	test('尖括号包裹的引用同样可解析', () => {
+		assert.strictEqual(buildEditPrompt('看 ![](<狗 (1).png>)', names), '看 [image2](狗 (1))');
+	});
+	test('未引用任何图片时原文返回', () => {
+		assert.strictEqual(buildEditPrompt('纯文本', names), '纯文本');
+	});
+	test('引用了编辑区不存在的图片名则报错', () => {
+		assert.throws(() => buildEditPrompt('看 ![](不存在.png)', names), /不存在\.png/);
+	});
+});
+
+suite('buildPromptFileContent', () => {
+	test('frontmatter 记来源，正文为提示词', () => {
+		assert.strictEqual(
+			buildPromptFileContent('角色/角色设定.md', '画一只猫'),
+			'---\nsource: 角色/角色设定.md\n---\n\n画一只猫\n'
+		);
+	});
+});
+
+suite('dataUriBytes', () => {
+	test('解析 base64 data URI 为字节', () => {
+		const data = `data:image/png;base64,${Buffer.from('abc').toString('base64')}`;
+		assert.deepStrictEqual(Array.from(dataUriBytes(data)), [97, 98, 99]);
+	});
+	test('非 data URI 抛错', () => {
+		assert.throws(() => dataUriBytes('https://x/y.png'), /data URI/);
 	});
 });

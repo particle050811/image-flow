@@ -90,7 +90,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		this.currentMd = uri;
 		this.post({ type: 'activeMd', name: this.baseName(this.currentMd) });
 		if (changed) {
-			void this.pushHistory();
 			void this.pushAutoLibraries();
 		}
 	}
@@ -273,9 +272,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async pushHistory(): Promise<void> {
-		const tasks: Task[] = this.currentMd
-			? await listHistory(this.currentMd, this.tasks.activeFolders())
-			: [];
+		const tasks: Task[] = await listHistory(this.tasks.activeFolders());
 		this.post({ type: 'history', tasks: tasks.map((t) => this.toWebviewTask(t)) });
 	}
 

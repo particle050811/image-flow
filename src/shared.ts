@@ -16,6 +16,14 @@ export interface ImageFlowConfig {
 	tasksCols: number;
 	/** 模型 → 用户自定义注入句的覆盖表；缺省回退内置默认表 */
 	modelInjections: Record<string, string>;
+	/** 编辑页专属模型（与主生成界面互不影响） */
+	editModel: string;
+	/** 编辑页专属比例 */
+	editAspectRatio: string;
+	/** 编辑页专属分辨率 */
+	editImageSize: string;
+	/** 编辑页专属并发数 */
+	editConcurrency: number;
 }
 
 export interface BaseUrlOption {
@@ -83,13 +91,19 @@ export interface PendingJob {
 }
 
 /**
- * 一个进行中的生成任务（一次点击 = N 个并发 job，落到同一 task 文件夹）。
+ * 一个进行中的任务（一次点击 = N 个并发 job，落到 .image-flow/tasks/<folder>）。
  * 持久化进 globalState，重启后据此续拉。
  */
 export interface PendingTask {
 	id: string;
+	/** 任务来源：generate = Markdown 生成；edit = 编辑页 */
+	kind: 'generate' | 'edit';
+	/** 任务文件夹名（毫秒级时间戳），位于 .image-flow/tasks/ 下 */
 	folder: string;
-	mdUri: string;
+	/** 产出图片文件名前缀：生成任务为 md 名，编辑任务为 edit */
+	prefix: string;
+	/** 来源 md 的 Uri 字符串（仅 generate，用于追溯） */
+	mdUri?: string;
 	model: string;
 	jobs: PendingJob[];
 	/** 已成功下载到文件夹的图片，随 job 完成累加 */
