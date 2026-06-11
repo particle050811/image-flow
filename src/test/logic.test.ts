@@ -7,6 +7,7 @@ import { imageRefSnippet } from '../refs';
 import { buildEditPrompt, buildEditFinalPrompt } from '../edit';
 import { buildPromptFileContent, dataUriBytes } from '../taskFiles';
 import { EditSession } from '../editSession';
+import { thumbKeyOf } from '../thumbs';
 import { isTransientNetworkError, isTaskActive, aggregateProgress } from '../tasks';
 import type { ImageFlowConfig, PendingTask, PendingJob } from '../shared';
 
@@ -277,5 +278,44 @@ suite('EditSession', () => {
 		s.addData('b.png', png);
 		s.remove('a.png');
 		assert.deepStrictEqual(s.list().map((i) => i.name), ['b.png']);
+	});
+	test('needsDisplay：大图需要、小图/gif/已有展示图不需要', () => {
+		const s = new EditSession();
+		const big = `data:image/png;base64,${'A'.repeat(200 * 1024)}`;
+		const bigGif = `data:image/gif;base64,${'A'.repeat(200 * 1024)}`;
+		s.addData('big.png', big);
+		s.addData('small.png', png);
+		s.addData('anim.gif', bigGif);
+		const [bigImg, smallImg, gifImg] = s.list();
+		assert.strictEqual(s.needsDisplay(bigImg), true);
+		assert.strictEqual(s.needsDisplay(smallImg), false);
+		assert.strictEqual(s.needsDisplay(gifImg), false);
+		s.setDisplay('big.png', big.length, 'data:image/webp;base64,eA==');
+		assert.strictEqual(s.needsDisplay(bigImg), false);
+	});
+	test('setDisplay 只接受 webp data URI 且校验原图指纹，不动原图 data', () => {
+		const s = new EditSession();
+		s.addData('a.png', png);
+		s.setDisplay('a.png', png.length, 'data:image/png;base64,eA==');
+		assert.strictEqual(s.list()[0].display, undefined);
+		// 指纹（原图长度）不匹配：同名换图后的过期回传应被丢弃
+		s.setDisplay('a.png', png.length + 1, 'data:image/webp;base64,eA==');
+		assert.strictEqual(s.list()[0].display, undefined);
+		s.setDisplay('a.png', png.length, 'data:image/webp;base64,eA==');
+		assert.strictEqual(s.list()[0].display, 'data:image/webp;base64,eA==');
+		assert.strictEqual(s.list()[0].data, png);
+		// 不存在的名字静默忽略
+		s.setDisplay('ghost.png', 1, 'data:image/webp;base64,eA==');
+	});
+});
+
+suite('thumbKeyOf', () => {
+	test('同输入稳定，uri/mtime/size 任一变化即换 key', () => {
+		const k = thumbKeyOf('file:///a.png', 100, 200);
+		assert.strictEqual(k, thumbKeyOf('file:///a.png', 100, 200));
+		assert.match(k, /^[0-9a-f]{40}$/);
+		assert.notStrictEqual(k, thumbKeyOf('file:///b.png', 100, 200));
+		assert.notStrictEqual(k, thumbKeyOf('file:///a.png', 101, 200));
+		assert.notStrictEqual(k, thumbKeyOf('file:///a.png', 100, 201));
 	});
 });

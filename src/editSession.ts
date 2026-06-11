@@ -7,7 +7,12 @@ import { uriBaseName } from './paths';
 export interface EditImage {
 	name: string;
 	data: string;
+	/** 压缩展示图（webview canvas 降采样后回传的 webp data URI）：推送展示用它，提交仍用 data */
+	display?: string;
 }
+
+/** 原图 data URI 超过此长度才值得做压缩展示图（约对应 100KB 二进制的 base64 体积） */
+const DISPLAY_MIN_DATA_LENGTH = 140 * 1024;
 
 /**
  * 编辑区图片列表：扩展主进程持有（webview 重建不丢）。
@@ -55,6 +60,24 @@ export class EditSession {
 
 	remove(name: string): void {
 		this.images = this.images.filter((i) => i.name !== name);
+	}
+
+	/** 是否需要 webview 生成压缩展示图：尚无展示图、原图够大、且非 gif（降采样丢动画） */
+	needsDisplay(img: EditImage): boolean {
+		return (
+			!img.display &&
+			img.data.length > DISPLAY_MIN_DATA_LENGTH &&
+			!img.data.startsWith('data:image/gif')
+		);
+	}
+
+	/** 写入 webview 回传的压缩展示图。srcLength 为生成时原图 data URI 的长度——
+	 *  生成期间同名图被删后换图时据此丢弃过期回传；图片已移除或数据形状不对同样忽略 */
+	setDisplay(name: string, srcLength: number, data: string): void {
+		const img = this.images.find((i) => i.name === name);
+		if (img && img.data.length === srcLength && data.startsWith('data:image/webp;base64,')) {
+			img.display = data;
+		}
 	}
 
 	private validate(name: string): string | null {

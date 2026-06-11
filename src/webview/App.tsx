@@ -12,6 +12,8 @@ import {
 	type PromptTemplate,
 } from './vscode';
 import { Workbench } from './Workbench';
+import { clearResourceCachesThrottled } from './resourceCache';
+import { requestThumbs, requestEditThumbs } from './thumbs';
 import { Tasks } from './Tasks';
 import { ApiConfig } from './ApiConfig';
 import { Edit } from './Edit';
@@ -54,18 +56,30 @@ export function App() {
 					break;
 				case 'history':
 					setTasks(msg.tasks);
+					// 缺缩略图的大图（带 thumbKey）入队生成回传，下次推送即可用缩略图
+					requestThumbs(msg.tasks.flatMap((t) => t.images));
+					// 任务完成会带来新的大图，节流清一次资源缓存，限制长会话内的磁盘增长
+					clearResourceCachesThrottled();
 					break;
 				case 'pendingTasks':
 					setPendingTasks(msg.tasks);
+					requestThumbs(msg.tasks.flatMap((t) => t.images));
 					break;
 				case 'libraries':
 					setLibraries(msg.libraries);
+					requestThumbs(msg.libraries.flatMap((l) => l.images));
+					// 素材库同样批量加载大图（增删库/切 MD 刷新），与 history 一样节流清缓存
+					clearResourceCachesThrottled();
 					break;
 				case 'autoLibraries':
 					setAutoLibraries(msg.libraries);
+					requestThumbs(msg.libraries.flatMap((l) => l.images));
+					clearResourceCachesThrottled();
 					break;
 				case 'editImages':
 					setEditImages(msg.images);
+					// 大图生成压缩展示图回传，之后的全量重发不再携带原图
+					requestEditThumbs(msg.images);
 					break;
 				case 'promptTemplates':
 					setTemplates(msg.templates);

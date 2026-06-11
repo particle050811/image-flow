@@ -51,9 +51,11 @@ export interface Task {
 	images: TaskImage[];
 }
 
-/** 发往 webview 的图片：额外带 webview 可加载的 src（asWebviewUri 转换结果） */
+/** 发往 webview 的图片：额外带 webview 可加载的 src（asWebviewUri 转换结果，已有缩略图时为缩略图） */
 export interface WebviewImage extends TaskImage {
 	src: string;
+	/** 需要 webview 生成缩略图时下发（sha1(uri+mtime+size)），生成后经 saveThumb 回传落盘 */
+	thumbKey?: string;
 }
 
 export interface WebviewTask {
@@ -81,10 +83,12 @@ export interface PromptTemplate {
 	content: string;
 }
 
-/** 编辑区图片（发往 webview）：src 为原图的 data URI（未缩放，直接作 img src） */
+/** 编辑区图片（发往 webview）：src 为 data URI——已有压缩展示图时为展示图，否则为原图 */
 export interface WebviewEditImage {
 	name: string;
 	src: string;
+	/** 原图较大且尚无压缩展示图时为 true，webview 据此生成并经 saveEditThumb 回传 */
+	needsThumb?: boolean;
 }
 
 /** 异步生成中单个 job 的状态（对应一次 generate 提交、一个远端 job id） */
@@ -180,4 +184,6 @@ export type OutboundMessage =
 	| { type: 'editGenerate'; prompt: string }
 	| { type: 'editPreviewRequest'; prompt: string }
 	| { type: 'openPrompt'; folder: string }
-	| { type: 'refreshTemplates' };
+	| { type: 'refreshTemplates' }
+	| { type: 'saveThumb'; key: string; data: string }
+	| { type: 'saveEditThumb'; name: string; srcLength: number; data: string };

@@ -8,6 +8,7 @@ import { TaskManager, aggregateProgress } from './tasks';
 import { EditSession } from './editSession';
 import { listPromptTemplates } from './prompts';
 import { tasksRoot } from './storage';
+import { resolveThumb, saveThumb } from './thumbs';
 import { buildEditFinalPrompt } from './edit';
 import {
 	getLibraryFolders,
@@ -18,6 +19,8 @@ import {
 } from './materials';
 import type {
 	Task,
+	TaskImage,
+	WebviewImage,
 	WebviewTask,
 	PendingTask,
 	WebviewPendingTask,
@@ -56,7 +59,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		context.subscriptions.push(
 			this.tasks.onChange(async () => {
 				await this.pushHistory();
-				this.pushPendingTasks();
+				await this.pushPendingTasks();
 			})
 		);
 	}
@@ -125,7 +128,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				const config = await readConfig(this.context);
 				this.post({ type: 'config', config, options: CONFIG_OPTIONS });
 				this.post({ type: 'activeMd', name: this.currentMd ? this.baseName(this.currentMd) : null });
-				this.pushPendingTasks();
+				await this.pushPendingTasks();
 				await this.pushHistory();
 				await this.pushLibraries();
 				await this.pushAutoLibraries();
@@ -199,6 +202,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			case 'refreshTemplates':
 				await this.pushTemplates();
 				break;
+			case 'saveThumb':
+				await saveThumb(msg.key, msg.data);
+				break;
+			case 'saveEditThumb':
+				this.edit.setDisplay(msg.name, msg.srcLength, msg.data);
+				break;
 		}
 	}
 
@@ -251,7 +260,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private pushEditImages(): void {
 		this.post({
 			type: 'editImages',
-			images: this.edit.list().map((i) => ({ name: i.name, src: i.data })),
+			// 展示用压缩图（webview 回传后缓存于 EditSession），原图只在提交时使用；
+			// 尚无展示图的大图标记 needsThumb，webview 据此生成回传
+			images: this.edit.list().map((i) => ({
+				name: i.name,
+				src: i.display ?? i.data,
+				needsThumb: this.edit.needsDisplay(i),
+			})),
 		});
 	}
 
@@ -332,13 +347,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
 	private async pushLibraries(): Promise<void> {
 		const libs = await listLibraries(this.context);
-		this.post({ type: 'libraries', libraries: libs.map((l) => this.toWebviewLibrary(l)) });
+		this.post({
+			type: 'libraries',
+			libraries: await Promise.all(libs.map((l) => this.toWebviewLibrary(l))),
+		});
 	}
 
 	/** 推送随当前 Markdown 路径自动生成的素材库（无 MD 时清空） */
 	private async pushAutoLibraries(): Promise<void> {
 		const libs = this.currentMd ? await listAutoLibraries(this.currentMd) : [];
-		this.post({ type: 'autoLibraries', libraries: libs.map((l) => this.toWebviewLibrary(l)) });
+		this.post({
+			type: 'autoLibraries',
+			libraries: await Promise.all(libs.map((l) => this.toWebviewLibrary(l))),
+		});
 	}
 
 	/**
@@ -412,33 +433,50 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
 	private async pushHistory(): Promise<void> {
 		const tasks: Task[] = await listHistory(this.tasks.activeFolders());
-		this.post({ type: 'history', tasks: tasks.map((t) => this.toWebviewTask(t)) });
-	}
-
-	/** 推送进行中任务（聚合进度 + 已存缩略图）给前端；全部进行中任务，不按 MD 过滤 */
-	private pushPendingTasks(): void {
-		const tasks = this.tasks.list();
 		this.post({
-			type: 'pendingTasks',
-			tasks: tasks.map((t) => this.toWebviewPendingTask(t)),
+			type: 'history',
+			tasks: await Promise.all(tasks.map((t) => this.toWebviewTask(t))),
 		});
 	}
 
-	/** 把任务里的文件 Uri 转成 webview 可加载的 src（asWebviewUri） */
-	private toWebviewTask(task: Task): WebviewTask {
+	/** 推送进行中任务（聚合进度 + 已存缩略图）给前端；全部进行中任务，不按 MD 过滤 */
+	private async pushPendingTasks(): Promise<void> {
+		const tasks = this.tasks.list();
+		this.post({
+			type: 'pendingTasks',
+			tasks: await Promise.all(tasks.map((t) => this.toWebviewPendingTask(t))),
+		});
+	}
+
+	/** 把文件图转成 webview 可加载的图：有缩略图用缩略图作 src（F051），
+	 *  没有则用原图并下发 thumbKey 请 webview 生成；uri 字段始终保留原图（点开/拖拽用） */
+	private async toWebviewImage(img: TaskImage): Promise<WebviewImage> {
 		const webview = this.view?.webview;
+		if (!webview) {
+			return { ...img, src: img.uri };
+		}
+		const { thumbUri, thumbKey } = await resolveThumb(img.uri);
+		return {
+			...img,
+			src: webview.asWebviewUri(thumbUri ?? vscode.Uri.parse(img.uri)).toString(),
+			thumbKey,
+		};
+	}
+
+	private async toWebviewImages(images: TaskImage[]): Promise<WebviewImage[]> {
+		return Promise.all(images.map((img) => this.toWebviewImage(img)));
+	}
+
+	/** 把任务里的文件 Uri 转成 webview 可加载的 src（asWebviewUri） */
+	private async toWebviewTask(task: Task): Promise<WebviewTask> {
 		return {
 			folder: task.folder,
-			images: task.images.map((img) => ({
-				...img,
-				src: webview ? webview.asWebviewUri(vscode.Uri.parse(img.uri)).toString() : img.uri,
-			})),
+			images: await this.toWebviewImages(task.images),
 		};
 	}
 
 	/** 把进行中任务转成 webview 视图：聚合进度 + 已存缩略图带 src */
-	private toWebviewPendingTask(task: PendingTask): WebviewPendingTask {
-		const webview = this.view?.webview;
+	private async toWebviewPendingTask(task: PendingTask): Promise<WebviewPendingTask> {
 		const done = task.jobs.filter((j) => j.status === 'succeeded').length;
 		const failed = task.jobs.filter((j) => j.status === 'failed' || j.status === 'violation').length;
 		const submitting = task.jobs.filter((j) => j.status === 'submitting').length;
@@ -454,23 +492,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			progress: aggregateProgress(task.jobs),
 			startedAt: task.startedAt,
 			errors,
-			images: task.images.map((img) => ({
-				...img,
-				src: webview ? webview.asWebviewUri(vscode.Uri.parse(img.uri)).toString() : img.uri,
-			})),
+			images: await this.toWebviewImages(task.images),
 		};
 	}
 
 	/** 把素材库里的文件 Uri 转成 webview 可加载的 src */
-	private toWebviewLibrary(lib: MaterialLibrary): WebviewLibrary {
-		const webview = this.view?.webview;
+	private async toWebviewLibrary(lib: MaterialLibrary): Promise<WebviewLibrary> {
 		return {
 			folder: lib.folder,
 			name: lib.name,
-			images: lib.images.map((img) => ({
-				...img,
-				src: webview ? webview.asWebviewUri(vscode.Uri.parse(img.uri)).toString() : img.uri,
-			})),
+			images: await this.toWebviewImages(lib.images),
 		};
 	}
 
