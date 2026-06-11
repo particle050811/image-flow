@@ -44,7 +44,11 @@ function LibRow({
 						<img
 							key={img.uri}
 							src={img.src}
-							title={`${img.name}（左键打开 · 右键插入引用）`}
+							title={`${img.name}（左键打开 · 右键插入引用 · 可拖入编辑区）`}
+							draggable
+							onDragStart={(e) =>
+								e.dataTransfer.setData('application/x-imageflow-uri', img.uri)
+							}
 							onClick={() => vscode.postMessage({ type: 'openImage', uri: img.uri })}
 							onContextMenu={(e) => {
 								e.preventDefault();

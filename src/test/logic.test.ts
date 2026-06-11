@@ -6,6 +6,7 @@ import { editConfigView } from '../config';
 import { imageRefSnippet } from '../refs';
 import { buildEditPrompt } from '../edit';
 import { buildPromptFileContent, dataUriBytes } from '../taskFiles';
+import { EditSession } from '../editSession';
 import { isTransientNetworkError, isTaskActive, aggregateProgress } from '../tasks';
 import type { ImageFlowConfig, PendingTask, PendingJob } from '../shared';
 
@@ -231,5 +232,37 @@ suite('dataUriBytes', () => {
 	});
 	test('非 data URI 抛错', () => {
 		assert.throws(() => dataUriBytes('https://x/y.png'), /data URI/);
+	});
+});
+
+suite('EditSession', () => {
+	const png = `data:image/png;base64,${Buffer.from('x').toString('base64')}`;
+	test('addData 正常添加并保持顺序', () => {
+		const s = new EditSession();
+		assert.strictEqual(s.addData('a.png', png), null);
+		assert.strictEqual(s.addData('b.png', png), null);
+		assert.deepStrictEqual(s.list().map((i) => i.name), ['a.png', 'b.png']);
+	});
+	test('重名拒绝并返回错误消息', () => {
+		const s = new EditSession();
+		s.addData('a.png', png);
+		const err = s.addData('a.png', png);
+		assert.ok(err && /a\.png/.test(err));
+		assert.strictEqual(s.list().length, 1);
+	});
+	test('非图片扩展名拒绝', () => {
+		const s = new EditSession();
+		assert.ok(s.addData('a.txt', png));
+	});
+	test('非图片 data URI 拒绝', () => {
+		const s = new EditSession();
+		assert.ok(s.addData('a.png', 'data:text/plain;base64,eA=='));
+	});
+	test('remove 按名移除', () => {
+		const s = new EditSession();
+		s.addData('a.png', png);
+		s.addData('b.png', png);
+		s.remove('a.png');
+		assert.deepStrictEqual(s.list().map((i) => i.name), ['b.png']);
 	});
 });

@@ -814,3 +814,73 @@ button.secondary {
 		transform: none;
 	}
 }
+
+/* ---------- 编辑页 ---------- */
+.edit-drop {
+	border: 1px dashed var(--hair);
+	border-radius: var(--radius-sm);
+	padding: var(--sp-2);
+	margin-bottom: var(--sp-2);
+}
+
+.edit-drop.over {
+	border-color: var(--vscode-focusBorder);
+	background: var(--vscode-list-hoverBackground);
+}
+
+.edit-drop .lib-add {
+	margin-top: var(--sp-1);
+}
+
+.tpl-select {
+	width: 100%;
+	background: var(--vscode-dropdown-background);
+	color: var(--vscode-dropdown-foreground);
+	border: 1px solid var(--vscode-dropdown-border, var(--hair));
+	border-radius: var(--radius-sm);
+	padding: 4px 6px;
+}
+
+/* ---------- 缩略图包裹层与角标（编辑区 + 任务页共用） ---------- */
+.thumb-wrap {
+	position: relative;
+	min-width: 0;
+}
+
+.thumb-index {
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	font-size: 11px;
+	line-height: 1;
+	padding: 2px 5px;
+	border-radius: var(--radius-sm);
+	background: rgba(0, 0, 0, 0.6);
+	color: #fff;
+	pointer-events: none;
+}
+
+.thumb-action {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	display: none;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	line-height: 18px;
+	text-align: center;
+	border-radius: var(--radius-sm);
+	background: rgba(0, 0, 0, 0.6);
+	color: #fff;
+	border: none;
+	cursor: pointer;
+}
+
+.thumb-wrap:hover .thumb-action {
+	display: block;
+}
+
+.task-actions {
+	margin: var(--sp-1) 0;
+}

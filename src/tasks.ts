@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import { submitGeneration, queryResult, TransientError } from './api';
 import { buildPrompt, createTaskFolder, downloadImages, mdBaseName } from './command';
-import { readConfig } from './config';
-import { buildInjectedPrompt } from './inject';
-import { tasksRoot } from './storage';
+import { readConfig, editConfigView } from './config';
+import { buildEditPrompt } from './edit';
+import { buildInjectedPrompt, joinPrompt, modelInjection } from './inject';
+import type { EditImage } from './editSession';
 import { archiveInputs, buildPromptFileContent, writePromptFile } from './taskFiles';
 import type { ImageFlowConfig, PendingTask, PendingJob } from './shared';
 
@@ -90,10 +91,10 @@ export class TaskManager {
 	private polling = false;
 
 	constructor(private readonly context: vscode.ExtensionContext) {
-		// 旧版（任务建在 md 同级）持久化记录无 kind 字段，目录定位已失效，直接丢弃不续拉
+		// 旧版（任务建在 md 同级）持久化记录无 kind/dir 字段，目录定位已失效，直接丢弃不续拉
 		this.tasks = context.globalState
 			.get<PendingTask[]>(PENDING_KEY, [])
-			.filter((t) => t.kind === 'generate' || t.kind === 'edit');
+			.filter((t) => (t.kind === 'generate' || t.kind === 'edit') && typeof t.dir === 'string');
 	}
 
 	/** 订阅任务变更，返回取消订阅函数 */
@@ -122,8 +123,7 @@ export class TaskManager {
 			return;
 		}
 		try {
-			const dir = vscode.Uri.joinPath(tasksRoot(), task.folder);
-			await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
+			await vscode.workspace.fs.delete(vscode.Uri.parse(task.dir), { recursive: true, useTrash: false });
 		} catch {
 			// 目录不存在或删除失败不影响主流程
 		}
@@ -177,6 +177,31 @@ export class TaskManager {
 	}
 
 	/**
+	 * 提交一次编辑任务：用编辑专属配置，引用按编辑区顺序替换为 [imageN]。
+	 * 注入仅拼模型注入句（按编辑模型取），不拼工作区 IMAGES.md——编辑场景与图册说明无关。
+	 */
+	async submitEdit(rawPrompt: string, refs: EditImage[]): Promise<void> {
+		const base = await readConfig(this.context);
+		const config = editConfigView(base);
+		const content = rawPrompt.trim();
+		if (!content) {
+			throw new Error('提示词为空，无法生成。');
+		}
+		const basePrompt = buildEditPrompt(content, refs.map((r) => r.name));
+		const prompt = joinPrompt([modelInjection(base, config.model), basePrompt]);
+		await this.start({
+			kind: 'edit',
+			prefix: 'edit',
+			promptFileName: 'edit.md',
+			source: '（编辑任务）',
+			config,
+			prompt,
+			images: refs.map((r) => r.data),
+			names: refs.map((r) => r.name),
+		});
+	}
+
+	/**
 	 * 公共提交流程：建任务文件夹 → 写提示词文件 + 归档参考图 → 建卡入列 →
 	 * 后台并发提交（不 await，调用方立即返回）。
 	 */
@@ -190,6 +215,7 @@ export class TaskManager {
 			id: folder,
 			kind: opts.kind,
 			folder,
+			dir: dir.toString(),
 			prefix: opts.prefix,
 			mdUri: opts.mdUri,
 			model: opts.config.model,
@@ -374,9 +400,8 @@ export class TaskManager {
 			job.error = result.error;
 			return true;
 		}
-		// succeeded：下载到任务文件夹，接续已有图片编号避免重名
-		const taskDir = vscode.Uri.joinPath(tasksRoot(), task.folder);
-		const saved = await downloadImages(taskDir, task.prefix, result.urls, task.images.length);
+		// succeeded：下载到任务文件夹（用创建时记下的绝对 Uri，与当前窗口工作区无关），接续已有图片编号避免重名
+		const saved = await downloadImages(vscode.Uri.parse(task.dir), task.prefix, result.urls, task.images.length);
 		task.images.push(...saved);
 		job.status = 'succeeded';
 		return true;

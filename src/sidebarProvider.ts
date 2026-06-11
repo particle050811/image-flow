@@ -2,9 +2,14 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
 import * as path from 'path';
 import { uriBaseName } from './paths';
-import { readConfig, writeConfig, CONFIG_OPTIONS } from './config';
-import { listHistory, openRequestPreview } from './command';
+import { readConfig, writeConfig, CONFIG_OPTIONS, editConfigView } from './config';
+import { listHistory, openRequestPreview, buildPreviewText, openTextPreview } from './command';
 import { TaskManager, aggregateProgress } from './tasks';
+import { EditSession } from './editSession';
+import { listPromptTemplates } from './prompts';
+import { tasksRoot } from './storage';
+import { buildEditPrompt } from './edit';
+import { joinPrompt, modelInjection } from './inject';
 import {
 	getLibraryFolders,
 	addLibraryFolder,
@@ -30,6 +35,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	/** 当前侧栏关联的 Markdown（跟随当前活动编辑器；切到非 .md 标签时保留上一个，不清空） */
 	private currentMd?: vscode.Uri;
+	/** 编辑区图片列表：扩展侧持有，webview 重建不丢 */
+	private readonly edit = new EditSession();
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
@@ -117,6 +124,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				await this.pushHistory();
 				await this.pushLibraries();
 				await this.pushAutoLibraries();
+				this.pushEditImages();
+				await this.pushTemplates();
 				break;
 			}
 			case 'saveConfig':
@@ -152,6 +161,36 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				this.refreshResourceRoots();
 				await this.pushLibraries();
 				break;
+			case 'editUpload':
+				await this.pickEditImages();
+				break;
+			case 'editAddImages':
+				await this.addEditImages(msg.uris);
+				break;
+			case 'editAddImageData': {
+				const err = this.edit.addData(msg.name, msg.data);
+				if (err) {
+					this.post({ type: 'error', message: err });
+				}
+				this.pushEditImages();
+				break;
+			}
+			case 'editRemoveImage':
+				this.edit.remove(msg.name);
+				this.pushEditImages();
+				break;
+			case 'editGenerate':
+				await this.doEditGenerate(msg.prompt);
+				break;
+			case 'editPreviewRequest':
+				await this.doEditPreview(msg.prompt);
+				break;
+			case 'openPrompt':
+				await this.openTaskPrompt(msg.folder);
+				break;
+			case 'refreshTemplates':
+				await this.pushTemplates();
+				break;
 		}
 	}
 
@@ -169,6 +208,100 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		await addLibraryFolder(this.context, picked[0].toString());
 		this.refreshResourceRoots();
 		await this.pushLibraries();
+	}
+
+	/** 弹出文件选择器，把选中图片加入编辑区 */
+	private async pickEditImages(): Promise<void> {
+		const picked = await vscode.window.showOpenDialog({
+			canSelectFiles: true,
+			canSelectFolders: false,
+			canSelectMany: true,
+			openLabel: '加入编辑区',
+			filters: { 图片: ['png', 'jpg', 'jpeg', 'webp', 'gif'] },
+		});
+		if (!picked?.length) {
+			return;
+		}
+		await this.addEditImages(picked.map((u) => u.toString()));
+	}
+
+	/** 批量按 uri 加入编辑区：逐张收集错误（重名/非图/读取失败），一次性提示 */
+	private async addEditImages(uris: string[]): Promise<void> {
+		const errors: string[] = [];
+		for (const uri of uris) {
+			const err = await this.edit.addUri(uri);
+			if (err) {
+				errors.push(err);
+			}
+		}
+		if (errors.length) {
+			this.post({ type: 'error', message: errors.join('；') });
+		}
+		this.pushEditImages();
+	}
+
+	private pushEditImages(): void {
+		this.post({
+			type: 'editImages',
+			images: this.edit.list().map((i) => ({ name: i.name, src: i.data })),
+		});
+	}
+
+	private async pushTemplates(): Promise<void> {
+		this.post({ type: 'promptTemplates', templates: await listPromptTemplates() });
+	}
+
+	/** 编辑页生成：校验 Key → submitEdit 提交异步任务 */
+	private async doEditGenerate(prompt: string): Promise<void> {
+		const config = await readConfig(this.context);
+		if (!config.apiKey) {
+			this.post({ type: 'error', message: '尚未配置 API Key，请在设置页填写。' });
+			return;
+		}
+		this.post({ type: 'busy', busy: true });
+		try {
+			await this.tasks.submitEdit(prompt, this.edit.list());
+			this.post({ type: 'status', message: '已提交编辑任务，正在后台生成…' });
+			this.post({ type: 'navigate', tab: 'tasks' });
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.post({ type: 'error', message });
+		} finally {
+			this.post({ type: 'busy', busy: false });
+		}
+	}
+
+	/** 编辑页预览请求：与 submitEdit 同一套替换/注入，打开成预览文档（不调 API） */
+	private async doEditPreview(prompt: string): Promise<void> {
+		try {
+			const base = await readConfig(this.context);
+			const config = editConfigView(base);
+			const refs = this.edit.list();
+			const basePrompt = buildEditPrompt(prompt.trim(), refs.map((r) => r.name));
+			const finalPrompt = joinPrompt([modelInjection(base, config.model), basePrompt]);
+			await openTextPreview(buildPreviewText(config, finalPrompt, refs.map((r) => r.data)));
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.post({ type: 'error', message });
+		}
+	}
+
+	/** 打开任务文件夹内的提示词 .md 文件（文件名不固定，按扩展名找第一个） */
+	private async openTaskPrompt(folder: string): Promise<void> {
+		try {
+			const dir = vscode.Uri.joinPath(tasksRoot(), folder);
+			const entries = await vscode.workspace.fs.readDirectory(dir);
+			const md = entries.find(
+				([name, type]) => type === vscode.FileType.File && name.toLowerCase().endsWith('.md')
+			);
+			if (!md) {
+				this.post({ type: 'error', message: '该任务没有保存提示词文件。' });
+				return;
+			}
+			await vscode.commands.executeCommand('vscode.open', vscode.Uri.joinPath(dir, md[0]));
+		} catch {
+			this.post({ type: 'error', message: '提示词文件打开失败。' });
+		}
 	}
 
 	/** 构造 webview 的资源根：扩展 media + 工作区目录 + 各素材库目录 */
@@ -346,8 +479,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		// style-src 必须含 'unsafe-inline'：Radix（Select/Collapsible 等）的浮层定位、
 		// 滚动锁、动画高度均通过元素级内联 style 属性实现，而 CSP nonce/hash 只覆盖
 		// <style>/<script> 标签、管不到内联 style 属性，故无法收紧为 nonce。脚本仍锁 nonce。
+		// img-src 须含 data:：编辑区图片统一以 data URI 推送（可能来自 localResourceRoots 之外）。
 		const csp =
-			`default-src 'none'; img-src ${webview.cspSource}; ` +
+			`default-src 'none'; img-src ${webview.cspSource} data:; ` +
 			`style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';`;
 		return `<!DOCTYPE html>
 <html lang="zh">

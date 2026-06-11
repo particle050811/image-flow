@@ -10,6 +10,8 @@ export type {
 	WebviewTask,
 	WebviewPendingTask,
 	WebviewLibrary,
+	PromptTemplate,
+	WebviewEditImage,
 	InboundMessage,
 	OutboundMessage,
 } from '../shared';

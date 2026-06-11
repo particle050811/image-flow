@@ -8,15 +8,19 @@ import {
 	type WebviewTask,
 	type WebviewPendingTask,
 	type WebviewLibrary,
+	type WebviewEditImage,
+	type PromptTemplate,
 } from './vscode';
 import { Workbench } from './Workbench';
 import { Tasks } from './Tasks';
 import { ApiConfig } from './ApiConfig';
+import { Edit } from './Edit';
 
-type TabId = 'workbench' | 'tasks' | 'api';
+type TabId = 'workbench' | 'edit' | 'tasks' | 'api';
 
 const TABS: { id: TabId; label: string }[] = [
 	{ id: 'workbench', label: '工作台' },
+	{ id: 'edit', label: '编辑' },
 	{ id: 'tasks', label: '任务' },
 	{ id: 'api', label: '设置' },
 ];
@@ -30,7 +34,10 @@ export function App() {
 	const [pendingTasks, setPendingTasks] = useState<WebviewPendingTask[]>([]);
 	const [libraries, setLibraries] = useState<WebviewLibrary[]>([]);
 	const [autoLibraries, setAutoLibraries] = useState<WebviewLibrary[]>([]);
+	const [editImages, setEditImages] = useState<WebviewEditImage[]>([]);
+	const [templates, setTemplates] = useState<PromptTemplate[]>([]);
 	const [busy, setBusy] = useState(false);
+	const [genCooling, setGenCooling] = useState(false);
 	const [status, setStatus] = useState<{ text: string; error: boolean }>({ text: '', error: false });
 
 	// 订阅扩展消息，挂载后发 init 拉取配置与历史
@@ -56,6 +63,12 @@ export function App() {
 					break;
 				case 'autoLibraries':
 					setAutoLibraries(msg.libraries);
+					break;
+				case 'editImages':
+					setEditImages(msg.images);
+					break;
+				case 'promptTemplates':
+					setTemplates(msg.templates);
 					break;
 				case 'status':
 					setStatus({ text: msg.message, error: false });
@@ -87,9 +100,18 @@ export function App() {
 		if (id === 'tasks') {
 			vscode.postMessage({ type: 'refreshHistory' });
 		}
+		if (id === 'edit') {
+			vscode.postMessage({ type: 'refreshTemplates' });
+		}
 	};
 
+	// 生成：0.5s 冷却防连点（冷却期间按钮禁用，借 busy 视觉态）
 	const generate = () => {
+		if (genCooling) {
+			return;
+		}
+		setGenCooling(true);
+		setTimeout(() => setGenCooling(false), 500);
 		setStatus({ text: '', error: false });
 		vscode.postMessage({ type: 'generate' });
 	};
@@ -102,6 +124,12 @@ export function App() {
 	const addLibrary = () => vscode.postMessage({ type: 'addLibrary' });
 	const removeLibrary = (folder: string) =>
 		vscode.postMessage({ type: 'removeLibrary', folder });
+
+	// 任务页 ✎：把图加入编辑区并切到编辑页
+	const sendToEdit = (uri: string) => {
+		vscode.postMessage({ type: 'editAddImages', uris: [uri] });
+		setTab('edit');
+	};
 
 	if (!config || !options) {
 		return <div className="page">加载中…</div>;
@@ -130,7 +158,7 @@ export function App() {
 					config={config}
 					options={options}
 					activeMd={activeMd}
-					busy={busy}
+					busy={busy || genCooling}
 					status={status}
 					libraries={libraries}
 					autoLibraries={autoLibraries}
@@ -142,12 +170,25 @@ export function App() {
 					onRemoveLibrary={removeLibrary}
 				/>
 			</Tabs.Content>
+			<Tabs.Content value="edit" forceMount className="tabpanel">
+				<Edit
+					hidden={tab !== 'edit'}
+					config={config}
+					options={options}
+					images={editImages}
+					templates={templates}
+					busy={busy}
+					status={status}
+					onChange={saveField}
+				/>
+			</Tabs.Content>
 			<Tabs.Content value="tasks" forceMount className="tabpanel">
 				<Tasks
 					hidden={tab !== 'tasks'}
 					tasks={tasks}
 					pendingTasks={pendingTasks}
 					cols={config.tasksCols}
+					onSendToEdit={sendToEdit}
 				/>
 			</Tabs.Content>
 			<Tabs.Content value="api" forceMount className="tabpanel">

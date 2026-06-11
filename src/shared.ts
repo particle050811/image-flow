@@ -75,6 +75,18 @@ export interface WebviewLibrary {
 	images: WebviewImage[];
 }
 
+/** 预设提示词模板：name 为文件名去扩展名，content 为全文 */
+export interface PromptTemplate {
+	name: string;
+	content: string;
+}
+
+/** 编辑区图片（发往 webview）：src 为 data URI 缩略图 */
+export interface WebviewEditImage {
+	name: string;
+	src: string;
+}
+
 /** 异步生成中单个 job 的状态（对应一次 generate 提交、一个远端 job id） */
 // submitting：本地已建卡、generate 请求尚未拿到 job id 的中间态。
 // 这样点生成可立即建卡返回，不必干等网络往返；拿到 id 后转 running。
@@ -100,6 +112,8 @@ export interface PendingTask {
 	kind: 'generate' | 'edit';
 	/** 任务文件夹名（毫秒级时间戳），位于 .image-flow/tasks/ 下 */
 	folder: string;
+	/** 任务文件夹的绝对 Uri 字符串。globalState 跨工作区共享，续拉时不能依赖当前窗口的工作区根定位 */
+	dir: string;
 	/** 产出图片文件名前缀：生成任务为 md 名，编辑任务为 edit */
 	prefix: string;
 	/** 来源 md 的 Uri 字符串（仅 generate，用于追溯） */
@@ -141,9 +155,11 @@ export type InboundMessage =
 	| { type: 'status'; message: string }
 	| { type: 'error'; message: string }
 	| { type: 'busy'; busy: boolean }
-	| { type: 'navigate'; tab: 'workbench' | 'tasks' | 'api' }
+	| { type: 'navigate'; tab: 'workbench' | 'edit' | 'tasks' | 'api' }
 	| { type: 'libraries'; libraries: WebviewLibrary[] }
-	| { type: 'autoLibraries'; libraries: WebviewLibrary[] };
+	| { type: 'autoLibraries'; libraries: WebviewLibrary[] }
+	| { type: 'promptTemplates'; templates: PromptTemplate[] }
+	| { type: 'editImages'; images: WebviewEditImage[] };
 
 /** 前端 → 扩展 */
 export type OutboundMessage =
@@ -156,4 +172,12 @@ export type OutboundMessage =
 	| { type: 'openExternal'; url: string }
 	| { type: 'refreshHistory' }
 	| { type: 'addLibrary' }
-	| { type: 'removeLibrary'; folder: string };
+	| { type: 'removeLibrary'; folder: string }
+	| { type: 'editUpload' }
+	| { type: 'editAddImages'; uris: string[] }
+	| { type: 'editAddImageData'; name: string; data: string }
+	| { type: 'editRemoveImage'; name: string }
+	| { type: 'editGenerate'; prompt: string }
+	| { type: 'editPreviewRequest'; prompt: string }
+	| { type: 'openPrompt'; folder: string }
+	| { type: 'refreshTemplates' };

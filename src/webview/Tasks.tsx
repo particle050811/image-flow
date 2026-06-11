@@ -2,18 +2,48 @@ import { useEffect, useState } from 'react';
 import * as Collapsible from '@radix-ui/react-collapsible';
 import { vscode, type WebviewTask, type WebviewPendingTask } from './vscode';
 
-/** 缩略图网格：点击打开原图 */
-function Thumbs({ images }: { images: { uri: string; src: string; name: string }[] }) {
+/** 缩略图网格：点击打开原图；可拖拽（送编辑区）；hover 右上角 ✎ 一键送编辑 */
+function Thumbs({
+	images,
+	onSendToEdit,
+}: {
+	images: { uri: string; src: string; name: string }[];
+	onSendToEdit: (uri: string) => void;
+}) {
 	return (
 		<div className="thumbs thumbs-lg">
 			{images.map((img) => (
-				<img
-					key={img.uri}
-					src={img.src}
-					title={img.name}
-					onClick={() => vscode.postMessage({ type: 'openImage', uri: img.uri })}
-				/>
+				<div className="thumb-wrap" key={img.uri}>
+					<img
+						src={img.src}
+						title={img.name}
+						draggable
+						onDragStart={(e) => e.dataTransfer.setData('application/x-imageflow-uri', img.uri)}
+						onClick={() => vscode.postMessage({ type: 'openImage', uri: img.uri })}
+					/>
+					<button
+						className="thumb-action"
+						title="送入编辑"
+						onClick={() => onSendToEdit(img.uri)}
+					>
+						✎
+					</button>
+				</div>
 			))}
+		</div>
+	);
+}
+
+/** 查看本任务提交的提示词（打开任务文件夹内的 .md 文件） */
+function PromptButton({ folder }: { folder: string }) {
+	return (
+		<div className="task-actions">
+			<button
+				className="link"
+				onClick={() => vscode.postMessage({ type: 'openPrompt', folder })}
+			>
+				查看提示词
+			</button>
 		</div>
 	);
 }
@@ -39,7 +69,13 @@ function useElapsed(createdAt: number): string {
 }
 
 /** 进行中任务卡片：标题可展开/收起，展开后显示进度条 + 已存缩略图 + 进度/失败提示 */
-function PendingCard({ task }: { task: WebviewPendingTask }) {
+function PendingCard({
+	task,
+	onSendToEdit,
+}: {
+	task: WebviewPendingTask;
+	onSendToEdit: (uri: string) => void;
+}) {
 	const [open, setOpen] = useState(true);
 	const elapsed = useElapsed(task.startedAt);
 	const running = task.total - task.done - task.failed - task.submitting;
@@ -66,7 +102,8 @@ function PendingCard({ task }: { task: WebviewPendingTask }) {
 					</div>
 					<span className="progress-pct">{task.progress}%</span>
 				</div>
-				{task.images.length > 0 && <Thumbs images={task.images} />}
+				<PromptButton folder={task.folder} />
+				{task.images.length > 0 && <Thumbs images={task.images} onSendToEdit={onSendToEdit} />}
 				{task.submitting > 0 && (
 					<div className="pending-hint">正在提交 {task.submitting} 个请求…</div>
 				)}
@@ -78,7 +115,13 @@ function PendingCard({ task }: { task: WebviewPendingTask }) {
 }
 
 /** 历史任务卡片：标题可展开/收起，默认收起 */
-function HistoryCard({ task }: { task: WebviewTask }) {
+function HistoryCard({
+	task,
+	onSendToEdit,
+}: {
+	task: WebviewTask;
+	onSendToEdit: (uri: string) => void;
+}) {
 	const [open, setOpen] = useState(false);
 	return (
 		<Collapsible.Root className="task" open={open} onOpenChange={setOpen}>
@@ -91,26 +134,29 @@ function HistoryCard({ task }: { task: WebviewTask }) {
 				</div>
 			</Collapsible.Trigger>
 			<Collapsible.Content>
-				<Thumbs images={task.images} />
+				<PromptButton folder={task.folder} />
+				<Thumbs images={task.images} onSendToEdit={onSendToEdit} />
 			</Collapsible.Content>
 		</Collapsible.Root>
 	);
 }
 
-/** 任务页：进行中与历史合并为一条按时间倒序的列表（不分图层），点击标题展开/收起 */
+/** 任务页：进行中与历史合并为一条按时间倒序的列表，点击标题展开/收起 */
 export function Tasks({
 	hidden,
 	tasks,
 	pendingTasks,
 	cols,
+	onSendToEdit,
 }: {
 	hidden: boolean;
 	tasks: WebviewTask[];
 	pendingTasks: WebviewPendingTask[];
 	cols: number;
+	onSendToEdit: (uri: string) => void;
 }) {
 	const empty = tasks.length === 0 && pendingTasks.length === 0;
-	// 进行中与历史按文件夹名（含时间戳 task-yyMMddHHmmSS-seq）倒序合并，新任务在前
+	// 进行中与历史按文件夹名（毫秒时间戳）倒序合并，新任务在前
 	const items = [
 		...pendingTasks.map((t) => ({ folder: t.folder, kind: 'pending' as const, task: t })),
 		...tasks.map((t) => ({ folder: t.folder, kind: 'history' as const, task: t })),
@@ -127,9 +173,9 @@ export function Tasks({
 			) : (
 				items.map((item) =>
 					item.kind === 'pending' ? (
-						<PendingCard key={item.task.id} task={item.task} />
+						<PendingCard key={item.task.id} task={item.task} onSendToEdit={onSendToEdit} />
 					) : (
-						<HistoryCard key={item.task.folder} task={item.task} />
+						<HistoryCard key={item.task.folder} task={item.task} onSendToEdit={onSendToEdit} />
 					)
 				)
 			)}
