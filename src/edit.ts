@@ -1,4 +1,7 @@
 import { parseImageRefs, replaceImageRefs } from './command';
+import { editConfigView } from './config';
+import { joinPrompt, modelInjection } from './inject';
+import type { ImageFlowConfig } from './shared';
 
 /**
  * 编辑提示词的引用替换：`![](文件名)` → `[imageN](文件名去扩展)`。
@@ -15,4 +18,13 @@ export function buildEditPrompt(content: string, names: string[]): string {
 	}
 	const indexByName = new Map(names.map((n, i) => [n, i + 1] as const));
 	return replaceImageRefs(content, indexByName);
+}
+
+/**
+ * 编辑任务的最终提示词：引用替换 + 编辑模型注入句（不拼 IMAGES.md——编辑场景与图册说明无关）。
+ * 提交（tasks.submitEdit）与预览（sidebarProvider.doEditPreview）共用，保证预览与实际提交永不漂移。
+ */
+export function buildEditFinalPrompt(base: ImageFlowConfig, rawPrompt: string, names: string[]): string {
+	const config = editConfigView(base);
+	return joinPrompt([modelInjection(base, config.model), buildEditPrompt(rawPrompt.trim(), names)]);
 }

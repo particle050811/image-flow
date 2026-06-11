@@ -19,6 +19,7 @@ export function Edit({
 	busy,
 	status,
 	onChange,
+	onError,
 }: {
 	hidden: boolean;
 	config: Config;
@@ -28,6 +29,7 @@ export function Edit({
 	busy: boolean;
 	status: { text: string; error: boolean };
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
+	onError: (message: string) => void;
 }) {
 	const [prompt, setPrompt] = useState('');
 	const [cooling, setCooling] = useState(false);
@@ -60,14 +62,30 @@ export function Edit({
 			return;
 		}
 		const uriList = e.dataTransfer.getData('text/uri-list');
-		const uris = uriList
+		let uris = uriList
 			? uriList.split(/\r?\n/).map((s) => s.trim()).filter((s) => s && !s.startsWith('#'))
 			: [];
+		if (!uris.length) {
+			// VS Code 资源管理器需按住 Shift 拖入，workbench 此时写入 resourceurls（URI 字符串的 JSON 数组）
+			try {
+				const parsed: unknown = JSON.parse(e.dataTransfer.getData('resourceurls') || '[]');
+				if (Array.isArray(parsed)) {
+					uris = parsed.filter((s): s is string => typeof s === 'string');
+				}
+			} catch {
+				// 非 JSON 则当作没有
+			}
+		}
 		if (uris.length) {
 			vscode.postMessage({ type: 'editAddImages', uris });
 			return;
 		}
-		// 多个 FileReader 的完成顺序不定，而消息到达序决定图片区序号（即 imageN）——收齐后按拖入顺序发送
+		// 不按 Shift 时 VS Code 拦截资源管理器拖拽，drop 不携带任何数据——提示正确姿势
+		if (!e.dataTransfer.files.length) {
+			onError('未读取到图片：从 VS Code 资源管理器拖入需按住 Shift，或用「上传」按钮 / 系统文件管理器拖入。');
+			return;
+		}
+		// 多个 FileReader 的完成顺序不定，而列表顺序决定图片区序号（即 imageN）——收齐后按拖入顺序一条消息批量发送
 		const reads = Array.from(e.dataTransfer.files).map(
 			(file) =>
 				new Promise<{ name: string; data: string } | null>((resolve) => {
@@ -79,10 +97,13 @@ export function Edit({
 				})
 		);
 		void Promise.all(reads).then((items) => {
-			for (const item of items) {
-				if (item) {
-					vscode.postMessage({ type: 'editAddImageData', name: item.name, data: item.data });
-				}
+			const valid = items.filter((i): i is { name: string; data: string } => i !== null);
+			const failed = items.length - valid.length;
+			if (failed > 0) {
+				onError(`有 ${failed} 张图片读取失败，已跳过。`);
+			}
+			if (valid.length) {
+				vscode.postMessage({ type: 'editAddImagesData', items: valid });
 			}
 		});
 	};
@@ -118,7 +139,7 @@ export function Edit({
 				onDrop={onDrop}
 			>
 				{images.length === 0 ? (
-					<div className="empty">拖入图片，或点击下方「上传」。点击图片可在提示词中插入引用。</div>
+					<div className="empty">拖入图片（VS Code 资源管理器需按住 Shift 拖），或点击下方「上传」。点击图片可在提示词中插入引用。</div>
 				) : (
 					<div className="thumbs" style={{ ['--cols' as string]: config.workbenchCols }}>
 						{images.map((img, i) => (

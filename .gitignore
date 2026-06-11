@@ -5,3 +5,4 @@ node_modules
 *.vsix
 media/sidebar.js
 media/sidebar.js.map
+.vscode/*.png

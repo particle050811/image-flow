@@ -61,8 +61,8 @@
 | 来源 | 机制 |
 |---|---|
 | 上传按钮 | `vscode.window.showOpenDialog`（图片扩展名过滤、可多选） |
-| 侧栏内拖拽 | 素材库 / 任务页缩略图设为 draggable，dataTransfer 携带图片 file uri，编辑页图片区接收 |
-| 资源管理器 / 系统拖入 | drop 事件优先读 `text/uri-list` 取文件路径；拿不到路径时读 File 二进制，由扩展**存内存**（base64），不落盘 |
+| 侧栏内拖拽 | 素材库 / 任务页缩略图设为 draggable，dataTransfer 携带图片 file uri，编辑页图片区接收；拖动悬停「编辑」标签自动切页（源与目标不在同一标签页） |
+| 资源管理器 / 系统拖入 | drop 事件优先读 `text/uri-list`，再兜底读 `resourceurls`（VS Code workbench 写入的 URI JSON 数组）；都拿不到时读 File 二进制，由扩展**存内存**（base64），不落盘。**VS Code 资源管理器拖入须按住 Shift**——不按时 workbench 拦截拖拽、drop 不携带数据（同 Cline 等扩展的约定），编辑页对空 drop 给出提示 |
 
 - 编辑区图片统一读成 data URI 驻留扩展内存、不预先落盘复制——图片可能来自 `localResourceRoots` 之外的任意目录，data URI 是 webview 唯一可靠的展示方式，且提交时本就要转 base64，无重复开销。代价是扩展重启后编辑区清空，可接受。提交时所有参考图统一归档进任务文件夹 `input/`（见第 2 节）。
 - 已上传图片列表由**扩展主进程持有**，webview 重建后不丢；前端通过消息增删，扩展推送带 `asWebviewUri` src（内存图用 data URI）的列表。

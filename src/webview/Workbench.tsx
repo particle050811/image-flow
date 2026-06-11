@@ -77,8 +77,8 @@ export function Workbench({
 				<div className="gen-row">
 					<span
 						className="tip"
-						data-tip="默认选择主界面最左侧 Markdown"
-						aria-label="默认选择主界面最左侧 Markdown"
+						data-tip="跟随当前活动的 Markdown 编辑器；切到非 Markdown 标签时保持不变"
+						aria-label="跟随当前活动的 Markdown 编辑器；切到非 Markdown 标签时保持不变"
 					>
 						<span className="active-md">
 							{activeMd ? `当前文件：${activeMd}` : '未打开 Markdown 文件'}

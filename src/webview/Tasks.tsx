@@ -58,14 +58,14 @@ function formatElapsed(ms: number): string {
 	return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
-/** 已进行时间：每秒自增，从任务 createdAt 起算 */
-function useElapsed(createdAt: number): string {
+/** 已进行时间：每秒自增，从任务首次提交时间（startedAt，真实墙钟、不随重启重置）起算 */
+function useElapsed(startedAt: number): string {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		const timer = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(timer);
 	}, []);
-	return formatElapsed(now - createdAt);
+	return formatElapsed(now - startedAt);
 }
 
 /** 进行中任务卡片：标题可展开/收起，展开后显示进度条 + 已存缩略图 + 进度/失败提示 */

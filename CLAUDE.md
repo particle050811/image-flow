@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目目标
 
-image-flow 是一个 VS Code 扩展，在编辑器内对 Markdown 调用 AI 绘图后端（Grsai）生成图片。核心能力已实现：活动栏侧栏（Webview + React 前端）承载配置、生成入口与结果/历史/素材库；右键 Markdown 触发生成；解析正文图片语法为有序参考图做图生图；**异步提交 + 后台轮询 + 重启续拉**的任务机制；可调缩略图尺寸的素材库与按 MD 路径自动生成的素材库。
+image-flow 是一个 VS Code 扩展，在编辑器内对 Markdown 调用 AI 绘图后端（Grsai）生成图片。核心能力已实现：活动栏侧栏（Webview + React 前端）四标签页（工作台/编辑/任务/设置）承载配置、生成与编辑入口、结果/历史/素材库；右键 Markdown 触发生成；解析正文图片语法为有序参考图做图生图；编辑页对上传/拖入的图片做图生图改写（独立参数 + 提示词模板）；**异步提交 + 后台轮询 + 重启续拉**的任务机制；任务统一落盘 `.image-flow/tasks/`（含提示词与参考图归档）；可调缩略图尺寸的素材库与按 MD 路径自动生成的素材库。
 
 ## 常用命令
 
@@ -43,9 +43,11 @@ npm test               # 运行扩展测试（vscode-test，会下载并启动 V
 
 侧栏前端（`src/webview/`，React）与扩展主进程通过 `postMessage` 通信，消息协议与共享类型集中在 `src/shared.ts`（唯一定义处，前后端都从这里取，避免漂移）。`SidebarProvider`（`src/sidebarProvider.ts`）持有 Webview、转发消息、把文件 Uri 经 `asWebviewUri` 转成前端可加载的 `src`。Webview 静态资源（`media/sidebar.js`、`media/sidebar.css`）走 `asWebviewUri` + CSP nonce 加载。
 
-生成走**异步任务机制**（`src/tasks.ts` 的 `TaskManager`）：点生成 → 按并发数用 `replyType:'async'` 并发提交拿 job id → 任务记录持久化进 `globalState` → 单个定时器（4s）轮询 `GET /v1/api/result`，某 job 成功就把图下载到 `task-<时间戳>-<seq>` 文件夹 → 全部 job 终结后从持久化移除。重启时 `resume()` 续拉未完成任务。任务进行中卡片在「任务」标签页顶部展示，`listHistory` 用 `activeFolders()` 排除进行中文件夹避免与待办重复。
+生成与编辑共用**异步任务机制**（`src/tasks.ts` 的 `TaskManager`，公共提交流程 `start()`）：点生成 → 在工作区根 `.image-flow/tasks/<毫秒时间戳>/` 建任务文件夹并归档提示词 `.md` 与 `input/` 参考图（`src/storage.ts` 定根、`src/taskFiles.ts` 写文件）→ 按并发数用 `replyType:'async'` 并发提交拿 job id → 任务记录持久化进 `globalState` → 单个定时器（4s）轮询 `GET /v1/api/result`，某 job 成功就把图下载进任务文件夹 → 全部 job 终结后从持久化移除（无成图则连空文件夹一并删除）。重启时 `resume()` 续拉未完成任务。「任务」标签页把进行中卡片与历史按文件夹名（毫秒时间戳）倒序合并展示，`listHistory` 用 `activeFolders()` 排除进行中文件夹避免与待办重复。
 
 API 调用封装在 `src/api.ts`（`submitGeneration` / `queryResult`），Markdown 正文解析与参考图处理在 `src/command.ts`（`buildPrompt` 把 `![](路径)` 解析为有序参考图 base64 + 替换为 `[imageN]` 引用），素材库扫描在 `src/materials.ts`。提示词注入在 `src/inject.ts`（`buildInjectedPrompt` 把「模型注入句 + 工作区根 IMAGES.md + 正文」拼成最终 prompt，模型注入句按模型内置兜底、可在侧栏覆盖），提交（`tasks.ts`）与预览（`command.ts`）两处都在 `buildPrompt` 之后各调一次。新增 webview 前端代码无需改 `esbuild.js`（webview 入口已是 `src/webview/index.tsx` 单 bundle，新组件 import 进去即可）。
+
+编辑链路的模块分工：`src/editSession.ts`（编辑区图片列表，主进程持有、统一存 data URI，webview 重建不丢）、`src/edit.ts`（`buildEditPrompt` 按编辑区顺序把 `![](文件名)` 替换为 `[imageN]`；`buildEditFinalPrompt` 再拼编辑模型注入句，提交与预览共用、不拼 IMAGES.md）、`src/prompts.ts`（扫描 `.image-flow/prompts/` 下的 `.md` 模板）、`src/refs.ts`（前后端共用的引用片段纯函数，禁止引入 vscode/node 模块）。编辑页参数（模型/比例/分辨率/并发）经 `editConfigView`（`src/config.ts`）覆盖主参数后走同一套 api 层。
 
 ## 代码约定
 

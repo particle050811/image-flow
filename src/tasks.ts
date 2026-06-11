@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import { submitGeneration, queryResult, TransientError } from './api';
 import { buildPrompt, createTaskFolder, downloadImages, mdBaseName } from './command';
 import { readConfig, editConfigView } from './config';
-import { buildEditPrompt } from './edit';
-import { buildInjectedPrompt, joinPrompt, modelInjection } from './inject';
+import { buildEditFinalPrompt } from './edit';
+import { buildInjectedPrompt } from './inject';
 import type { EditImage } from './editSession';
 import { archiveInputs, buildPromptFileContent, writePromptFile } from './taskFiles';
 import type { ImageFlowConfig, PendingTask, PendingJob } from './shared';
@@ -183,12 +183,10 @@ export class TaskManager {
 	async submitEdit(rawPrompt: string, refs: EditImage[]): Promise<void> {
 		const base = await readConfig(this.context);
 		const config = editConfigView(base);
-		const content = rawPrompt.trim();
-		if (!content) {
+		if (!rawPrompt.trim()) {
 			throw new Error('提示词为空，无法生成。');
 		}
-		const basePrompt = buildEditPrompt(content, refs.map((r) => r.name));
-		const prompt = joinPrompt([modelInjection(base, config.model), basePrompt]);
+		const prompt = buildEditFinalPrompt(base, rawPrompt, refs.map((r) => r.name));
 		await this.start({
 			kind: 'edit',
 			prefix: 'edit',

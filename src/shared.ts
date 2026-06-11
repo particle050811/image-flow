@@ -81,7 +81,7 @@ export interface PromptTemplate {
 	content: string;
 }
 
-/** 编辑区图片（发往 webview）：src 为 data URI 缩略图 */
+/** 编辑区图片（发往 webview）：src 为原图的 data URI（未缩放，直接作 img src） */
 export interface WebviewEditImage {
 	name: string;
 	src: string;
@@ -175,7 +175,7 @@ export type OutboundMessage =
 	| { type: 'removeLibrary'; folder: string }
 	| { type: 'editUpload' }
 	| { type: 'editAddImages'; uris: string[] }
-	| { type: 'editAddImageData'; name: string; data: string }
+	| { type: 'editAddImagesData'; items: { name: string; data: string }[] }
 	| { type: 'editRemoveImage'; name: string }
 	| { type: 'editGenerate'; prompt: string }
 	| { type: 'editPreviewRequest'; prompt: string }

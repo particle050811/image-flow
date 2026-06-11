@@ -8,8 +8,7 @@ import { TaskManager, aggregateProgress } from './tasks';
 import { EditSession } from './editSession';
 import { listPromptTemplates } from './prompts';
 import { tasksRoot } from './storage';
-import { buildEditPrompt } from './edit';
-import { joinPrompt, modelInjection } from './inject';
+import { buildEditFinalPrompt } from './edit';
 import {
 	getLibraryFolders,
 	addLibraryFolder,
@@ -78,7 +77,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		};
 		view.webview.html = this.html(view.webview);
 
-		view.webview.onDidReceiveMessage((msg) => this.onMessage(msg));
+		// 顶层兜底：onMessage 内多数分支自带 try/catch，但 saveConfig/openImage 等少数分支
+		// 失败会成为静默的 unhandled rejection——统一转为前端可见的错误提示
+		view.webview.onDidReceiveMessage((msg) =>
+			this.onMessage(msg).catch((err: unknown) =>
+				this.post({ type: 'error', message: err instanceof Error ? err.message : String(err) })
+			)
+		);
 		view.onDidDispose(() => {
 			this.view = undefined;
 		});
@@ -167,10 +172,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			case 'editAddImages':
 				await this.addEditImages(msg.uris);
 				break;
-			case 'editAddImageData': {
-				const err = this.edit.addData(msg.name, msg.data);
-				if (err) {
-					this.post({ type: 'error', message: err });
+			case 'editAddImagesData': {
+				// 批量收齐后一次性添加 + 单次推送：避免逐张消息 × 各全量推送的 O(N²) 序列化
+				const errors = msg.items
+					.map((item) => this.edit.addData(item.name, item.data))
+					.filter((e): e is string => !!e);
+				if (errors.length) {
+					this.post({ type: 'error', message: errors.join('；') });
 				}
 				this.pushEditImages();
 				break;
@@ -271,15 +279,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	/** 编辑页预览请求：与 submitEdit 同一套替换/注入，打开成预览文档（不调 API） */
+	/** 编辑页预览请求：与 submitEdit 共用 buildEditFinalPrompt，打开成预览文档（不调 API） */
 	private async doEditPreview(prompt: string): Promise<void> {
 		try {
 			const base = await readConfig(this.context);
-			const config = editConfigView(base);
 			const refs = this.edit.list();
-			const basePrompt = buildEditPrompt(prompt.trim(), refs.map((r) => r.name));
-			const finalPrompt = joinPrompt([modelInjection(base, config.model), basePrompt]);
-			await openTextPreview(buildPreviewText(config, finalPrompt, refs.map((r) => r.data)));
+			const finalPrompt = buildEditFinalPrompt(base, prompt, refs.map((r) => r.name));
+			await openTextPreview(buildPreviewText(editConfigView(base), finalPrompt, refs.map((r) => r.data)));
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
 			this.post({ type: 'error', message });

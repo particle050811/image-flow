@@ -4,7 +4,7 @@ import { formatStamp, parseImageRefs, replaceImageRefs } from '../command';
 import { isImageExt, isImageFileName, mimeOf } from '../images';
 import { editConfigView } from '../config';
 import { imageRefSnippet } from '../refs';
-import { buildEditPrompt } from '../edit';
+import { buildEditPrompt, buildEditFinalPrompt } from '../edit';
 import { buildPromptFileContent, dataUriBytes } from '../taskFiles';
 import { EditSession } from '../editSession';
 import { isTransientNetworkError, isTaskActive, aggregateProgress } from '../tasks';
@@ -213,6 +213,19 @@ suite('buildEditPrompt', () => {
 	});
 	test('引用了编辑区不存在的图片名则报错', () => {
 		assert.throws(() => buildEditPrompt('看 ![](不存在.png)', names), /不存在\.png/);
+	});
+});
+
+suite('buildEditFinalPrompt', () => {
+	test('按编辑模型取注入句前置，再接替换后的提示词', () => {
+		const config = { ...baseConfig, modelInjections: { 'gpt-image-2': '注入句' } };
+		assert.strictEqual(
+			buildEditFinalPrompt(config, ' 看 ![](猫.png) ', ['猫.png']),
+			'注入句\n\n看 [image1](猫)'
+		);
+	});
+	test('编辑模型无注入句时只剩替换后的提示词', () => {
+		assert.strictEqual(buildEditFinalPrompt(baseConfig, '纯文本', []), '纯文本');
 	});
 });
 

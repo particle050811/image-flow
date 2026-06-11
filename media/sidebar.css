@@ -480,13 +480,15 @@ textarea::placeholder {
 	min-width: 0;
 }
 
-/* dock 行：模型名长，加宽模型列 */
-.dock .row > .field:first-child {
+/* 参数行（工作台 dock / 编辑页）：模型名长，加宽模型列 */
+.dock .row > .field:first-child,
+[data-page='edit'] .row > .field:first-child {
 	flex: 2;
 }
 
-/* dock 行：并发数列内含加减按钮（各 34px），加宽避免输入框被挤窄 */
-.dock .row > .field:last-child {
+/* 参数行：并发数列内含加减按钮（各 34px），加宽避免输入框被挤窄 */
+.dock .row > .field:last-child,
+[data-page='edit'] .row > .field:last-child {
 	flex: 1.6;
 }
 

@@ -80,7 +80,7 @@ export function App() {
 					setBusy(msg.busy);
 					break;
 				case 'navigate':
-					setTab(msg.tab);
+					switchTab(msg.tab);
 					break;
 			}
 		};
@@ -95,6 +95,8 @@ export function App() {
 		vscode.postMessage({ type: 'saveConfig', patch: { [key]: value } });
 	};
 
+	// 注意：navigate 消息处理器（空依赖 useEffect）持有首渲染的本函数实例，
+	// 此函数只能调 setter/postMessage，不得读取 state，否则会拿到首渲染快照
 	const switchTab = (id: TabId) => {
 		setTab(id);
 		if (id === 'tasks') {
@@ -125,10 +127,10 @@ export function App() {
 	const removeLibrary = (folder: string) =>
 		vscode.postMessage({ type: 'removeLibrary', folder });
 
-	// 任务页 ✎：把图加入编辑区并切到编辑页
+	// 任务页 ✎：把图加入编辑区并切到编辑页（走 switchTab，顺带刷新模板列表）
 	const sendToEdit = (uri: string) => {
 		vscode.postMessage({ type: 'editAddImages', uris: [uri] });
-		setTab('edit');
+		switchTab('edit');
 	};
 
 	if (!config || !options) {
@@ -143,7 +145,13 @@ export function App() {
 		>
 			<Tabs.List className="tabs" aria-label="功能切换">
 				{TABS.map((t) => (
-					<Tabs.Trigger key={t.id} value={t.id} className="tab">
+					<Tabs.Trigger
+						key={t.id}
+						value={t.id}
+						className="tab"
+						// 拖图悬停「编辑」标签即切页：缩略图与编辑区不在同一页，拖动中无法点击切换
+						onDragEnter={t.id === 'edit' ? () => switchTab('edit') : undefined}
+					>
 						{t.label}
 					</Tabs.Trigger>
 				))}
@@ -180,6 +188,7 @@ export function App() {
 					busy={busy}
 					status={status}
 					onChange={saveField}
+					onError={(message) => setStatus({ text: message, error: true })}
 				/>
 			</Tabs.Content>
 			<Tabs.Content value="tasks" forceMount className="tabpanel">
