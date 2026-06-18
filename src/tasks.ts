@@ -1,12 +1,12 @@
 import * as vscode from 'vscode';
-import { submitGeneration, queryResult, TransientError } from './api';
+import { submitGeneration, queryResult, nameEditTask, TransientError } from './api';
 import { buildPrompt, createTaskFolder, downloadImages, mdBaseName } from './command';
 import { readConfig, editConfigView } from './config';
 import { buildEditFinalPrompt } from './edit';
 import { buildInjectedPrompt } from './inject';
 import type { EditImage } from './editSession';
-import { archiveInputs, buildPromptFileContent, writePromptFile } from './taskFiles';
-import type { ImageFlowConfig, PendingTask, PendingJob } from './shared';
+import { archiveInputs, buildPromptFileContent, writePromptFile, writeTaskMeta } from './taskFiles';
+import type { ImageFlowConfig, PendingTask, PendingJob, TaskMeta } from './shared';
 
 /** TaskManager.start 的参数：与任务来源（生成/编辑）无关的公共提交要素 */
 interface StartOptions {
@@ -94,7 +94,7 @@ export class TaskManager {
 		// 旧版（任务建在 md 同级）持久化记录无 kind/dir 字段，目录定位已失效，直接丢弃不续拉
 		this.tasks = context.globalState
 			.get<PendingTask[]>(PENDING_KEY, [])
-			.filter((t) => (t.kind === 'generate' || t.kind === 'edit') && typeof t.dir === 'string');
+			.filter((t) => (t.kind === 'generate' || t.kind === 'edit') && typeof t.dir === 'string' && !!t.meta);
 	}
 
 	/** 订阅任务变更，返回取消订阅函数 */
@@ -115,18 +115,6 @@ export class TaskManager {
 
 	private async persist(): Promise<void> {
 		await this.context.globalState.update(PENDING_KEY, this.tasks);
-	}
-
-	/** 删除任务的空文件夹：submit 时已建夹，若任务无任何成图就移除（含提示词文件与 input/ 归档） */
-	private async cleanupEmptyFolder(task: PendingTask): Promise<void> {
-		if (task.images.length) {
-			return;
-		}
-		try {
-			await vscode.workspace.fs.delete(vscode.Uri.parse(task.dir), { recursive: true, useTrash: false });
-		} catch {
-			// 目录不存在或删除失败不影响主流程
-		}
 	}
 
 	private emit(): void {
@@ -187,7 +175,7 @@ export class TaskManager {
 			throw new Error('提示词为空，无法生成。');
 		}
 		const prompt = buildEditFinalPrompt(base, rawPrompt, refs.map((r) => r.name));
-		await this.start({
+		const task = await this.start({
 			kind: 'edit',
 			prefix: 'edit',
 			promptFileName: 'edit.md',
@@ -197,18 +185,50 @@ export class TaskManager {
 			images: refs.map((r) => r.data),
 			names: refs.map((r) => r.name),
 		});
+		// AI 命名：后台非阻塞，用全局配置（namingModel/baseUrl/apiKey），失败静默回退占位名
+		if (base.autoNameEdit) {
+			void this.nameTask(task, base, rawPrompt);
+		}
 	}
 
 	/**
-	 * 公共提交流程：建任务文件夹 → 写提示词文件 + 归档参考图 → 建卡入列 →
-	 * 后台并发提交（不 await，调用方立即返回）。
+	 * 后台给编辑任务起短名：拿到非空短名就写进内存任务对象与 meta.json 并刷新侧栏。
+	 * 任务可能已完成移出进行中列表，此时短名仍写盘，下次扫历史即生效。
 	 */
-	private async start(opts: StartOptions): Promise<void> {
+	private async nameTask(task: PendingTask, config: ImageFlowConfig, rawPrompt: string): Promise<void> {
+		const title = await nameEditTask(config, rawPrompt);
+		if (!title) {
+			return;
+		}
+		task.title = title;
+		task.meta.title = title;
+		await writeTaskMeta(vscode.Uri.parse(task.dir), task.meta);
+		await this.persist();
+		this.emit();
+	}
+
+	/**
+	 * 公共提交流程：建任务文件夹 → 写提示词文件 + meta.json + 归档参考图 → 建卡入列 →
+	 * 后台并发提交（不 await，调用方立即返回）。返回新建的任务对象，供调用方（如编辑命名）后续更新。
+	 */
+	private async start(opts: StartOptions): Promise<PendingTask> {
 		const [folder, dir] = await createTaskFolder();
-		await writePromptFile(dir, opts.promptFileName, buildPromptFileContent(opts.source, opts.prompt));
+		await writePromptFile(dir, opts.promptFileName, buildPromptFileContent(opts.prompt));
 		await archiveInputs(dir, opts.names.map((name, i) => ({ name, data: opts.images[i] })));
 
 		const count = Math.max(1, opts.config.concurrency);
+		// 生成任务标题用来源 md 名；编辑任务留空，等 AI 命名回填
+		const meta: TaskMeta = {
+			source: opts.source,
+			title: opts.kind === 'generate' ? opts.prefix : undefined,
+			model: opts.config.model,
+			aspectRatio: opts.config.aspectRatio,
+			imageSize: opts.config.imageSize,
+			requested: count,
+			succeeded: 0,
+		};
+		await writeTaskMeta(dir, meta);
+
 		const task: PendingTask = {
 			id: folder,
 			kind: opts.kind,
@@ -217,6 +237,8 @@ export class TaskManager {
 			prefix: opts.prefix,
 			mdUri: opts.mdUri,
 			model: opts.config.model,
+			title: meta.title,
+			meta,
 			jobs: Array.from({ length: count }, () => ({ status: 'submitting' as const })),
 			images: [],
 			createdAt: Date.now(),
@@ -227,6 +249,7 @@ export class TaskManager {
 		this.emit();
 
 		void this.submitJobs(opts.config, task, opts.prompt, opts.images);
+		return task;
 	}
 
 	/**
@@ -256,10 +279,10 @@ export class TaskManager {
 		// 否则 4s 轮询定时器可能插进来，观察到「全 failed 但仍在列表」的任务，
 		// 既 notifyFinished 又移除它，与此处的弹窗 + 移除重复（双弹窗/双移除）。
 		if (task.jobs.every((j) => j.status === 'failed')) {
-			// 全部提交失败：无产出，直接从列表移除（无 running job，轮询不会接管它）并弹错误
+			// 全部提交失败：无产出，从进行中列表移除（无 running job，轮询不会接管它）并弹错误。
+			// 任务文件夹与 meta.json 保留，失败任务进入历史并以 0/N 留痕，不再静默删除。
 			const errors = [...new Set(task.jobs.map((j) => j.error).filter((e): e is string => !!e))];
 			this.tasks = this.tasks.filter((t) => t !== task);
-			void this.cleanupEmptyFolder(task);
 			void vscode.window.showErrorMessage(
 				`Image Flow：${task.folder} 全部 ${task.jobs.length} 次提交失败：${errors.join('；')}`
 			);
@@ -349,9 +372,8 @@ export class TaskManager {
 		const finished = this.tasks.filter((t) => !isTaskActive(t));
 		for (const task of finished) {
 			this.notifyFinished(task);
-			// 全失败、无成图的任务留下空文件夹，移除前一并清理
-			void this.cleanupEmptyFolder(task);
 		}
+		// 终结任务（含无成图的失败任务）保留文件夹与 meta.json，移出进行中列表后进入历史留痕
 		this.tasks = this.tasks.filter((t) => isTaskActive(t));
 		if (this.tasks.length !== before) {
 			changed = true;
@@ -402,6 +424,9 @@ export class TaskManager {
 		const saved = await downloadImages(vscode.Uri.parse(task.dir), task.prefix, result.urls, task.images.length);
 		task.images.push(...saved);
 		job.status = 'succeeded';
+		// 成功数随下载累加并回写 meta.json，供任务终结后历史展示成功率
+		task.meta.succeeded = task.images.length;
+		await writeTaskMeta(vscode.Uri.parse(task.dir), task.meta);
 		return true;
 	}
 

@@ -70,6 +70,60 @@ function parseGenerateResponse(data: unknown): GenerateResponse {
 	return obj as unknown as GenerateResponse;
 }
 
+/** 命名输出上限：短名不需要长文，用 max_tokens 硬卡，避免模型啰嗦 */
+const NAMING_MAX_TOKENS = 16;
+/** 命名短名展示长度兜底：模型可能无视指令多吐，截断到可读长度 */
+const NAMING_MAX_CHARS = 20;
+
+/** 命名提示词：要求只输出简短中文短名，不带标点与解释 */
+function buildNamingPrompt(rawPrompt: string): string {
+	return (
+		'下面是一段图片编辑指令，请用不超过 10 个汉字概括其编辑意图，作为任务短名。' +
+		'只输出短名本身，不要标点、引号、解释或前后缀。\n\n指令：' +
+		rawPrompt
+	);
+}
+
+/** 清洗模型返回的短名：去首尾空白、去包裹引号、去换行、截断到展示上限 */
+function cleanTitle(raw: string): string {
+	const oneLine = raw.replace(/\s+/g, ' ').trim().replace(/^["'「『]+|["'」』]+$/g, '').trim();
+	return oneLine.slice(0, NAMING_MAX_CHARS);
+}
+
+/**
+ * 调 OpenAI 兼容对话接口给编辑任务起短名（非流式）。失败 / 超时 / 返回空一律返回 undefined，
+ * 由调用方静默回退占位名——命名是锦上添花，绝不影响任务本身。
+ */
+export async function nameEditTask(config: ImageFlowConfig, rawPrompt: string): Promise<string | undefined> {
+	try {
+		const response = await fetchWithTimeout(`${config.baseUrl}/v1/chat/completions`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${config.apiKey}`,
+			},
+			body: JSON.stringify({
+				model: config.namingModel,
+				stream: false,
+				max_tokens: NAMING_MAX_TOKENS,
+				messages: [{ role: 'user', content: buildNamingPrompt(rawPrompt) }],
+			}),
+		});
+		if (!response.ok) {
+			return undefined;
+		}
+		const data = (await response.json()) as { choices?: { message?: { content?: unknown } }[] };
+		const content = data.choices?.[0]?.message?.content;
+		if (typeof content !== 'string') {
+			return undefined;
+		}
+		const title = cleanTitle(content);
+		return title || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** 异步查询结果：running 时图片未就绪，succeeded 时带 results */
 export interface JobResult {
 	status: 'running' | 'succeeded' | 'failed' | 'violation';

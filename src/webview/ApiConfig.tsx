@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { vscode, type Config, type ConfigOptions } from './vscode';
-import { Select, TextField, TextArea, Stepper } from './fields';
+import { Select, TextField, TextArea, Stepper, Checkbox } from './fields';
 
 const GET_KEY_URL = 'https://grsai.ai/zh/dashboard/api-keys';
 
@@ -55,6 +55,17 @@ export function ApiConfig({
 					onChange={(v) => onChange('tasksCols', v)}
 				/>
 			</div>
+			<Checkbox
+				label="自动为编辑任务 AI 命名"
+				checked={config.autoNameEdit}
+				onChange={(v) => onChange('autoNameEdit', v)}
+			/>
+			<Select
+				label="命名模型"
+				value={config.namingModel}
+				options={options.namingModel}
+				onChange={(v) => onChange('namingModel', v)}
+			/>
 			<Select
 				label="模型注入提示词 — 选择模型"
 				value={injectModel}

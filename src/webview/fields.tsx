@@ -73,6 +73,24 @@ export function TextArea({
 	);
 }
 
+/** 复选框：标签在右，整体可点击 */
+export function Checkbox({
+	label,
+	checked,
+	onChange,
+}: {
+	label: string;
+	checked: boolean;
+	onChange: (checked: boolean) => void;
+}) {
+	return (
+		<label className="checkbox-field">
+			<input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+			<span>{label}</span>
+		</label>
+	);
+}
+
 /** 数字步进器：两侧加减按钮，受 [min,max] 约束 */
 export function Stepper({
 	label,

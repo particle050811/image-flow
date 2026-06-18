@@ -9,6 +9,59 @@ const LIBS_KEY = 'image-flow.materialLibraries';
 /** 递归扫描时的目录深度上限 */
 const MAX_DEPTH = 3;
 
+/** 从一份目录条目中收集所有 .md 文件的主名（小写，Windows 文件名大小写不敏感） */
+export function mdStems(entries: [string, vscode.FileType][]): Set<string> {
+	const stems = new Set<string>();
+	for (const [name, type] of entries) {
+		if (type === vscode.FileType.File && name.toLowerCase().endsWith('.md')) {
+			stems.add(name.slice(0, -3).toLowerCase());
+		}
+	}
+	return stems;
+}
+
+/** 图片主名（去扩展名、小写），用于与同目录 .md 主名匹配 */
+export function imageStem(name: string): string {
+	const dot = name.lastIndexOf('.');
+	return (dot > 0 ? name.slice(0, dot) : name).toLowerCase();
+}
+
+/** 稳定排序：带同名 MD 描述的图片排前面，组内保持原序 */
+export function sortDescFirst(images: TaskImage[]): TaskImage[] {
+	return [...images.filter((i) => i.hasDesc), ...images.filter((i) => !i.hasDesc)];
+}
+
+/**
+ * 读取图片旁同主名 .md 描述文件的内容（trim 后）。
+ * 列父目录后按 imageStem/mdStems 同一套小写口径匹配真实文件名，
+ * 与扫描打标 hasDesc 的判断完全一致（大小写敏感的文件系统上也不漂移）。
+ * 不存在或读取失败返回空串——插入引用时退化为只插引用，不中断。
+ */
+export async function readImageDesc(imageUri: string): Promise<string> {
+	const uri = vscode.Uri.parse(imageUri);
+	const stem = imageStem(uri.path.split('/').pop() ?? '');
+	if (!stem) {
+		return '';
+	}
+	const parent = vscode.Uri.joinPath(uri, '..');
+	try {
+		const entries = await vscode.workspace.fs.readDirectory(parent);
+		const mdName = entries.find(
+			([name, type]) =>
+				type === vscode.FileType.File &&
+				name.toLowerCase().endsWith('.md') &&
+				name.slice(0, -3).toLowerCase() === stem
+		)?.[0];
+		if (!mdName) {
+			return '';
+		}
+		const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(parent, mdName));
+		return Buffer.from(bytes).toString('utf8').trim();
+	} catch {
+		return '';
+	}
+}
+
 /** 单个素材库扫描的条目数上限——防止用户误把 C 盘等超大目录加入导致卡死 */
 const MAX_ENTRIES = 500;
 
@@ -55,6 +108,7 @@ async function scanImages(
 		return [];
 	}
 
+	const stems = mdStems(entries);
 	const images: TaskImage[] = [];
 	for (const [name, type] of entries.sort((a, b) => a[0].localeCompare(b[0]))) {
 		if (counter.count >= MAX_ENTRIES) {
@@ -65,7 +119,7 @@ async function scanImages(
 		if (type === vscode.FileType.Directory) {
 			images.push(...(await scanImages(child, depth + 1, counter)));
 		} else if (type === vscode.FileType.File && isImageFileName(name)) {
-			images.push({ name, uri: child.toString() });
+			images.push({ name, uri: child.toString(), hasDesc: stems.has(imageStem(name)) });
 		}
 	}
 	return images;
@@ -80,7 +134,7 @@ export async function listLibraries(
 	for (const folder of folders) {
 		const uri = vscode.Uri.parse(folder);
 		const name = uriBaseName(uri);
-		const images = await scanImages(uri, 0, { count: 0 });
+		const images = sortDescFirst(await scanImages(uri, 0, { count: 0 }));
 		libs.push({ folder, name, images });
 	}
 	return libs;
@@ -94,6 +148,7 @@ async function scanDirImages(dir: vscode.Uri): Promise<TaskImage[]> {
 	} catch {
 		return [];
 	}
+	const stems = mdStems(entries);
 	const images: TaskImage[] = [];
 	let scanned = 0;
 	for (const [name, type] of entries.sort((a, b) => a[0].localeCompare(b[0]))) {
@@ -102,7 +157,11 @@ async function scanDirImages(dir: vscode.Uri): Promise<TaskImage[]> {
 		}
 		scanned++;
 		if (type === vscode.FileType.File && isImageFileName(name)) {
-			images.push({ name, uri: vscode.Uri.joinPath(dir, name).toString() });
+			images.push({
+				name,
+				uri: vscode.Uri.joinPath(dir, name).toString(),
+				hasDesc: stems.has(imageStem(name)),
+			});
 		}
 	}
 	return images;
@@ -129,7 +188,7 @@ export async function listAutoLibraries(mdUri: vscode.Uri): Promise<MaterialLibr
 	let cur = ws.uri;
 	for (const seg of segments) {
 		cur = vscode.Uri.joinPath(cur, seg);
-		const images = await scanDirImages(cur);
+		const images = sortDescFirst(await scanDirImages(cur));
 		if (images.length) {
 			libs.push({ folder: cur.toString(), name: seg, images });
 		}

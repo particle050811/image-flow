@@ -24,6 +24,31 @@ export interface ImageFlowConfig {
 	editImageSize: string;
 	/** 编辑页专属并发数 */
 	editConcurrency: number;
+	/** AI 给编辑任务命名所用的对话模型 */
+	namingModel: string;
+	/** 是否在提交编辑任务时自动 AI 命名 */
+	autoNameEdit: boolean;
+}
+
+/**
+ * 任务级元数据，落盘为任务文件夹内的 meta.json，是任务卡片展示的唯一依据。
+ * 取代原先散落在提示词 md frontmatter 的 source。
+ */
+export interface TaskMeta {
+	/** 来源：生成 = 来源 md 相对路径；编辑 = （编辑任务） */
+	source: string;
+	/** 可读短名：编辑任务由 AI 命名后写入；生成任务为来源 md 名 */
+	title?: string;
+	/** 本次调用的模型名 */
+	model: string;
+	/** 比例（gpt-image-2-vip 为换算后像素值） */
+	aspectRatio: string;
+	/** 分辨率（1K / 2K / 4K） */
+	imageSize: string;
+	/** 本次总申请生成的图片数（= 并发量 / job 数） */
+	requested: number;
+	/** 成功产出的图片数，随 job 完成累加 */
+	succeeded: number;
 }
 
 export interface BaseUrlOption {
@@ -37,18 +62,26 @@ export interface ConfigOptions {
 	model: readonly string[];
 	aspectRatio: readonly string[];
 	imageSize: readonly string[];
+	/** AI 命名可选的对话模型 */
+	namingModel: readonly string[];
 }
 
 /** 扩展内部产出的一张图片：仅含文件引用（file Uri 字符串） */
 export interface TaskImage {
 	name: string;
 	uri: string;
+	/** 同目录下存在同主名 .md 描述文件（素材库扫描时打标：排序靠前、插入引用时附带描述） */
+	hasDesc?: boolean;
 }
 
 /** 扩展内部的一个生成任务（对应一个 task-* 文件夹） */
 export interface Task {
 	folder: string;
 	images: TaskImage[];
+	/** 任务文件夹内归档的提示词 .md 主名（生成 = 来源 md 名，编辑 = edit），旧任务（无 meta.json）回退展示用 */
+	promptName?: string;
+	/** 任务元数据（meta.json），新任务必有；旧任务为 undefined，回退用 promptName */
+	meta?: TaskMeta;
 }
 
 /** 发往 webview 的图片：额外带 webview 可加载的 src（asWebviewUri 转换结果，已有缩略图时为缩略图） */
@@ -61,6 +94,10 @@ export interface WebviewImage extends TaskImage {
 export interface WebviewTask {
 	folder: string;
 	images: WebviewImage[];
+	/** 来源 md 名（编辑任务为 edit），旧任务回退展示用 */
+	promptName?: string;
+	/** 任务元数据（meta.json），新任务必有 */
+	meta?: TaskMeta;
 }
 
 /** 一个素材库（对应一个文件夹，递归扫描出的图片） */
@@ -123,6 +160,10 @@ export interface PendingTask {
 	/** 来源 md 的 Uri 字符串（仅 generate，用于追溯） */
 	mdUri?: string;
 	model: string;
+	/** AI 命名的可读短名（编辑任务），命名返回后写入；未命名前为 undefined */
+	title?: string;
+	/** 任务元数据（落盘 meta.json），succeeded/title 随进度更新后回写 */
+	meta: TaskMeta;
 	jobs: PendingJob[];
 	/** 已成功下载到文件夹的图片，随 job 完成累加 */
 	images: TaskImage[];
@@ -137,6 +178,10 @@ export interface WebviewPendingTask {
 	id: string;
 	folder: string;
 	model: string;
+	/** AI 命名的可读短名（编辑任务），命名返回后展示，未命名前为 undefined */
+	title?: string;
+	/** 来源 md 名（编辑任务为 edit），即产出图片文件名前缀 */
+	promptName: string;
 	total: number;
 	done: number;
 	failed: number;
@@ -181,6 +226,7 @@ export type OutboundMessage =
 	| { type: 'editAddImages'; uris: string[] }
 	| { type: 'editAddImagesData'; items: { name: string; data: string }[] }
 	| { type: 'editRemoveImage'; name: string }
+	| { type: 'editOpenImage'; name: string }
 	| { type: 'editGenerate'; prompt: string }
 	| { type: 'editPreviewRequest'; prompt: string }
 	| { type: 'openPrompt'; folder: string }

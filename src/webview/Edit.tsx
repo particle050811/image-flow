@@ -139,15 +139,19 @@ export function Edit({
 				onDrop={onDrop}
 			>
 				{images.length === 0 ? (
-					<div className="empty">拖入图片（VS Code 资源管理器需按住 Shift 拖），或点击下方「上传」。点击图片可在提示词中插入引用。</div>
+					<div className="empty">拖入图片（VS Code 资源管理器需按住 Shift 拖），或点击下方「上传」。右键图片可在提示词中插入引用。</div>
 				) : (
 					<div className="thumbs" style={{ ['--cols' as string]: config.workbenchCols }}>
 						{images.map((img, i) => (
 							<div className="thumb-wrap" key={img.name}>
 								<img
 									src={img.src}
-									title={`${img.name}（点击插入引用）`}
-									onClick={() => insertAtCursor(imageRefSnippet(img.name))}
+									title={`${img.name}（左键打开 · 右键插入引用）`}
+									onClick={() => vscode.postMessage({ type: 'editOpenImage', name: img.name })}
+									onContextMenu={(e) => {
+										e.preventDefault();
+										insertAtCursor(imageRefSnippet(img.name));
+									}}
 								/>
 								<span className="thumb-index">{i + 1}</span>
 								<button
@@ -172,7 +176,7 @@ export function Edit({
 					value=""
 					onChange={(e) => applyTemplate(e.target.value)}
 				>
-					<option value="">{templates.length ? '插入模板…' : '暂无模板'}</option>
+					<option value="" disabled hidden>{templates.length ? '插入模板…' : '暂无模板'}</option>
 					{templates.map((t) => (
 						<option key={t.name} value={t.name}>
 							{t.name}
@@ -186,7 +190,7 @@ export function Edit({
 					ref={taRef}
 					rows={8}
 					value={prompt}
-					placeholder="选择模板或直接输入；点击上方图片插入引用"
+					placeholder="选择模板或直接输入；右键上方图片插入引用"
 					onChange={(e) => setPrompt(e.target.value)}
 				/>
 			</Field>

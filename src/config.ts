@@ -10,6 +10,17 @@ export const CONFIG_OPTIONS: ConfigOptions = {
 	model: ['nano-banana-2', 'nano-banana-pro', 'gpt-image-2', 'gpt-image-2-vip'],
 	aspectRatio: ['1:1', '16:9', '9:16', '4:3', '3:4'],
 	imageSize: ['1K', '2K', '4K'],
+	namingModel: [
+		'gemini-3.5-flash',
+		'gemini-3.1-flash-lite',
+		'gemini-3-flash',
+		'gemini-2.5-flash',
+		'gemini-3.1-pro',
+		'gemini-3-pro',
+		'gemini-2.5-pro',
+		'gpt-5.5',
+		'gpt-5.4',
+	],
 };
 
 /** globalState 中存放非敏感配置的键；API Key 单独走 secrets */
@@ -42,6 +53,8 @@ const DEFAULTS: StoredConfig = {
 	editAspectRatio: '3:4',
 	editImageSize: '1K',
 	editConcurrency: 1,
+	namingModel: 'gemini-3.5-flash',
+	autoNameEdit: true,
 };
 
 /** 读取完整配置：非敏感项来自 globalState，apiKey 来自加密的 secrets */

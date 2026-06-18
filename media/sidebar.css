@@ -338,6 +338,21 @@ h2 {
 	font-weight: 500;
 }
 
+/* 复选框字段：标签在右、整行可点 */
+.checkbox-field {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	margin-bottom: var(--sp-3);
+	cursor: pointer;
+	font-size: var(--fs-label);
+	opacity: 0.8;
+}
+.checkbox-field input {
+	width: auto;
+	margin: 0;
+}
+
 /* ---------- 原生输入控件 ---------- */
 input,
 select,
@@ -734,6 +749,17 @@ button.secondary {
 	font-size: var(--fs-sub);
 	color: var(--vscode-errorForeground);
 	margin: var(--sp-1) 0 0 var(--sp-2);
+}
+
+/* 历史任务成功率配色：高绿、中黄、低红 */
+.rate-good {
+	color: var(--vscode-testing-iconPassed, #3fb950);
+}
+.rate-mid {
+	color: var(--vscode-editorWarning-foreground, #d29922);
+}
+.rate-bad {
+	color: var(--vscode-errorForeground, #f85149);
 }
 
 /* 进行中任务：进度条 */

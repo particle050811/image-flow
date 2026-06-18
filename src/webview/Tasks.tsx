@@ -48,6 +48,28 @@ function PromptButton({ folder }: { folder: string }) {
 	);
 }
 
+/** 成功率配色类：≥75% 绿、≤25% 红、中间黄（requested 为 0 时按红处理） */
+function rateClass(succeeded: number, requested: number): string {
+	const rate = requested > 0 ? succeeded / requested : 0;
+	if (rate >= 0.75) {
+		return 'rate-good';
+	}
+	if (rate <= 0.25) {
+		return 'rate-bad';
+	}
+	return 'rate-mid';
+}
+
+/** 把任务文件夹名（yyMMddHHmmssSSS）渲染为可读时间「MM-DD HH:mm」，本年不显示年份；非时间戳格式原样返回 */
+function folderTimeLabel(folder: string): string {
+	if (!/^\d{15}$/.test(folder)) {
+		return folder;
+	}
+	const year = 2000 + Number(folder.slice(0, 2));
+	const label = `${folder.slice(2, 4)}-${folder.slice(4, 6)} ${folder.slice(6, 8)}:${folder.slice(8, 10)}`;
+	return year === new Date().getFullYear() ? label : `${year}-${label}`;
+}
+
 /** 把毫秒时长格式化为 mm:ss（超过一小时则 h:mm:ss） */
 function formatElapsed(ms: number): string {
 	const total = Math.max(0, Math.floor(ms / 1000));
@@ -91,7 +113,7 @@ function PendingCard({
 					<span className="task-caret" data-open={open}>
 						▸
 					</span>
-					{task.folder}（{task.model}） · {headline}
+					{folderTimeLabel(task.folder)} {task.title || task.promptName}（{task.model}） · {headline}
 					{task.failed > 0 ? ` · 失败 ${task.failed}` : ''} · {elapsed}
 				</div>
 			</Collapsible.Trigger>
@@ -123,6 +145,8 @@ function HistoryCard({
 	onSendToEdit: (uri: string) => void;
 }) {
 	const [open, setOpen] = useState(false);
+	const { meta } = task;
+	const title = meta?.title || task.promptName;
 	return (
 		<Collapsible.Root className="task" open={open} onOpenChange={setOpen}>
 			<Collapsible.Trigger asChild>
@@ -130,7 +154,18 @@ function HistoryCard({
 					<span className="task-caret" data-open={open}>
 						▸
 					</span>
-					{task.folder}（{task.images.length} 张）
+					{folderTimeLabel(task.folder)}
+					{title ? ` ${title}` : ''}
+					{meta ? (
+						<>
+							（{meta.model} · {meta.aspectRatio} · {meta.imageSize}） ·{' '}
+							<span className={rateClass(meta.succeeded, meta.requested)}>
+								{meta.succeeded}/{meta.requested}
+							</span>
+						</>
+					) : (
+						`（${task.images.length} 张）`
+					)}
 				</div>
 			</Collapsible.Trigger>
 			<Collapsible.Content>

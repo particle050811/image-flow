@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
+import * as os from 'os';
 import * as path from 'path';
 import { uriBaseName } from './paths';
 import { readConfig, writeConfig, CONFIG_OPTIONS, editConfigView } from './config';
@@ -16,6 +17,7 @@ import {
 	removeLibraryFolder,
 	listLibraries,
 	listAutoLibraries,
+	readImageDesc,
 } from './materials';
 import type {
 	Task,
@@ -190,6 +192,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				this.edit.remove(msg.name);
 				this.pushEditImages();
 				break;
+			case 'editOpenImage':
+				await this.openEditImage(msg.name);
+				break;
 			case 'editGenerate':
 				await this.doEditGenerate(msg.prompt);
 				break;
@@ -255,6 +260,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			this.post({ type: 'error', message: errors.join('；') });
 		}
 		this.pushEditImages();
+	}
+
+	/** 编辑区图片只驻内存（data URI），落临时文件后用内置图片查看器打开。
+	 *  临时文件按名覆盖、不主动清理（单图 MB 级，交给 OS 临时目录回收） */
+	private async openEditImage(name: string): Promise<void> {
+		const img = this.edit.list().find((i) => i.name === name);
+		if (!img) {
+			return;
+		}
+		const base64 = img.data.slice(img.data.indexOf(',') + 1);
+		const dir = vscode.Uri.file(path.join(os.tmpdir(), 'image-flow-view'));
+		await vscode.workspace.fs.createDirectory(dir);
+		// basename 兜底：name 理应已是纯文件名，防御性阻断含路径分隔符的名字逃出临时目录
+		const file = vscode.Uri.joinPath(dir, path.basename(name));
+		await vscode.workspace.fs.writeFile(file, Buffer.from(base64, 'base64'));
+		await vscode.commands.executeCommand('vscode.open', file);
 	}
 
 	private pushEditImages(): void {
@@ -392,7 +413,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		// 路径含空格或半角括号时用尖括号包裹，否则 Markdown 会在空格处截断或被 ) 提前闭合。
 		// 中文/全角括号对 CommonMark 是普通字符，无需处理，保持可读。
 		const dest = /[ ()]/.test(rel) ? `<${rel}>` : rel;
-		const snippet = `![${alt}](${dest})`;
+		let snippet = `![${alt}](${dest})`;
+		// 图片旁有同主名 .md 描述文件时，描述在前、图片引用紧随其后一并写进正文
+		// （buildPrompt 拼提示词时自然包含），如：- [某角色] 描述文字。![alt](路径)
+		const desc = await readImageDesc(imageUri);
+		if (desc) {
+			snippet = desc + snippet;
+		}
 		await editor.edit((b) => b.insert(editor.selection.active, snippet));
 	}
 
@@ -472,6 +499,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		return {
 			folder: task.folder,
 			images: await this.toWebviewImages(task.images),
+			promptName: task.promptName,
+			meta: task.meta,
 		};
 	}
 
@@ -485,6 +514,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			id: task.id,
 			folder: task.folder,
 			model: task.model,
+			title: task.title,
+			promptName: task.prefix,
 			total: task.jobs.length,
 			done,
 			failed,

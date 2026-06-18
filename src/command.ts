@@ -7,6 +7,7 @@ import { isImageExt, isImageFileName, mimeOf } from './images';
 import { uriStem } from './paths';
 import { buildInjectedPrompt } from './inject';
 import { tasksRoot } from './storage';
+import { readTaskMeta } from './taskFiles';
 
 /**
  * Markdown 图片语法的正则：匹配 `![alt](路径)`，路径可选 `<>` 包裹。
@@ -188,15 +189,27 @@ export async function listHistory(exclude?: Set<string>): Promise<Task[]> {
 			continue;
 		}
 		const images: TaskImage[] = [];
+		let promptName: string | undefined;
 		for (const [name, type] of files.sort()) {
-			if (type !== vscode.FileType.File || !isImageFileName(name)) {
+			if (type !== vscode.FileType.File) {
+				continue;
+			}
+			// 归档的提示词 .md 主名（来源 md 名 / edit），仅作旧任务（无 meta.json）的回退展示
+			if (!promptName && name.toLowerCase().endsWith('.md')) {
+				promptName = name.slice(0, -3);
+				continue;
+			}
+			if (!isImageFileName(name)) {
 				continue;
 			}
 			const fileUri = vscode.Uri.joinPath(dir, name);
 			images.push({ name, uri: fileUri.toString() });
 		}
-		if (images.length) {
-			tasks.push({ folder, images });
+		// 以 meta.json 为准收录：失败任务（0 成图但有 meta）也留痕进历史；
+		// 旧任务无 meta 时回退到「有图才收录」+ 按文件名推断 promptName。
+		const meta = await readTaskMeta(dir);
+		if (meta || images.length) {
+			tasks.push({ folder, images, promptName, meta });
 		}
 	}
 	return tasks;
