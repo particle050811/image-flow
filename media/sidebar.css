@@ -732,6 +732,26 @@ button.secondary {
 	transition: transform var(--dur) var(--ease);
 }
 
+/* 任务标题占据左侧、过长省略；模型名与成功率靠右成组 */
+.task-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.task-right {
+	margin-left: auto;
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--sp-2);
+	white-space: nowrap;
+}
+.task-model {
+	opacity: 0.85;
+}
+
 /* 进行中任务：左侧高亮条 */
 .task.pending {
 	border-left: 2px solid var(--vscode-progressBar-background, var(--vscode-focusBorder));
@@ -912,3 +932,43 @@ button.secondary {
 .task-actions {
 	margin: var(--sp-1) 0;
 }
+
+.thumb-star {
+	position: absolute;
+	left: 2px;
+	top: 2px;
+	border: none;
+	background: rgba(0, 0, 0, 0.45);
+	color: #ffd454;
+	border-radius: 4px;
+	cursor: pointer;
+	line-height: 1;
+	padding: 1px 4px;
+}
+.thumb-star[data-on='false'] { color: #ddd; }
+.star-menu-backdrop { position: fixed; inset: 0; z-index: 50; }
+.star-menu {
+	position: fixed;
+	z-index: 51;
+	margin: 0;
+	padding: 4px 0;
+	list-style: none;
+	background: var(--vscode-menu-background, #252526);
+	border: 1px solid var(--vscode-menu-border, #454545);
+	border-radius: 4px;
+	min-width: 140px;
+}
+.star-menu li { padding: 4px 12px; cursor: pointer; white-space: nowrap; }
+.star-menu li:hover { background: var(--vscode-menu-selectionBackground, #094771); }
+.fav-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 4px; }
+.fav-tab {
+	border: 1px solid var(--vscode-panel-border, #454545);
+	background: transparent;
+	color: var(--vscode-foreground);
+	border-radius: 4px;
+	padding: 2px 8px;
+	cursor: pointer;
+}
+.fav-tab[data-viewing='true'] { background: var(--vscode-list-activeSelectionBackground, #094771); }
+.fav-actions { display: flex; gap: 12px; padding: 4px 8px; }
+.fav-actions .link[disabled] { opacity: 0.4; cursor: default; }

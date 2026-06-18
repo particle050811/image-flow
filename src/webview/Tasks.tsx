@@ -1,13 +1,22 @@
 import { useEffect, useState } from 'react';
 import * as Collapsible from '@radix-ui/react-collapsible';
-import { vscode, type WebviewTask, type WebviewPendingTask } from './vscode';
+import {
+	vscode,
+	type WebviewTask,
+	type WebviewPendingTask,
+	type WebviewImage,
+	type WebviewCollection,
+} from './vscode';
+import { StarButton } from './StarButton';
 
-/** 缩略图网格：点击打开原图；可拖拽（送编辑区）；hover 右上角 ✎ 一键送编辑 */
+/** 缩略图网格：点击打开原图；可拖拽（送编辑区）；hover 右上角 ✎ 一键送编辑；左上角 ⭐ 收藏 */
 function Thumbs({
 	images,
+	collections,
 	onSendToEdit,
 }: {
-	images: { uri: string; src: string; name: string }[];
+	images: WebviewImage[];
+	collections: WebviewCollection[];
 	onSendToEdit: (uri: string) => void;
 }) {
 	return (
@@ -28,6 +37,7 @@ function Thumbs({
 					>
 						✎
 					</button>
+					<StarButton uri={img.uri} favorited={img.favorited} collections={collections} />
 				</div>
 			))}
 		</div>
@@ -60,16 +70,6 @@ function rateClass(succeeded: number, requested: number): string {
 	return 'rate-mid';
 }
 
-/** 把任务文件夹名（yyMMddHHmmssSSS）渲染为可读时间「MM-DD HH:mm」，本年不显示年份；非时间戳格式原样返回 */
-function folderTimeLabel(folder: string): string {
-	if (!/^\d{15}$/.test(folder)) {
-		return folder;
-	}
-	const year = 2000 + Number(folder.slice(0, 2));
-	const label = `${folder.slice(2, 4)}-${folder.slice(4, 6)} ${folder.slice(6, 8)}:${folder.slice(8, 10)}`;
-	return year === new Date().getFullYear() ? label : `${year}-${label}`;
-}
-
 /** 把毫秒时长格式化为 mm:ss（超过一小时则 h:mm:ss） */
 function formatElapsed(ms: number): string {
 	const total = Math.max(0, Math.floor(ms / 1000));
@@ -93,9 +93,11 @@ function useElapsed(startedAt: number): string {
 /** 进行中任务卡片：标题可展开/收起，展开后显示进度条 + 已存缩略图 + 进度/失败提示 */
 function PendingCard({
 	task,
+	collections,
 	onSendToEdit,
 }: {
 	task: WebviewPendingTask;
+	collections: WebviewCollection[];
 	onSendToEdit: (uri: string) => void;
 }) {
 	const [open, setOpen] = useState(true);
@@ -113,8 +115,14 @@ function PendingCard({
 					<span className="task-caret" data-open={open}>
 						▸
 					</span>
-					{folderTimeLabel(task.folder)} {task.title || task.promptName}（{task.model}） · {headline}
-					{task.failed > 0 ? ` · 失败 ${task.failed}` : ''} · {elapsed}
+					<span className="task-name">{task.title || task.promptName}</span>
+					<span className="task-right">
+						<span className="task-model">{task.model}</span>
+						<span>
+							{headline}
+							{task.failed > 0 ? ` · 失败 ${task.failed}` : ''} · {elapsed}
+						</span>
+					</span>
 				</div>
 			</Collapsible.Trigger>
 			<Collapsible.Content>
@@ -125,7 +133,9 @@ function PendingCard({
 					<span className="progress-pct">{task.progress}%</span>
 				</div>
 				<PromptButton folder={task.folder} />
-				{task.images.length > 0 && <Thumbs images={task.images} onSendToEdit={onSendToEdit} />}
+				{task.images.length > 0 && (
+					<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
+				)}
 				{task.submitting > 0 && (
 					<div className="pending-hint">正在提交 {task.submitting} 个请求…</div>
 				)}
@@ -139,9 +149,11 @@ function PendingCard({
 /** 历史任务卡片：标题可展开/收起，默认收起 */
 function HistoryCard({
 	task,
+	collections,
 	onSendToEdit,
 }: {
 	task: WebviewTask;
+	collections: WebviewCollection[];
 	onSendToEdit: (uri: string) => void;
 }) {
 	const [open, setOpen] = useState(false);
@@ -154,23 +166,22 @@ function HistoryCard({
 					<span className="task-caret" data-open={open}>
 						▸
 					</span>
-					{folderTimeLabel(task.folder)}
-					{title ? ` ${title}` : ''}
+					<span className="task-name">{title}</span>
 					{meta ? (
-						<>
-							（{meta.model} · {meta.aspectRatio} · {meta.imageSize}） ·{' '}
+						<span className="task-right">
+							<span className="task-model">{meta.model}</span>
 							<span className={rateClass(meta.succeeded, meta.requested)}>
 								{meta.succeeded}/{meta.requested}
 							</span>
-						</>
+						</span>
 					) : (
-						`（${task.images.length} 张）`
+						<span className="task-right">{task.images.length} 张</span>
 					)}
 				</div>
 			</Collapsible.Trigger>
 			<Collapsible.Content>
 				<PromptButton folder={task.folder} />
-				<Thumbs images={task.images} onSendToEdit={onSendToEdit} />
+				<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
 			</Collapsible.Content>
 		</Collapsible.Root>
 	);
@@ -181,12 +192,14 @@ export function Tasks({
 	hidden,
 	tasks,
 	pendingTasks,
+	collections,
 	cols,
 	onSendToEdit,
 }: {
 	hidden: boolean;
 	tasks: WebviewTask[];
 	pendingTasks: WebviewPendingTask[];
+	collections: WebviewCollection[];
 	cols: number;
 	onSendToEdit: (uri: string) => void;
 }) {
@@ -208,9 +221,19 @@ export function Tasks({
 			) : (
 				items.map((item) =>
 					item.kind === 'pending' ? (
-						<PendingCard key={item.task.id} task={item.task} onSendToEdit={onSendToEdit} />
+						<PendingCard
+							key={item.task.id}
+							task={item.task}
+							collections={collections}
+							onSendToEdit={onSendToEdit}
+						/>
 					) : (
-						<HistoryCard key={item.task.folder} task={item.task} onSendToEdit={onSendToEdit} />
+						<HistoryCard
+							key={item.task.folder}
+							task={item.task}
+							collections={collections}
+							onSendToEdit={onSendToEdit}
+						/>
 					)
 				)
 			)}

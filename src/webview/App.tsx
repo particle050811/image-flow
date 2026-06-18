@@ -8,6 +8,7 @@ import {
 	type WebviewTask,
 	type WebviewPendingTask,
 	type WebviewLibrary,
+	type WebviewCollection,
 	type WebviewEditImage,
 	type PromptTemplate,
 } from './vscode';
@@ -17,13 +18,15 @@ import { requestThumbs, requestEditThumbs } from './thumbs';
 import { Tasks } from './Tasks';
 import { ApiConfig } from './ApiConfig';
 import { Edit } from './Edit';
+import { Favorites } from './Favorites';
 
-type TabId = 'workbench' | 'edit' | 'tasks' | 'api';
+type TabId = 'workbench' | 'edit' | 'tasks' | 'favorites' | 'api';
 
 const TABS: { id: TabId; label: string }[] = [
 	{ id: 'workbench', label: '工作台' },
 	{ id: 'edit', label: '编辑' },
 	{ id: 'tasks', label: '任务' },
+	{ id: 'favorites', label: '收藏' },
 	{ id: 'api', label: '设置' },
 ];
 
@@ -36,6 +39,8 @@ export function App() {
 	const [pendingTasks, setPendingTasks] = useState<WebviewPendingTask[]>([]);
 	const [libraries, setLibraries] = useState<WebviewLibrary[]>([]);
 	const [autoLibraries, setAutoLibraries] = useState<WebviewLibrary[]>([]);
+	const [collections, setCollections] = useState<WebviewCollection[]>([]);
+	const [activeCollectionId, setActiveCollectionId] = useState<string>('c_default');
 	const [editImages, setEditImages] = useState<WebviewEditImage[]>([]);
 	const [templates, setTemplates] = useState<PromptTemplate[]>([]);
 	const [busy, setBusy] = useState(false);
@@ -80,6 +85,11 @@ export function App() {
 					setEditImages(msg.images);
 					// 大图生成压缩展示图回传，之后的全量重发不再携带原图
 					requestEditThumbs(msg.images);
+					break;
+				case 'favorites':
+					setCollections(msg.collections);
+					setActiveCollectionId(msg.activeCollectionId);
+					requestThumbs(msg.collections.flatMap((c) => c.images));
 					break;
 				case 'promptTemplates':
 					setTemplates(msg.templates);
@@ -184,6 +194,7 @@ export function App() {
 					status={status}
 					libraries={libraries}
 					autoLibraries={autoLibraries}
+					collections={collections}
 					cols={config.workbenchCols}
 					onChange={saveField}
 					onGenerate={generate}
@@ -210,8 +221,17 @@ export function App() {
 					hidden={tab !== 'tasks'}
 					tasks={tasks}
 					pendingTasks={pendingTasks}
+					collections={collections}
 					cols={config.tasksCols}
 					onSendToEdit={sendToEdit}
+				/>
+			</Tabs.Content>
+			<Tabs.Content value="favorites" forceMount className="tabpanel">
+				<Favorites
+					hidden={tab !== 'favorites'}
+					collections={collections}
+					activeCollectionId={activeCollectionId}
+					cols={config.tasksCols}
 				/>
 			</Tabs.Content>
 			<Tabs.Content value="api" forceMount className="tabpanel">

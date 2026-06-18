@@ -1,4 +1,4 @@
-import type { Config, ConfigOptions, WebviewLibrary } from './vscode';
+import type { Config, ConfigOptions, WebviewLibrary, WebviewCollection } from './vscode';
 import { Select, Stepper } from './fields';
 import { Materials } from './Materials';
 
@@ -11,6 +11,7 @@ export function Workbench({
 	status,
 	libraries,
 	autoLibraries,
+	collections,
 	cols,
 	onChange,
 	onGenerate,
@@ -26,6 +27,7 @@ export function Workbench({
 	status: { text: string; error: boolean };
 	libraries: WebviewLibrary[];
 	autoLibraries: WebviewLibrary[];
+	collections: WebviewCollection[];
 	cols: number;
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
 	onGenerate: () => void;
@@ -39,6 +41,7 @@ export function Workbench({
 				<Materials
 					autoLibraries={autoLibraries}
 					libraries={libraries}
+					collections={collections}
 					cols={cols}
 					onAdd={onAddLibrary}
 					onRemove={onRemoveLibrary}

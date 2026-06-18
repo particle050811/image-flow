@@ -70,19 +70,16 @@ function parseGenerateResponse(data: unknown): GenerateResponse {
 	return obj as unknown as GenerateResponse;
 }
 
-/** 命名输出上限：短名不需要长文，用 max_tokens 硬卡，避免模型啰嗦 */
-const NAMING_MAX_TOKENS = 16;
+/** 命名输出上限：短名不需要长文，用 max_tokens 硬卡，避免模型啰嗦。
+ *  中文每字常占 1~3 token，留 32 以免 10 字短名被提前截断 */
+const NAMING_MAX_TOKENS = 32;
 /** 命名短名展示长度兜底：模型可能无视指令多吐，截断到可读长度 */
 const NAMING_MAX_CHARS = 20;
 
-/** 命名提示词：要求只输出简短中文短名，不带标点与解释 */
-function buildNamingPrompt(rawPrompt: string): string {
-	return (
-		'下面是一段图片编辑指令，请用不超过 10 个汉字概括其编辑意图，作为任务短名。' +
-		'只输出短名本身，不要标点、引号、解释或前后缀。\n\n指令：' +
-		rawPrompt
-	);
-}
+/** 命名指令（system 角色）：通用于生成与编辑两类任务，只输出简短中文短名 */
+const NAMING_SYSTEM =
+	'你是 AI 绘图任务的命名助手。把用户给出的绘图 / 编辑提示词概括成不超过 10 个汉字的中文短名，' +
+	'体现画面主题或编辑意图。只输出短名本身，不要引号、标点、解释或前后缀。';
 
 /** 清洗模型返回的短名：去首尾空白、去包裹引号、去换行、截断到展示上限 */
 function cleanTitle(raw: string): string {
@@ -91,10 +88,10 @@ function cleanTitle(raw: string): string {
 }
 
 /**
- * 调 OpenAI 兼容对话接口给编辑任务起短名（非流式）。失败 / 超时 / 返回空一律返回 undefined，
+ * 调 OpenAI 兼容对话接口给任务起短名（非流式，生成与编辑通用）。失败 / 超时 / 返回空一律返回 undefined，
  * 由调用方静默回退占位名——命名是锦上添花，绝不影响任务本身。
  */
-export async function nameEditTask(config: ImageFlowConfig, rawPrompt: string): Promise<string | undefined> {
+export async function requestTaskName(config: ImageFlowConfig, rawPrompt: string): Promise<string | undefined> {
 	try {
 		const response = await fetchWithTimeout(`${config.baseUrl}/v1/chat/completions`, {
 			method: 'POST',
@@ -106,7 +103,10 @@ export async function nameEditTask(config: ImageFlowConfig, rawPrompt: string): 
 				model: config.namingModel,
 				stream: false,
 				max_tokens: NAMING_MAX_TOKENS,
-				messages: [{ role: 'user', content: buildNamingPrompt(rawPrompt) }],
+				messages: [
+					{ role: 'system', content: NAMING_SYSTEM },
+					{ role: 'user', content: rawPrompt },
+				],
 			}),
 		});
 		if (!response.ok) {

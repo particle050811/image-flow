@@ -24,10 +24,10 @@ export interface ImageFlowConfig {
 	editImageSize: string;
 	/** 编辑页专属并发数 */
 	editConcurrency: number;
-	/** AI 给编辑任务命名所用的对话模型 */
+	/** AI 给任务命名所用的对话模型 */
 	namingModel: string;
-	/** 是否在提交编辑任务时自动 AI 命名 */
-	autoNameEdit: boolean;
+	/** 是否在提交任务时自动 AI 命名（生成与编辑通用） */
+	autoName: boolean;
 }
 
 /**
@@ -89,6 +89,8 @@ export interface WebviewImage extends TaskImage {
 	src: string;
 	/** 需要 webview 生成缩略图时下发（sha1(uri+mtime+size)），生成后经 saveThumb 回传落盘 */
 	thumbKey?: string;
+	/** 该图是否已被收藏（在任一收藏夹中）。后端按 favorites.json 打标，前端只读不比对 */
+	favorited?: boolean;
 }
 
 export interface WebviewTask {
@@ -195,6 +197,35 @@ export interface WebviewPendingTask {
 	images: WebviewImage[];
 }
 
+/** 收藏的一张图：绝对 file Uri 字符串 + 可选备注 + 收藏时间 */
+export interface FavoriteItem {
+	uri: string;
+	note?: string;
+	addedAt: number;
+}
+
+/** 一个收藏夹：不可变 id + 可改 name + 图片项 */
+export interface FavoriteCollection {
+	id: string;
+	name: string;
+	createdAt: number;
+	items: FavoriteItem[];
+}
+
+/** 收藏数据全文（落 .image-flow/favorites.json）；activeCollectionId = 左键收藏的目标夹 */
+export interface FavoritesData {
+	version: 2;
+	activeCollectionId: string;
+	collections: FavoriteCollection[];
+}
+
+/** 发往 webview 的收藏夹：图片带 asWebviewUri 后的 src */
+export interface WebviewCollection {
+	id: string;
+	name: string;
+	images: WebviewImage[];
+}
+
 /** 扩展 → 前端 */
 export type InboundMessage =
 	| { type: 'config'; config: ImageFlowConfig; options: ConfigOptions }
@@ -204,11 +235,12 @@ export type InboundMessage =
 	| { type: 'status'; message: string }
 	| { type: 'error'; message: string }
 	| { type: 'busy'; busy: boolean }
-	| { type: 'navigate'; tab: 'workbench' | 'edit' | 'tasks' | 'api' }
+	| { type: 'navigate'; tab: 'workbench' | 'edit' | 'tasks' | 'favorites' | 'api' }
 	| { type: 'libraries'; libraries: WebviewLibrary[] }
 	| { type: 'autoLibraries'; libraries: WebviewLibrary[] }
 	| { type: 'promptTemplates'; templates: PromptTemplate[] }
-	| { type: 'editImages'; images: WebviewEditImage[] };
+	| { type: 'editImages'; images: WebviewEditImage[] }
+	| { type: 'favorites'; collections: WebviewCollection[]; activeCollectionId: string };
 
 /** 前端 → 扩展 */
 export type OutboundMessage =
@@ -232,4 +264,11 @@ export type OutboundMessage =
 	| { type: 'openPrompt'; folder: string }
 	| { type: 'refreshTemplates' }
 	| { type: 'saveThumb'; key: string; data: string }
-	| { type: 'saveEditThumb'; name: string; srcLength: number; data: string };
+	| { type: 'saveEditThumb'; name: string; srcLength: number; data: string }
+	| { type: 'toggleFavorite'; uri: string }
+	| { type: 'moveFavoriteTo'; uri: string; collectionId: string }
+	| { type: 'setActiveCollection'; collectionId: string }
+	| { type: 'createCollection'; name: string }
+	| { type: 'renameCollection'; id: string; name: string }
+	| { type: 'deleteCollection'; id: string; moveToDefault?: boolean }
+	| { type: 'exportCollection'; collectionId: string };

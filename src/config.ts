@@ -53,8 +53,8 @@ const DEFAULTS: StoredConfig = {
 	editAspectRatio: '3:4',
 	editImageSize: '1K',
 	editConcurrency: 1,
-	namingModel: 'gemini-3.5-flash',
-	autoNameEdit: true,
+	namingModel: 'gemini-3.1-flash-lite',
+	autoName: true,
 };
 
 /** 读取完整配置：非敏感项来自 globalState，apiKey 来自加密的 secrets */

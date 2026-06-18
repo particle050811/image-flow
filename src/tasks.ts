@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { submitGeneration, queryResult, nameEditTask, TransientError } from './api';
+import { submitGeneration, queryResult, requestTaskName, TransientError } from './api';
 import { buildPrompt, createTaskFolder, downloadImages, mdBaseName } from './command';
 import { readConfig, editConfigView } from './config';
 import { buildEditFinalPrompt } from './edit';
@@ -89,6 +89,8 @@ export class TaskManager {
 	private listeners = new Set<() => void>();
 	/** 轮询重入锁：一轮 poll 的下载可能超过定时器间隔，禁止并发轮询，否则同任务多 job 共享 images.length 计数会下成同名图互相覆盖 */
 	private polling = false;
+	/** meta.json 写入串行链：pollJob（轮询锁内）写 succeeded 与 nameTask（锁外）写 title 共享此链，避免两处 writeFile 时序重叠写出半截 JSON */
+	private metaWrites: Promise<void> = Promise.resolve();
 
 	constructor(private readonly context: vscode.ExtensionContext) {
 		// 旧版（任务建在 md 同级）持久化记录无 kind/dir 字段，目录定位已失效，直接丢弃不续拉
@@ -115,6 +117,14 @@ export class TaskManager {
 
 	private async persist(): Promise<void> {
 		await this.context.globalState.update(PENDING_KEY, this.tasks);
+	}
+
+	/** 把 task.meta 串行写入 meta.json。写失败为非关键（readTaskMeta 有回退），吞掉不阻断主流程 */
+	private writeMeta(task: PendingTask): Promise<void> {
+		this.metaWrites = this.metaWrites
+			.then(() => writeTaskMeta(vscode.Uri.parse(task.dir), task.meta))
+			.catch(() => {});
+		return this.metaWrites;
 	}
 
 	private emit(): void {
@@ -151,7 +161,7 @@ export class TaskManager {
 		const { prompt: basePrompt, images, names } = await buildPrompt(mdUri, content);
 		const prompt = await buildInjectedPrompt(config, basePrompt);
 		const prefix = mdBaseName(mdUri);
-		await this.start({
+		const task = await this.start({
 			kind: 'generate',
 			prefix,
 			mdUri: mdUri.toString(),
@@ -162,6 +172,11 @@ export class TaskManager {
 			images,
 			names,
 		});
+		// AI 命名：用 md 正文（含图片引用、不含注入句）概括，命名前先以 md 名占位、失败即回退该名。
+		// 同一 md 多次生成内容可能不同，故生成任务也单独命名。
+		if (config.autoName) {
+			void this.nameTask(task, config, basePrompt);
+		}
 	}
 
 	/**
@@ -186,23 +201,23 @@ export class TaskManager {
 			names: refs.map((r) => r.name),
 		});
 		// AI 命名：后台非阻塞，用全局配置（namingModel/baseUrl/apiKey），失败静默回退占位名
-		if (base.autoNameEdit) {
+		if (base.autoName) {
 			void this.nameTask(task, base, rawPrompt);
 		}
 	}
 
 	/**
-	 * 后台给编辑任务起短名：拿到非空短名就写进内存任务对象与 meta.json 并刷新侧栏。
+	 * 后台给任务起短名（生成 / 编辑通用）：拿到非空短名就写进内存任务对象与 meta.json 并刷新侧栏。
 	 * 任务可能已完成移出进行中列表，此时短名仍写盘，下次扫历史即生效。
 	 */
 	private async nameTask(task: PendingTask, config: ImageFlowConfig, rawPrompt: string): Promise<void> {
-		const title = await nameEditTask(config, rawPrompt);
+		const title = await requestTaskName(config, rawPrompt);
 		if (!title) {
 			return;
 		}
 		task.title = title;
 		task.meta.title = title;
-		await writeTaskMeta(vscode.Uri.parse(task.dir), task.meta);
+		await this.writeMeta(task);
 		await this.persist();
 		this.emit();
 	}
@@ -426,7 +441,7 @@ export class TaskManager {
 		job.status = 'succeeded';
 		// 成功数随下载累加并回写 meta.json，供任务终结后历史展示成功率
 		task.meta.succeeded = task.images.length;
-		await writeTaskMeta(vscode.Uri.parse(task.dir), task.meta);
+		await this.writeMeta(task);
 		return true;
 	}
 

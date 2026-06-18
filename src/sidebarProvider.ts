@@ -12,6 +12,19 @@ import { tasksRoot } from './storage';
 import { resolveThumb, saveThumb } from './thumbs';
 import { buildEditFinalPrompt } from './edit';
 import {
+	readFavorites,
+	mutateFavorites,
+	pruneMissing,
+	favoriteUriSet,
+	toggleFavorite,
+	moveFavorite,
+	createCollection,
+	renameCollection,
+	deleteCollection,
+	setActiveCollection,
+	dedupeName,
+} from './favorites';
+import {
 	getLibraryFolders,
 	addLibraryFolder,
 	removeLibraryFolder,
@@ -28,6 +41,7 @@ import type {
 	WebviewPendingTask,
 	MaterialLibrary,
 	WebviewLibrary,
+	WebviewCollection,
 	InboundMessage,
 	OutboundMessage,
 } from './shared';
@@ -136,6 +150,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				await this.pushAutoLibraries();
 				this.pushEditImages();
 				await this.pushTemplates();
+				await this.pushFavorites();
 				break;
 			}
 			case 'saveConfig':
@@ -213,6 +228,33 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			case 'saveEditThumb':
 				this.edit.setDisplay(msg.name, msg.srcLength, msg.data);
 				break;
+			case 'toggleFavorite':
+				await mutateFavorites((d) => toggleFavorite(d, msg.uri, Date.now()));
+				await this.pushAfterFavoritesChange();
+				break;
+			case 'moveFavoriteTo':
+				await mutateFavorites((d) => moveFavorite(d, msg.uri, msg.collectionId, Date.now()));
+				await this.pushAfterFavoritesChange();
+				break;
+			case 'setActiveCollection':
+				await mutateFavorites((d) => setActiveCollection(d, msg.collectionId));
+				await this.pushFavorites();
+				break;
+			case 'createCollection':
+				await mutateFavorites((d) => createCollection(d, msg.name, Date.now()));
+				await this.pushFavorites();
+				break;
+			case 'renameCollection':
+				await mutateFavorites((d) => renameCollection(d, msg.id, msg.name));
+				await this.pushFavorites();
+				break;
+			case 'deleteCollection':
+				await mutateFavorites((d) => deleteCollection(d, msg.id, msg.moveToDefault ?? false));
+				await this.pushAfterFavoritesChange();
+				break;
+			case 'exportCollection':
+				await this.exportCollection(msg.collectionId);
+				break;
 		}
 	}
 
@@ -230,6 +272,41 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		await addLibraryFolder(this.context, picked[0].toString());
 		this.refreshResourceRoots();
 		await this.pushLibraries();
+	}
+
+	/** 导出某收藏夹的全部图片到用户选定文件夹（只导图、重名去重） */
+	private async exportCollection(collectionId: string): Promise<void> {
+		const data = await readFavorites();
+		const col = data.collections.find((c) => c.id === collectionId);
+		if (!col || col.items.length === 0) {
+			this.post({ type: 'error', message: '该收藏夹没有图片可导出。' });
+			return;
+		}
+		const picked = await vscode.window.showOpenDialog({
+			canSelectFiles: false,
+			canSelectFolders: true,
+			canSelectMany: false,
+			openLabel: '导出到此文件夹',
+		});
+		if (!picked?.length) {
+			return;
+		}
+		const dest = picked[0];
+		const used = new Set<string>();
+		let ok = 0;
+		let skipped = 0;
+		for (const item of col.items) {
+			const src = vscode.Uri.parse(item.uri);
+			const name = dedupeName(used, uriBaseName(src));
+			used.add(name);
+			try {
+				await vscode.workspace.fs.copy(src, vscode.Uri.joinPath(dest, name), { overwrite: false });
+				ok++;
+			} catch {
+				skipped++; // 源缺失/复制失败
+			}
+		}
+		this.post({ type: 'status', message: `已导出 ${ok} 张${skipped ? `，跳过 ${skipped} 张` : ''}。` });
 	}
 
 	/** 弹出文件选择器，把选中图片加入编辑区 */
@@ -367,20 +444,48 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async pushLibraries(): Promise<void> {
+		const favSet = favoriteUriSet(await readFavorites());
 		const libs = await listLibraries(this.context);
 		this.post({
 			type: 'libraries',
-			libraries: await Promise.all(libs.map((l) => this.toWebviewLibrary(l))),
+			libraries: await Promise.all(libs.map((l) => this.toWebviewLibrary(l, favSet))),
 		});
 	}
 
 	/** 推送随当前 Markdown 路径自动生成的素材库（无 MD 时清空） */
 	private async pushAutoLibraries(): Promise<void> {
+		const favSet = favoriteUriSet(await readFavorites());
 		const libs = this.currentMd ? await listAutoLibraries(this.currentMd) : [];
 		this.post({
 			type: 'autoLibraries',
-			libraries: await Promise.all(libs.map((l) => this.toWebviewLibrary(l))),
+			libraries: await Promise.all(libs.map((l) => this.toWebviewLibrary(l, favSet))),
 		});
+	}
+
+	/** 推送收藏标签页数据：各夹图片转 webview 可加载 + 悬空过滤（仅展示） */
+	private async pushFavorites(): Promise<void> {
+		const data = await pruneMissing(await readFavorites());
+		const favSet = favoriteUriSet(data);
+		const collections: WebviewCollection[] = await Promise.all(
+			data.collections.map(async (c) => ({
+				id: c.id,
+				name: c.name,
+				images: await this.toWebviewImages(
+					c.items.map((i) => ({ name: uriBaseName(vscode.Uri.parse(i.uri)), uri: i.uri })),
+					favSet
+				),
+			}))
+		);
+		this.post({ type: 'favorites', collections, activeCollectionId: data.activeCollectionId });
+	}
+
+	/** 收藏发生变化后：收藏页 + 所有带星标的列表都要重推，星标态才会刷新 */
+	private async pushAfterFavoritesChange(): Promise<void> {
+		await this.pushFavorites();
+		await this.pushHistory();
+		await this.pushPendingTasks();
+		await this.pushLibraries();
+		await this.pushAutoLibraries();
 	}
 
 	/**
@@ -459,53 +564,57 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async pushHistory(): Promise<void> {
+		const favSet = favoriteUriSet(await readFavorites());
 		const tasks: Task[] = await listHistory(this.tasks.activeFolders());
 		this.post({
 			type: 'history',
-			tasks: await Promise.all(tasks.map((t) => this.toWebviewTask(t))),
+			tasks: await Promise.all(tasks.map((t) => this.toWebviewTask(t, favSet))),
 		});
 	}
 
 	/** 推送进行中任务（聚合进度 + 已存缩略图）给前端；全部进行中任务，不按 MD 过滤 */
 	private async pushPendingTasks(): Promise<void> {
+		const favSet = favoriteUriSet(await readFavorites());
 		const tasks = this.tasks.list();
 		this.post({
 			type: 'pendingTasks',
-			tasks: await Promise.all(tasks.map((t) => this.toWebviewPendingTask(t))),
+			tasks: await Promise.all(tasks.map((t) => this.toWebviewPendingTask(t, favSet))),
 		});
 	}
 
 	/** 把文件图转成 webview 可加载的图：有缩略图用缩略图作 src（F051），
 	 *  没有则用原图并下发 thumbKey 请 webview 生成；uri 字段始终保留原图（点开/拖拽用） */
-	private async toWebviewImage(img: TaskImage): Promise<WebviewImage> {
+	private async toWebviewImage(img: TaskImage, favSet: Set<string>): Promise<WebviewImage> {
 		const webview = this.view?.webview;
+		const favorited = favSet.has(img.uri);
 		if (!webview) {
-			return { ...img, src: img.uri };
+			return { ...img, src: img.uri, favorited };
 		}
 		const { thumbUri, thumbKey } = await resolveThumb(img.uri);
 		return {
 			...img,
 			src: webview.asWebviewUri(thumbUri ?? vscode.Uri.parse(img.uri)).toString(),
 			thumbKey,
+			favorited,
 		};
 	}
 
-	private async toWebviewImages(images: TaskImage[]): Promise<WebviewImage[]> {
-		return Promise.all(images.map((img) => this.toWebviewImage(img)));
+	private async toWebviewImages(images: TaskImage[], favSet: Set<string>): Promise<WebviewImage[]> {
+		return Promise.all(images.map((img) => this.toWebviewImage(img, favSet)));
 	}
 
 	/** 把任务里的文件 Uri 转成 webview 可加载的 src（asWebviewUri） */
-	private async toWebviewTask(task: Task): Promise<WebviewTask> {
+	private async toWebviewTask(task: Task, favSet: Set<string>): Promise<WebviewTask> {
 		return {
 			folder: task.folder,
-			images: await this.toWebviewImages(task.images),
+			images: await this.toWebviewImages(task.images, favSet),
 			promptName: task.promptName,
 			meta: task.meta,
 		};
 	}
 
 	/** 把进行中任务转成 webview 视图：聚合进度 + 已存缩略图带 src */
-	private async toWebviewPendingTask(task: PendingTask): Promise<WebviewPendingTask> {
+	private async toWebviewPendingTask(task: PendingTask, favSet: Set<string>): Promise<WebviewPendingTask> {
 		const done = task.jobs.filter((j) => j.status === 'succeeded').length;
 		const failed = task.jobs.filter((j) => j.status === 'failed' || j.status === 'violation').length;
 		const submitting = task.jobs.filter((j) => j.status === 'submitting').length;
@@ -523,16 +632,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			progress: aggregateProgress(task.jobs),
 			startedAt: task.startedAt,
 			errors,
-			images: await this.toWebviewImages(task.images),
+			images: await this.toWebviewImages(task.images, favSet),
 		};
 	}
 
 	/** 把素材库里的文件 Uri 转成 webview 可加载的 src */
-	private async toWebviewLibrary(lib: MaterialLibrary): Promise<WebviewLibrary> {
+	private async toWebviewLibrary(lib: MaterialLibrary, favSet: Set<string>): Promise<WebviewLibrary> {
 		return {
 			folder: lib.folder,
 			name: lib.name,
-			images: await this.toWebviewImages(lib.images),
+			images: await this.toWebviewImages(lib.images, favSet),
 		};
 	}
 

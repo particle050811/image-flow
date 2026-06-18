@@ -14,6 +14,19 @@ import { EditSession } from '../editSession';
 import { thumbKeyOf } from '../thumbs';
 import { isTransientNetworkError, isTaskActive, aggregateProgress } from '../tasks';
 import type { ImageFlowConfig, PendingTask, PendingJob } from '../shared';
+import {
+	DEFAULT_COLLECTION_ID,
+	emptyFavorites,
+	migrateFavorites,
+	favoriteUriSet,
+	toggleFavorite,
+	moveFavorite,
+	createCollection,
+	renameCollection,
+	deleteCollection,
+	setActiveCollection,
+	dedupeName,
+} from '../favorites';
 
 const baseConfig: ImageFlowConfig = {
 	apiKey: 'k',
@@ -30,7 +43,7 @@ const baseConfig: ImageFlowConfig = {
 	editImageSize: '2K',
 	editConcurrency: 3,
 	namingModel: 'gemini-3.5-flash',
-	autoNameEdit: true,
+	autoName: true,
 };
 
 suite('images', () => {
@@ -374,5 +387,113 @@ suite('materials 同名 MD 描述', () => {
 		} finally {
 			await vscode.workspace.fs.delete(tmp, { recursive: true });
 		}
+	});
+});
+
+suite('favorites', () => {
+	const now = 1750000000000;
+	const u = (n: string) => `file:///d%3A/proj/.image-flow/tasks/1/${n}.png`;
+
+	test('emptyFavorites 含默认夹且为当前', () => {
+		const d = emptyFavorites(now);
+		assert.strictEqual(d.version, 2);
+		assert.strictEqual(d.activeCollectionId, DEFAULT_COLLECTION_ID);
+		assert.strictEqual(d.collections.length, 1);
+		assert.strictEqual(d.collections[0].id, DEFAULT_COLLECTION_ID);
+		assert.deepStrictEqual(d.collections[0].items, []);
+	});
+
+	test('migrateFavorites 旧版 items 包成默认夹', () => {
+		const raw = { items: [{ path: 'x', addedAt: 1 }] };
+		const d = migrateFavorites(raw, now);
+		assert.strictEqual(d.version, 2);
+		assert.strictEqual(d.collections.length, 1);
+		assert.strictEqual(d.collections[0].id, DEFAULT_COLLECTION_ID);
+	});
+
+	test('migrateFavorites 已是 v2 原样保留', () => {
+		const v2 = emptyFavorites(now);
+		v2.collections[0].items.push({ uri: u('a'), addedAt: 1 });
+		const d = migrateFavorites(v2, now);
+		assert.strictEqual(d.collections[0].items.length, 1);
+	});
+
+	test('migrateFavorites 空/坏输入回落空收藏', () => {
+		assert.strictEqual(migrateFavorites(undefined, now).collections.length, 1);
+		assert.strictEqual(migrateFavorites('garbage', now).collections.length, 1);
+	});
+
+	test('toggleFavorite 未收藏则加入当前夹', () => {
+		const d = toggleFavorite(emptyFavorites(now), u('a'), now);
+		assert.ok(favoriteUriSet(d).has(u('a')));
+		assert.strictEqual(d.collections[0].items.length, 1);
+	});
+
+	test('toggleFavorite 已收藏则从所有夹移除', () => {
+		let d = toggleFavorite(emptyFavorites(now), u('a'), now);
+		d = toggleFavorite(d, u('a'), now);
+		assert.ok(!favoriteUriSet(d).has(u('a')));
+	});
+
+	test('moveFavorite 从原夹移到目标夹（一图归一组）', () => {
+		let d = createCollection(emptyFavorites(now), '产品图', now);
+		const target = d.collections[1].id;
+		d = toggleFavorite(d, u('a'), now); // 进默认夹
+		d = moveFavorite(d, u('a'), target, now);
+		assert.strictEqual(d.collections[0].items.length, 0);
+		assert.strictEqual(d.collections[1].items.length, 1);
+		// 不重复：移到同一图两次仍只在目标夹一份
+		d = moveFavorite(d, u('a'), target, now);
+		assert.strictEqual(d.collections[1].items.length, 1);
+	});
+
+	test('createCollection 用 c_<时间戳> id 且不设为当前', () => {
+		const d = createCollection(emptyFavorites(now), '新夹', now);
+		assert.strictEqual(d.collections.length, 2);
+		assert.strictEqual(d.collections[1].id, `c_${now}`);
+		assert.strictEqual(d.activeCollectionId, DEFAULT_COLLECTION_ID);
+	});
+
+	test('renameCollection 只改 name 不改 id', () => {
+		let d = createCollection(emptyFavorites(now), 'A', now);
+		const id = d.collections[1].id;
+		d = renameCollection(d, id, 'B');
+		assert.strictEqual(d.collections[1].id, id);
+		assert.strictEqual(d.collections[1].name, 'B');
+	});
+
+	test('deleteCollection 拒删默认夹', () => {
+		const d = deleteCollection(emptyFavorites(now), DEFAULT_COLLECTION_ID, false);
+		assert.strictEqual(d.collections.length, 1);
+	});
+
+	test('deleteCollection moveToDefault 把图并入默认夹', () => {
+		let d = createCollection(emptyFavorites(now), 'A', now);
+		const id = d.collections[1].id;
+		d = moveFavorite(d, u('a'), id, now);
+		d = deleteCollection(d, id, true);
+		assert.strictEqual(d.collections.length, 1);
+		assert.strictEqual(d.collections[0].items.length, 1);
+	});
+
+	test('deleteCollection 删当前夹后当前回落默认', () => {
+		let d = createCollection(emptyFavorites(now), 'A', now);
+		const id = d.collections[1].id;
+		d = setActiveCollection(d, id);
+		d = deleteCollection(d, id, false);
+		assert.strictEqual(d.activeCollectionId, DEFAULT_COLLECTION_ID);
+	});
+
+	test('setActiveCollection 不存在的 id 回落默认', () => {
+		const d = setActiveCollection(emptyFavorites(now), 'c_nope');
+		assert.strictEqual(d.activeCollectionId, DEFAULT_COLLECTION_ID);
+	});
+
+	test('dedupeName 重名追加序号', () => {
+		const used = new Set(['a.png']);
+		assert.strictEqual(dedupeName(used, 'a.png'), 'a-1.png');
+		used.add('a-1.png');
+		assert.strictEqual(dedupeName(used, 'a.png'), 'a-2.png');
+		assert.strictEqual(dedupeName(used, 'b.png'), 'b.png');
 	});
 });

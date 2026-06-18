@@ -56,9 +56,9 @@ export function ApiConfig({
 				/>
 			</div>
 			<Checkbox
-				label="自动为编辑任务 AI 命名"
-				checked={config.autoNameEdit}
-				onChange={(v) => onChange('autoNameEdit', v)}
+				label="自动为任务 AI 命名"
+				checked={config.autoName}
+				onChange={(v) => onChange('autoName', v)}
 			/>
 			<Select
 				label="命名模型"

@@ -1,16 +1,19 @@
 import { useState } from 'react';
 import * as Collapsible from '@radix-ui/react-collapsible';
-import type { WebviewLibrary } from './vscode';
+import type { WebviewLibrary, WebviewCollection } from './vscode';
 import { vscode } from './vscode';
+import { StarButton } from './StarButton';
 
 /** 单个素材库行：点击标题展开/收起，展开后按真实比例显示缩略图 */
 function LibRow({
 	lib,
+	collections,
 	open,
 	onToggle,
 	onRemove,
 }: {
 	lib: WebviewLibrary;
+	collections: WebviewCollection[];
 	open: boolean;
 	onToggle: () => void;
 	onRemove?: () => void;
@@ -41,20 +44,22 @@ function LibRow({
 			<Collapsible.Content>
 				<div className="thumbs">
 					{lib.images.map((img) => (
-						<img
-							key={img.uri}
-							src={img.src}
-							title={`${img.name}（左键打开 · 右键插入引用 · 可拖入编辑区）`}
-							draggable
-							onDragStart={(e) =>
-								e.dataTransfer.setData('application/x-imageflow-uri', img.uri)
-							}
-							onClick={() => vscode.postMessage({ type: 'openImage', uri: img.uri })}
-							onContextMenu={(e) => {
-								e.preventDefault();
-								vscode.postMessage({ type: 'insertImage', uri: img.uri });
-							}}
-						/>
+						<div className="thumb-wrap" key={img.uri}>
+							<img
+								src={img.src}
+								title={`${img.name}（左键打开 · 右键插入引用 · 可拖入编辑区）`}
+								draggable
+								onDragStart={(e) =>
+									e.dataTransfer.setData('application/x-imageflow-uri', img.uri)
+								}
+								onClick={() => vscode.postMessage({ type: 'openImage', uri: img.uri })}
+								onContextMenu={(e) => {
+									e.preventDefault();
+									vscode.postMessage({ type: 'insertImage', uri: img.uri });
+								}}
+							/>
+							<StarButton uri={img.uri} favorited={img.favorited} collections={collections} />
+						</div>
 					))}
 				</div>
 			</Collapsible.Content>
@@ -66,12 +71,14 @@ function LibRow({
 export function Materials({
 	autoLibraries,
 	libraries,
+	collections,
 	cols,
 	onAdd,
 	onRemove,
 }: {
 	autoLibraries: WebviewLibrary[];
 	libraries: WebviewLibrary[];
+	collections: WebviewCollection[];
 	cols: number;
 	onAdd: () => void;
 	onRemove: (folder: string) => void;
@@ -98,6 +105,7 @@ export function Materials({
 					<LibRow
 						key={lib.folder}
 						lib={lib}
+						collections={collections}
 						open={expanded.has(`auto:${lib.folder}`)}
 						onToggle={() => toggle(`auto:${lib.folder}`)}
 					/>
@@ -117,6 +125,7 @@ export function Materials({
 					<LibRow
 						key={lib.folder}
 						lib={lib}
+						collections={collections}
 						open={expanded.has(`manual:${lib.folder}`)}
 						onToggle={() => toggle(`manual:${lib.folder}`)}
 						onRemove={() => onRemove(lib.folder)}
