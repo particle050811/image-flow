@@ -1,4 +1,4 @@
-import type { Config, ConfigOptions, WebviewLibrary, WebviewCollection } from './vscode';
+import type { Config, ConfigOptions, WebviewLibrary, WebviewCollection, StatusState } from './vscode';
 import { Select, Stepper } from './fields';
 import { Materials } from './Materials';
 
@@ -24,7 +24,7 @@ export function Workbench({
 	options: ConfigOptions;
 	activeMd: string | null;
 	busy: boolean;
-	status: { text: string; error: boolean };
+	status: StatusState;
 	libraries: WebviewLibrary[];
 	autoLibraries: WebviewLibrary[];
 	collections: WebviewCollection[];

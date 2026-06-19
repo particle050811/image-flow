@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import * as Collapsible from '@radix-ui/react-collapsible';
 import {
 	vscode,
 	type WebviewTask,
@@ -7,7 +6,8 @@ import {
 	type WebviewImage,
 	type WebviewCollection,
 } from './vscode';
-import { StarButton } from './StarButton';
+import { Thumb, openImageClick } from './Thumb';
+import { usePicker } from './usePicker';
 
 /** 缩略图网格：点击打开原图；可拖拽（送编辑区）；hover 右上角 ✎ 一键送编辑；左上角 ⭐ 收藏 */
 function Thumbs({
@@ -22,14 +22,16 @@ function Thumbs({
 	return (
 		<div className="thumbs thumbs-lg">
 			{images.map((img) => (
-				<div className="thumb-wrap" key={img.uri}>
-					<img
-						src={img.src}
-						title={img.name}
-						draggable
-						onDragStart={(e) => e.dataTransfer.setData('application/x-imageflow-uri', img.uri)}
-						onClick={() => vscode.postMessage({ type: 'openImage', uri: img.uri })}
-					/>
+				<Thumb
+					key={img.uri}
+					src={img.src}
+					title={img.name}
+					uri={img.uri}
+					draggable
+					onClick={openImageClick(img.uri)}
+					collections={collections}
+					favorited={img.favorited}
+				>
 					<button
 						className="thumb-action"
 						title="送入编辑"
@@ -37,8 +39,7 @@ function Thumbs({
 					>
 						✎
 					</button>
-					<StarButton uri={img.uri} favorited={img.favorited} collections={collections} />
-				</div>
+				</Thumb>
 			))}
 		</div>
 	);
@@ -90,8 +91,8 @@ function useElapsed(startedAt: number): string {
 	return formatElapsed(now - startedAt);
 }
 
-/** 进行中任务卡片：标题可展开/收起，展开后显示进度条 + 已存缩略图 + 进度/失败提示 */
-function PendingCard({
+/** 进行中任务详情：进度条 + 已存缩略图 + 进度/失败提示 */
+function PendingDetail({
 	task,
 	collections,
 	onSendToEdit,
@@ -100,7 +101,6 @@ function PendingCard({
 	collections: WebviewCollection[];
 	onSendToEdit: (uri: string) => void;
 }) {
-	const [open, setOpen] = useState(true);
 	const elapsed = useElapsed(task.startedAt);
 	const running = task.total - task.done - task.failed - task.submitting;
 	// 提交阶段（尚无 job id）显示「提交中」，其余显示生成进度
@@ -109,45 +109,35 @@ function PendingCard({
 			? `提交中 ${task.submitting}/${task.total}`
 			: `生成中 ${task.done}/${task.total}`;
 	return (
-		<Collapsible.Root className="task pending" open={open} onOpenChange={setOpen}>
-			<Collapsible.Trigger asChild>
-				<div className="folder">
-					<span className="task-caret" data-open={open}>
-						▸
-					</span>
-					<span className="task-name">{task.title || task.promptName}</span>
-					<span className="task-right">
-						<span className="task-model">{task.model}</span>
-						<span>
-							{headline}
-							{task.failed > 0 ? ` · 失败 ${task.failed}` : ''} · {elapsed}
-						</span>
-					</span>
+		<div className="task-detail">
+			<div className="task-detail-head">
+				<span className="task-model">{task.model}</span>
+				<span>
+					{headline}
+					{task.failed > 0 ? ` · 失败 ${task.failed}` : ''} · {elapsed}
+				</span>
+			</div>
+			<div className="progress-row">
+				<div className="progress-bar">
+					<div className="progress-fill" style={{ width: `${task.progress}%` }} />
 				</div>
-			</Collapsible.Trigger>
-			<Collapsible.Content>
-				<div className="progress-row">
-					<div className="progress-bar">
-						<div className="progress-fill" style={{ width: `${task.progress}%` }} />
-					</div>
-					<span className="progress-pct">{task.progress}%</span>
-				</div>
-				<PromptButton folder={task.folder} />
-				{task.images.length > 0 && (
-					<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
-				)}
-				{task.submitting > 0 && (
-					<div className="pending-hint">正在提交 {task.submitting} 个请求…</div>
-				)}
-				{running > 0 && <div className="pending-hint">还有 {running} 张正在生成…</div>}
-				{task.errors.length > 0 && <div className="pending-err">{task.errors.join('；')}</div>}
-			</Collapsible.Content>
-		</Collapsible.Root>
+				<span className="progress-pct">{task.progress}%</span>
+			</div>
+			<PromptButton folder={task.folder} />
+			{task.images.length > 0 && (
+				<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
+			)}
+			{task.submitting > 0 && (
+				<div className="pending-hint">正在提交 {task.submitting} 个请求…</div>
+			)}
+			{running > 0 && <div className="pending-hint">还有 {running} 张正在生成…</div>}
+			{task.errors.length > 0 && <div className="pending-err">{task.errors.join('；')}</div>}
+		</div>
 	);
 }
 
-/** 历史任务卡片：标题可展开/收起，默认收起 */
-function HistoryCard({
+/** 历史任务详情：成功率 + 缩略图 */
+function HistoryDetail({
 	task,
 	collections,
 	onSendToEdit,
@@ -156,38 +146,26 @@ function HistoryCard({
 	collections: WebviewCollection[];
 	onSendToEdit: (uri: string) => void;
 }) {
-	const [open, setOpen] = useState(false);
 	const { meta } = task;
-	const title = meta?.title || task.promptName;
 	return (
-		<Collapsible.Root className="task" open={open} onOpenChange={setOpen}>
-			<Collapsible.Trigger asChild>
-				<div className="folder">
-					<span className="task-caret" data-open={open}>
-						▸
+		<div className="task-detail">
+			{meta ? (
+				<div className="task-detail-head">
+					<span className="task-model">{meta.model}</span>
+					<span className={rateClass(meta.succeeded, meta.requested)}>
+						{meta.succeeded}/{meta.requested}
 					</span>
-					<span className="task-name">{title}</span>
-					{meta ? (
-						<span className="task-right">
-							<span className="task-model">{meta.model}</span>
-							<span className={rateClass(meta.succeeded, meta.requested)}>
-								{meta.succeeded}/{meta.requested}
-							</span>
-						</span>
-					) : (
-						<span className="task-right">{task.images.length} 张</span>
-					)}
 				</div>
-			</Collapsible.Trigger>
-			<Collapsible.Content>
-				<PromptButton folder={task.folder} />
-				<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
-			</Collapsible.Content>
-		</Collapsible.Root>
+			) : (
+				<div className="task-detail-head">{task.images.length} 张</div>
+			)}
+			<PromptButton folder={task.folder} />
+			<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
+		</div>
 	);
 }
 
-/** 任务页：进行中与历史合并为一条按时间倒序的列表，点击标题展开/收起 */
+/** 任务页：进行中与历史合并成一条按时间倒序的选择栏，点条目在下方固定区看详情 */
 export function Tasks({
 	hidden,
 	tasks,
@@ -203,39 +181,66 @@ export function Tasks({
 	cols: number;
 	onSendToEdit: (uri: string) => void;
 }) {
-	const empty = tasks.length === 0 && pendingTasks.length === 0;
 	// 进行中与历史按文件夹名（毫秒时间戳）倒序合并，新任务在前
 	const items = [
-		...pendingTasks.map((t) => ({ folder: t.folder, kind: 'pending' as const, task: t })),
-		...tasks.map((t) => ({ folder: t.folder, kind: 'history' as const, task: t })),
+		...pendingTasks.map((t) => ({ key: `p:${t.id}`, folder: t.folder, kind: 'pending' as const, task: t })),
+		...tasks.map((t) => ({ key: `h:${t.folder}`, folder: t.folder, kind: 'history' as const, task: t })),
 	].sort((a, b) => (a.folder < b.folder ? 1 : a.folder > b.folder ? -1 : 0));
+
+	// 选中失效（任务完成转历史 / 列表刷新）回落到第一个
+	const { current, setSelected } = usePicker(items, (i) => i.key);
+
 	return (
 		<div
-			className="page"
+			className="page picker-page"
 			data-page="tasks"
 			hidden={hidden}
 			style={{ ['--cols' as string]: cols }}
+			data-compact={cols >= 3 ? 'true' : undefined}
 		>
-			{empty ? (
+			{items.length === 0 ? (
 				<div className="empty">暂无生成记录。</div>
 			) : (
-				items.map((item) =>
-					item.kind === 'pending' ? (
-						<PendingCard
-							key={item.task.id}
-							task={item.task}
-							collections={collections}
-							onSendToEdit={onSendToEdit}
-						/>
-					) : (
-						<HistoryCard
-							key={item.task.folder}
-							task={item.task}
-							collections={collections}
-							onSendToEdit={onSendToEdit}
-						/>
-					)
-				)
+				<>
+					<div className="picker-bar">
+						{items.map((item) => {
+							const title =
+								item.kind === 'pending'
+									? item.task.title || item.task.promptName
+									: item.task.meta?.title || item.task.promptName;
+							const model =
+								item.kind === 'pending' ? item.task.model : item.task.meta?.model;
+							return (
+								<button
+									key={item.key}
+									className="picker-chip"
+									data-active={current?.key === item.key}
+									data-pending={item.kind === 'pending' || undefined}
+									onClick={() => setSelected(item.key)}
+								>
+									<span className="chip-name">{title}</span>
+									{model && <span className="chip-sub">{model}</span>}
+								</button>
+							);
+						})}
+					</div>
+					<div className="picker-body">
+						{current &&
+							(current.kind === 'pending' ? (
+								<PendingDetail
+									task={current.task}
+									collections={collections}
+									onSendToEdit={onSendToEdit}
+								/>
+							) : (
+								<HistoryDetail
+									task={current.task}
+									collections={collections}
+									onSendToEdit={onSendToEdit}
+								/>
+							))}
+					</div>
+				</>
 			)}
 		</div>
 	);

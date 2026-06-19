@@ -11,7 +11,9 @@ import {
 	type WebviewCollection,
 	type WebviewEditImage,
 	type PromptTemplate,
+	type StatusState,
 } from './vscode';
+import { useCooldown } from './useCooldown';
 import { Workbench } from './Workbench';
 import { clearResourceCachesThrottled } from './resourceCache';
 import { requestThumbs, requestEditThumbs } from './thumbs';
@@ -44,8 +46,8 @@ export function App() {
 	const [editImages, setEditImages] = useState<WebviewEditImage[]>([]);
 	const [templates, setTemplates] = useState<PromptTemplate[]>([]);
 	const [busy, setBusy] = useState(false);
-	const [genCooling, setGenCooling] = useState(false);
-	const [status, setStatus] = useState<{ text: string; error: boolean }>({ text: '', error: false });
+	const [genCooling, genCool] = useCooldown(500);
+	const [status, setStatus] = useState<StatusState>({ text: '', error: false });
 
 	// 订阅扩展消息，挂载后发 init 拉取配置与历史
 	useEffect(() => {
@@ -133,11 +135,9 @@ export function App() {
 
 	// 生成：0.5s 冷却防连点（冷却期间按钮禁用，借 busy 视觉态）
 	const generate = () => {
-		if (genCooling) {
+		if (!genCool()) {
 			return;
 		}
-		setGenCooling(true);
-		setTimeout(() => setGenCooling(false), 500);
 		setStatus({ text: '', error: false });
 		vscode.postMessage({ type: 'generate' });
 	};
@@ -231,7 +231,7 @@ export function App() {
 					hidden={tab !== 'favorites'}
 					collections={collections}
 					activeCollectionId={activeCollectionId}
-					cols={config.tasksCols}
+					cols={config.favoritesCols}
 				/>
 			</Tabs.Content>
 			<Tabs.Content value="api" forceMount className="tabpanel">

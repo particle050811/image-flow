@@ -54,6 +54,13 @@ export function ApiConfig({
 					max={8}
 					onChange={(v) => onChange('tasksCols', v)}
 				/>
+				<Stepper
+					label="收藏夹每行张数"
+					value={config.favoritesCols}
+					min={1}
+					max={8}
+					onChange={(v) => onChange('favoritesCols', v)}
+				/>
 			</div>
 			<Checkbox
 				label="自动为任务 AI 命名"

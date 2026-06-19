@@ -5,8 +5,11 @@ import {
 	type ConfigOptions,
 	type WebviewEditImage,
 	type PromptTemplate,
+	type StatusState,
 } from './vscode';
 import { Select, Stepper, Field } from './fields';
+import { Thumb } from './Thumb';
+import { useCooldown } from './useCooldown';
 import { imageRefSnippet } from '../refs';
 
 /** 编辑页：图片区（上传/拖入/点击插入引用）+ 模板 + 提示词 + 编辑专属参数 + 生成 */
@@ -27,12 +30,12 @@ export function Edit({
 	images: WebviewEditImage[];
 	templates: PromptTemplate[];
 	busy: boolean;
-	status: { text: string; error: boolean };
+	status: StatusState;
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
 	onError: (message: string) => void;
 }) {
 	const [prompt, setPrompt] = useState('');
-	const [cooling, setCooling] = useState(false);
+	const [cooling, cool] = useCooldown(500);
 	const [dragOver, setDragOver] = useState(false);
 	const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -122,8 +125,7 @@ export function Edit({
 		if (busy || cooling) {
 			return;
 		}
-		setCooling(true);
-		setTimeout(() => setCooling(false), 500);
+		cool();
 		vscode.postMessage({ type: 'editGenerate', prompt });
 	};
 
@@ -143,16 +145,16 @@ export function Edit({
 				) : (
 					<div className="thumbs" style={{ ['--cols' as string]: config.workbenchCols }}>
 						{images.map((img, i) => (
-							<div className="thumb-wrap" key={img.name}>
-								<img
-									src={img.src}
-									title={`${img.name}（左键打开 · 右键插入引用）`}
-									onClick={() => vscode.postMessage({ type: 'editOpenImage', name: img.name })}
-									onContextMenu={(e) => {
-										e.preventDefault();
-										insertAtCursor(imageRefSnippet(img.name));
-									}}
-								/>
+							<Thumb
+								key={img.name}
+								src={img.src}
+								title={`${img.name}（左键打开 · 右键插入引用）`}
+								onClick={() => vscode.postMessage({ type: 'editOpenImage', name: img.name })}
+								onContextMenu={(e) => {
+									e.preventDefault();
+									insertAtCursor(imageRefSnippet(img.name));
+								}}
+							>
 								<span className="thumb-index">{i + 1}</span>
 								<button
 									className="thumb-action thumb-remove"
@@ -161,7 +163,7 @@ export function Edit({
 								>
 									×
 								</button>
-							</div>
+							</Thumb>
 						))}
 					</div>
 				)}

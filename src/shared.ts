@@ -14,6 +14,8 @@ export interface ImageFlowConfig {
 	workbenchCols: number;
 	/** 任务栏每行显示几张 */
 	tasksCols: number;
+	/** 收藏页每行显示几张 */
+	favoritesCols: number;
 	/** 模型 → 用户自定义注入句的覆盖表；缺省回退内置默认表 */
 	modelInjections: Record<string, string>;
 	/** 编辑页专属模型（与主生成界面互不影响） */
@@ -120,6 +122,12 @@ export interface WebviewLibrary {
 export interface PromptTemplate {
 	name: string;
 	content: string;
+}
+
+/** 前端状态条形状：提示文案 + 是否为错误态 */
+export interface StatusState {
+	text: string;
+	error: boolean;
 }
 
 /** 编辑区图片（发往 webview）：src 为 data URI——已有压缩展示图时为展示图，否则为原图 */
@@ -268,7 +276,7 @@ export type OutboundMessage =
 	| { type: 'toggleFavorite'; uri: string }
 	| { type: 'moveFavoriteTo'; uri: string; collectionId: string }
 	| { type: 'setActiveCollection'; collectionId: string }
-	| { type: 'createCollection'; name: string }
-	| { type: 'renameCollection'; id: string; name: string }
-	| { type: 'deleteCollection'; id: string; moveToDefault?: boolean }
+	| { type: 'createCollection' }
+	| { type: 'renameCollection'; id: string }
+	| { type: 'deleteCollection'; id: string }
 	| { type: 'exportCollection'; collectionId: string };

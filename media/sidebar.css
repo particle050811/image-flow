@@ -123,12 +123,18 @@ body {
 	display: none;
 }
 
-/* 工作台：纵向撑满，素材库占位区弹性填充，把 dock 顶到底部 */
-.page[data-page='workbench']:not([hidden]) {
+/* 工作台 / 任务 / 收藏：纵向限高，选择栏在上、内容区内部滚动，不随条目无限撑高 */
+.page[data-page='workbench']:not([hidden]),
+.page[data-page='tasks']:not([hidden]),
+.page[data-page='favorites']:not([hidden]) {
 	display: flex;
 	flex-direction: column;
 	flex: 1;
 	min-height: 0;
+}
+
+/* 工作台底部 dock 自带上边距，去掉页内底 padding 让其贴底 */
+.page[data-page='workbench']:not([hidden]) {
 	padding-bottom: 0;
 }
 
@@ -176,116 +182,6 @@ body {
 .lib-add:hover {
 	background: var(--vscode-list-hoverBackground);
 	opacity: 1;
-}
-
-/* ---------- 单个素材库（Radix Collapsible） ---------- */
-.lib {
-	margin-bottom: var(--sp-1);
-}
-
-.lib-head {
-	display: flex;
-	align-items: center;
-	gap: var(--sp-2);
-	padding: 5px var(--sp-2);
-	cursor: pointer;
-	border-radius: var(--radius-sm);
-	font-size: var(--fs-body);
-	user-select: none;
-	transition: background var(--dur) var(--ease);
-}
-
-.lib-head:hover {
-	background: var(--vscode-list-hoverBackground);
-}
-
-.lib-caret {
-	width: 12px;
-	flex: 0 0 12px;
-	opacity: 0.6;
-	font-size: 11px;
-	transition: transform var(--dur) var(--ease);
-}
-
-.lib-caret[data-open='true'],
-.task-caret[data-open='true'] {
-	transform: rotate(90deg);
-}
-
-.lib-name {
-	flex: 1;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.lib-count {
-	font-size: var(--fs-sub);
-	opacity: 0.5;
-	font-variant-numeric: tabular-nums;
-}
-
-.lib-remove {
-	width: auto;
-	flex: 0 0 auto;
-	padding: 0 6px;
-	background: transparent;
-	color: var(--vscode-foreground);
-	opacity: 0;
-	font-size: 17px;
-	line-height: 1;
-	border-radius: var(--radius-sm);
-	transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease);
-}
-
-.lib-head:hover .lib-remove {
-	opacity: 0.55;
-}
-
-.lib-remove:hover {
-	background: var(--vscode-list-hoverBackground);
-	opacity: 1 !important;
-}
-
-/* Collapsible 内容展开/收起动画。
-   Radix 给 Content 元素加 data-state 并暴露 --radix-collapsible-content-height；
-   用 :not() 排除同样带 data-state 的 Trigger（.lib-head / .folder），只命中内容容器。 */
-.lib > [data-state]:not(.lib-head),
-.task > [data-state]:not(.folder) {
-	overflow: hidden;
-}
-
-.lib > [data-state='open']:not(.lib-head),
-.task > [data-state='open']:not(.folder) {
-	animation: collapsible-down var(--dur) var(--ease);
-}
-
-.lib > [data-state='closed']:not(.lib-head),
-.task > [data-state='closed']:not(.folder) {
-	animation: collapsible-up var(--dur) var(--ease);
-}
-
-@keyframes collapsible-down {
-	from {
-		height: 0;
-	}
-	to {
-		height: var(--radix-collapsible-content-height);
-	}
-}
-
-@keyframes collapsible-up {
-	from {
-		height: var(--radix-collapsible-content-height);
-	}
-	to {
-		height: 0;
-	}
-}
-
-.lib .thumbs {
-	padding: var(--sp-1) var(--sp-2) var(--sp-2);
 }
 
 /* ---------- 工作台底部操作条 ---------- */
@@ -700,63 +596,19 @@ button.secondary {
 	line-height: 1.6;
 }
 
-/* ---------- 任务卡片 ---------- */
-.task {
-	margin-bottom: var(--sp-3);
-}
-
-.task .folder {
-	font-size: var(--fs-body);
-	opacity: 0.7;
-	margin-bottom: var(--sp-1);
-	cursor: pointer;
-	user-select: none;
-	display: flex;
-	align-items: center;
-	gap: var(--sp-2);
-	padding: 5px var(--sp-2);
-	border-radius: var(--radius-sm);
-	transition: background var(--dur) var(--ease), opacity var(--dur) var(--ease);
-}
-
-.task .folder:hover {
-	opacity: 1;
-	background: var(--vscode-list-hoverBackground);
-}
-
-.task-caret {
-	flex: 0 0 12px;
-	width: 12px;
-	font-size: 11px;
-	opacity: 0.6;
-	transition: transform var(--dur) var(--ease);
-}
-
-/* 任务标题占据左侧、过长省略；模型名与成功率靠右成组 */
-.task-name {
-	flex: 1;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.task-right {
-	margin-left: auto;
-	flex: 0 0 auto;
-	display: inline-flex;
-	align-items: center;
-	gap: var(--sp-2);
-	white-space: nowrap;
-}
+/* ---------- 任务详情 ---------- */
 .task-model {
 	opacity: 0.85;
 }
 
-/* 进行中任务：左侧高亮条 */
-.task.pending {
-	border-left: 2px solid var(--vscode-progressBar-background, var(--vscode-focusBorder));
-	padding-left: var(--sp-2);
-	margin-left: 1px;
+/* 选中任务详情顶部的元信息行（模型名 + 进度/成功率） */
+.task-detail-head {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-2);
+	font-size: var(--fs-sub);
+	opacity: 0.75;
+	margin-bottom: var(--sp-1);
 }
 
 .pending-hint {
@@ -935,17 +787,24 @@ button.secondary {
 
 .thumb-star {
 	position: absolute;
-	left: 2px;
 	top: 2px;
-	border: none;
-	background: rgba(0, 0, 0, 0.45);
+	right: 26px; /* 紧贴编辑按钮（.thumb-action right:2px 宽 20px）左侧，成对不遮图 */
+	display: none;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	line-height: 18px;
+	text-align: center;
+	border-radius: var(--radius-sm);
+	background: rgba(0, 0, 0, 0.6);
 	color: #ffd454;
-	border-radius: 4px;
+	border: none;
 	cursor: pointer;
-	line-height: 1;
-	padding: 1px 4px;
 }
-.thumb-star[data-on='false'] { color: #ddd; }
+.thumb-star[data-on='false'] { color: #fff; }
+/* 已收藏常显（让收藏态一眼可见），未收藏则仅 hover 时出现，避免平时盖图 */
+.thumb-star[data-on='true'],
+.thumb-wrap:hover .thumb-star { display: block; }
 .star-menu-backdrop { position: fixed; inset: 0; z-index: 50; }
 .star-menu {
 	position: fixed;
@@ -960,15 +819,92 @@ button.secondary {
 }
 .star-menu li { padding: 4px 12px; cursor: pointer; white-space: nowrap; }
 .star-menu li:hover { background: var(--vscode-menu-selectionBackground, #094771); }
-.fav-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 4px; }
-.fav-tab {
-	border: 1px solid var(--vscode-panel-border, #454545);
+/* ---------- 选择栏式页面（任务 / 收藏 / 素材库通用） ---------- */
+/* 选择栏：按 --cols 每行排列条目，超出自身上限时内部滚动，不挤占下方内容/生成区 */
+.picker-bar {
+	display: grid;
+	grid-template-columns: repeat(var(--cols, 2), 1fr);
+	gap: var(--sp-1);
+	flex: 0 0 auto;
+	max-height: 38%;
+	overflow-y: auto;
+}
+
+/* 单个条目：标题占主、次要信息（模型名等）靠右省略 */
+.picker-chip {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-1);
+	width: 100%;
+	min-width: 0;
+	text-align: left;
+	padding: 4px var(--sp-2);
+	border: 1px solid var(--field-border);
+	border-radius: var(--radius-sm);
 	background: transparent;
 	color: var(--vscode-foreground);
-	border-radius: 4px;
-	padding: 2px 8px;
+	font-size: var(--fs-sub);
+	font-weight: 400;
 	cursor: pointer;
 }
-.fav-tab[data-viewing='true'] { background: var(--vscode-list-activeSelectionBackground, #094771); }
-.fav-actions { display: flex; gap: 12px; padding: 4px 8px; }
+
+.picker-chip:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+.picker-chip[data-active='true'] {
+	background: var(--vscode-list-activeSelectionBackground, #094771);
+	color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+
+/* 进行中任务条目：左侧高亮条 */
+.picker-chip[data-pending='true'] {
+	border-left: 2px solid var(--vscode-progressBar-background, var(--vscode-focusBorder));
+}
+
+.chip-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chip-sub {
+	flex: 0 0 auto;
+	opacity: 0.6;
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+
+.chip-remove {
+	flex: 0 0 auto;
+	width: auto;
+	padding: 0 4px;
+	font-size: 15px;
+	line-height: 1;
+	background: transparent;
+	color: var(--vscode-foreground);
+	opacity: 0.5;
+}
+
+.chip-remove:hover {
+	background: var(--vscode-list-hoverBackground);
+	opacity: 1;
+}
+
+/* 每行张数多（cols≥3，由 React 打 data-compact）时选择栏窄，隐藏模型名等次要信息 */
+.picker-page[data-compact='true'] .chip-sub {
+	display: none;
+}
+
+/* 内容区：弹性填充剩余高度并内部滚动 */
+.picker-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	margin-top: var(--sp-2);
+}
+
+.fav-actions { display: flex; gap: 12px; padding: var(--sp-2) 0; flex-wrap: wrap; }
 .fav-actions .link[disabled] { opacity: 0.4; cursor: default; }

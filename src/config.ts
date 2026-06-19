@@ -48,6 +48,7 @@ const DEFAULTS: StoredConfig = {
 	concurrency: 1,
 	workbenchCols: 4,
 	tasksCols: 2,
+	favoritesCols: 2,
 	modelInjections: {},
 	editModel: 'nano-banana-2',
 	editAspectRatio: '3:4',

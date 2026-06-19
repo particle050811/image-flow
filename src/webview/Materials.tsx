@@ -1,73 +1,43 @@
-import { useState } from 'react';
-import * as Collapsible from '@radix-ui/react-collapsible';
 import type { WebviewLibrary, WebviewCollection } from './vscode';
 import { vscode } from './vscode';
-import { StarButton } from './StarButton';
+import { Thumb, openImageClick } from './Thumb';
+import { usePicker } from './usePicker';
 
-/** 单个素材库行：点击标题展开/收起，展开后按真实比例显示缩略图 */
-function LibRow({
+/** 选中素材库的缩略图网格：左键打开 / 右键插入引用 / 可拖入编辑区 */
+function LibThumbs({
 	lib,
 	collections,
-	open,
-	onToggle,
-	onRemove,
 }: {
 	lib: WebviewLibrary;
 	collections: WebviewCollection[];
-	open: boolean;
-	onToggle: () => void;
-	onRemove?: () => void;
 }) {
+	if (lib.images.length === 0) {
+		return <div className="empty">这个素材库没有图片。</div>;
+	}
 	return (
-		<Collapsible.Root className="lib" open={open} onOpenChange={onToggle}>
-			<Collapsible.Trigger asChild>
-				<div className="lib-head">
-					<span className="lib-caret" data-open={open}>
-						▸
-					</span>
-					<span className="lib-name">{lib.name}</span>
-					<span className="lib-count">{lib.images.length}</span>
-					{onRemove && (
-						<button
-							className="lib-remove"
-							title="移除素材库"
-							onClick={(e) => {
-								e.stopPropagation();
-								onRemove();
-							}}
-						>
-							×
-						</button>
-					)}
-				</div>
-			</Collapsible.Trigger>
-			<Collapsible.Content>
-				<div className="thumbs">
-					{lib.images.map((img) => (
-						<div className="thumb-wrap" key={img.uri}>
-							<img
-								src={img.src}
-								title={`${img.name}（左键打开 · 右键插入引用 · 可拖入编辑区）`}
-								draggable
-								onDragStart={(e) =>
-									e.dataTransfer.setData('application/x-imageflow-uri', img.uri)
-								}
-								onClick={() => vscode.postMessage({ type: 'openImage', uri: img.uri })}
-								onContextMenu={(e) => {
-									e.preventDefault();
-									vscode.postMessage({ type: 'insertImage', uri: img.uri });
-								}}
-							/>
-							<StarButton uri={img.uri} favorited={img.favorited} collections={collections} />
-						</div>
-					))}
-				</div>
-			</Collapsible.Content>
-		</Collapsible.Root>
+		<div className="thumbs">
+			{lib.images.map((img) => (
+				<Thumb
+					key={img.uri}
+					src={img.src}
+					title={`${img.name}（左键打开 · 右键插入引用 · 可拖入编辑区）`}
+					uri={img.uri}
+					draggable
+					onClick={openImageClick(img.uri)}
+					onContextMenu={(e) => {
+						e.preventDefault();
+						vscode.postMessage({ type: 'insertImage', uri: img.uri });
+					}}
+					collections={collections}
+					favorited={img.favorited}
+				/>
+			))}
+		</div>
 	);
 }
 
-/** 素材库区：上段为随当前 Markdown 路径自动生成的库，下段为手动添加的库 */
+/** 素材库区：上段为随当前 Markdown 路径自动生成的库，下段为手动添加的库。
+ *  选择栏式——点库名切换，下方固定区显示该库缩略图（替代逐库手风琴展开）。 */
 export function Materials({
 	autoLibraries,
 	libraries,
@@ -83,15 +53,13 @@ export function Materials({
 	onAdd: () => void;
 	onRemove: (folder: string) => void;
 }) {
-	// 已展开的库（folder 集合），默认全部收起
-	const [expanded, setExpanded] = useState<Set<string>>(new Set());
-
-	const toggle = (folder: string) =>
-		setExpanded((prev) => {
-			const next = new Set(prev);
-			next.has(folder) ? next.delete(folder) : next.add(folder);
-			return next;
-		});
+	// 选中库的 key：auto:<folder> / manual:<folder>，跨两组唯一
+	const items = [
+		...autoLibraries.map((lib) => ({ key: `auto:${lib.folder}`, lib })),
+		...libraries.map((lib) => ({ key: `manual:${lib.folder}`, lib })),
+	];
+	// 选中失效（切换 MD、移除库）回落到第一个库
+	const { current, setSelected } = usePicker(items, (i) => i.key);
 
 	return (
 		<div className="materials" style={{ ['--cols' as string]: cols }}>
@@ -101,15 +69,19 @@ export function Materials({
 			{autoLibraries.length === 0 ? (
 				<div className="empty">打开 Markdown 后自动加载所在路径各层目录的图片。</div>
 			) : (
-				autoLibraries.map((lib) => (
-					<LibRow
-						key={lib.folder}
-						lib={lib}
-						collections={collections}
-						open={expanded.has(`auto:${lib.folder}`)}
-						onToggle={() => toggle(`auto:${lib.folder}`)}
-					/>
-				))
+				<div className="picker-bar">
+					{autoLibraries.map((lib) => (
+						<button
+							key={lib.folder}
+							className="picker-chip"
+							data-active={current?.key === `auto:${lib.folder}`}
+							onClick={() => setSelected(`auto:${lib.folder}`)}
+						>
+							<span className="chip-name">{lib.name}</span>
+							<span className="chip-sub">{lib.images.length}</span>
+						</button>
+					))}
+				</div>
 			)}
 
 			<div className="materials-head">
@@ -121,17 +93,32 @@ export function Materials({
 			{libraries.length === 0 ? (
 				<div className="empty">还没有素材库，点击「添加」选择文件夹。</div>
 			) : (
-				libraries.map((lib) => (
-					<LibRow
-						key={lib.folder}
-						lib={lib}
-						collections={collections}
-						open={expanded.has(`manual:${lib.folder}`)}
-						onToggle={() => toggle(`manual:${lib.folder}`)}
-						onRemove={() => onRemove(lib.folder)}
-					/>
-				))
+				<div className="picker-bar">
+					{libraries.map((lib) => (
+						<button
+							key={lib.folder}
+							className="picker-chip"
+							data-active={current?.key === `manual:${lib.folder}`}
+							onClick={() => setSelected(`manual:${lib.folder}`)}
+						>
+							<span className="chip-name">{lib.name}</span>
+							<span className="chip-sub">{lib.images.length}</span>
+							<span
+								className="chip-remove"
+								title="移除素材库"
+								onClick={(e) => {
+									e.stopPropagation();
+									onRemove(lib.folder);
+								}}
+							>
+								×
+							</span>
+						</button>
+					))}
+				</div>
 			)}
+
+			{current && <LibThumbs lib={current.lib} collections={collections} />}
 		</div>
 	);
 }

@@ -12,6 +12,7 @@ export type {
 	WebviewPendingTask,
 	WebviewLibrary,
 	PromptTemplate,
+	StatusState,
 	WebviewEditImage,
 	InboundMessage,
 	OutboundMessage,

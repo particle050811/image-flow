@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { workspaceRoot } from './storage';
-import type { FavoritesData, FavoriteCollection } from './shared';
+import type { FavoritesData, FavoriteCollection, FavoriteItem } from './shared';
 
-/** 默认收藏夹固定 id：不可删、各处回落目标 */
+/** 初始默认收藏夹的固定 id（全新用户的第一个夹、删除时的优先归并目标）。可被删除，不再是不可删锚点 */
 export const DEFAULT_COLLECTION_ID = 'c_default';
 
 /** 全新/空收藏：仅含一个默认夹且为当前 */
@@ -14,29 +14,69 @@ export function emptyFavorites(now: number): FavoritesData {
 	};
 }
 
+/** 规整一条收藏项：缺 uri 视为坏数据（由调用方过滤掉），note/addedAt 补默认 */
+function normalizeItem(raw: unknown, now: number): FavoriteItem | undefined {
+	if (!raw || typeof raw !== 'object') {
+		return undefined;
+	}
+	const i = raw as Record<string, unknown>;
+	const uri = typeof i.uri === 'string' ? i.uri : typeof i.path === 'string' ? i.path : '';
+	if (!uri) {
+		return undefined;
+	}
+	return {
+		uri,
+		note: typeof i.note === 'string' ? i.note : undefined,
+		addedAt: typeof i.addedAt === 'number' ? i.addedAt : now,
+	};
+}
+
+/** 规整一个收藏夹：缺 id 视为坏数据（由调用方过滤掉），name/createdAt 补默认，items 逐项规整 */
+function normalizeCollection(raw: unknown, now: number): FavoriteCollection | undefined {
+	if (!raw || typeof raw !== 'object') {
+		return undefined;
+	}
+	const c = raw as Record<string, unknown>;
+	if (typeof c.id !== 'string' || !c.id) {
+		return undefined;
+	}
+	return {
+		id: c.id,
+		name: typeof c.name === 'string' && c.name ? c.name : '未命名',
+		createdAt: typeof c.createdAt === 'number' ? c.createdAt : now,
+		items: (Array.isArray(c.items) ? c.items : [])
+			.map((i) => normalizeItem(i, now))
+			.filter((i): i is FavoriteItem => i !== undefined),
+	};
+}
+
 /** 把任意读到的内容规整为 v2；旧版 {items:[...]} 包成默认夹，坏数据回落空收藏 */
 export function migrateFavorites(raw: unknown, now: number): FavoritesData {
 	if (raw && typeof raw === 'object') {
 		const obj = raw as Record<string, unknown>;
 		if (obj.version === 2 && Array.isArray(obj.collections)) {
-			const base = emptyFavorites(now);
+			// 逐项规整：手改 json / 跨版本可能留下缺 id、items 非数组等半坏数据，不能强转后直接遍历
+			const collections = obj.collections
+				.map((c) => normalizeCollection(c, now))
+				.filter((c): c is FavoriteCollection => c !== undefined);
 			const data: FavoritesData = {
 				version: 2,
 				activeCollectionId: typeof obj.activeCollectionId === 'string'
 					? obj.activeCollectionId
 					: DEFAULT_COLLECTION_ID,
-				collections: obj.collections as FavoriteCollection[],
+				collections,
 			};
-			if (!data.collections.some((c) => c.id === DEFAULT_COLLECTION_ID)) {
-				data.collections.unshift(base.collections[0]);
+			// 只保证"至少有一个夹"：全被过滤光了才补一个默认夹；不强行恢复用户已删的默认夹
+			if (data.collections.length === 0) {
+				data.collections.push(emptyFavorites(now).collections[0]);
 			}
 			return setActiveCollection(data, data.activeCollectionId);
 		}
 		if (Array.isArray(obj.items)) {
 			const d = emptyFavorites(now);
-			d.collections[0].items = (obj.items as { path?: string; uri?: string; note?: string; addedAt?: number }[])
-				.map((i) => ({ uri: i.uri ?? i.path ?? '', note: i.note, addedAt: i.addedAt ?? now }))
-				.filter((i) => i.uri);
+			d.collections[0].items = obj.items
+				.map((i) => normalizeItem(i, now))
+				.filter((i): i is FavoriteItem => i !== undefined);
 			return d;
 		}
 	}
@@ -62,11 +102,11 @@ function removeUri(data: FavoritesData, uri: string): FavoritesData {
 	};
 }
 
-/** 解析有效的当前夹 id；不存在则默认 */
+/** 解析有效的当前夹 id；失效时回落到第一个存在的夹（默认夹可能已被删，故不能固定回落 c_default） */
 function resolveActive(data: FavoritesData): string {
 	return data.collections.some((c) => c.id === data.activeCollectionId)
 		? data.activeCollectionId
-		: DEFAULT_COLLECTION_ID;
+		: data.collections[0]?.id ?? DEFAULT_COLLECTION_ID;
 }
 
 /** 左键：已收藏则取消（从所有夹移除），否则加入当前夹 */
@@ -110,9 +150,22 @@ export function renameCollection(data: FavoritesData, id: string, name: string):
 	};
 }
 
-/** 删除夹：拒删默认夹；moveToDefault 时把图并入默认夹；删当前夹则当前回落默认 */
+/**
+ * 删除 victimId 后，剩余夹中的归并目标 id：优先默认夹，否则剩余第一个夹。
+ * provider 的删除确认弹窗（取目标夹名做标签）与 deleteCollection（实际归并）共用，保证两处一致。
+ * 前提：删除后至少还剩一个夹（调用方已保证），故 rest[0] 必存在。
+ */
+export function mergeTargetId(collections: FavoriteCollection[], victimId: string): string {
+	const rest = collections.filter((c) => c.id !== victimId);
+	return rest.some((c) => c.id === DEFAULT_COLLECTION_ID) ? DEFAULT_COLLECTION_ID : rest[0].id;
+}
+
+/**
+ * 删除夹：至少保留一个夹（只剩一个时拒删）；moveToDefault 时把图并入归并目标
+ * （优先剩余的默认夹，删的就是默认夹/无默认夹时落到剩余第一个夹）；删当前夹则当前回落第一个夹。
+ */
 export function deleteCollection(data: FavoritesData, id: string, moveToDefault: boolean): FavoritesData {
-	if (id === DEFAULT_COLLECTION_ID) {
+	if (data.collections.length <= 1) {
 		return data;
 	}
 	const victim = data.collections.find((c) => c.id === id);
@@ -121,19 +174,20 @@ export function deleteCollection(data: FavoritesData, id: string, moveToDefault:
 	}
 	let collections = data.collections.filter((c) => c.id !== id);
 	if (moveToDefault && victim.items.length) {
+		const targetId = mergeTargetId(data.collections, id);
 		collections = collections.map((c) =>
-			c.id === DEFAULT_COLLECTION_ID
+			c.id === targetId
 				? { ...c, items: [...c.items, ...victim.items.filter((vi) => !c.items.some((i) => i.uri === vi.uri))] }
 				: c
 		);
 	}
-	const activeCollectionId = data.activeCollectionId === id ? DEFAULT_COLLECTION_ID : data.activeCollectionId;
-	return { ...data, collections, activeCollectionId };
+	const next = { ...data, collections };
+	return data.activeCollectionId === id ? setActiveCollection(next, collections[0].id) : next;
 }
 
-/** 设为当前夹：不存在的 id 回落默认 */
+/** 设为当前夹：不存在的 id 回落到第一个存在的夹 */
 export function setActiveCollection(data: FavoritesData, id: string): FavoritesData {
-	return { ...data, activeCollectionId: data.collections.some((c) => c.id === id) ? id : DEFAULT_COLLECTION_ID };
+	return { ...data, activeCollectionId: data.collections.some((c) => c.id === id) ? id : resolveActive(data) };
 }
 
 /** 导出重名去重：a.png 占用则 a-1.png、a-2.png… */
@@ -171,12 +225,13 @@ export async function readFavorites(): Promise<FavoritesData> {
 	}
 }
 
-// 写串行链：连续 mutate 排队执行，避免并发读-改-写丢更新
-let writeChain: Promise<FavoritesData> = Promise.resolve(emptyFavorites(Date.now()));
+// 写串行链：连续 mutate 排队执行，避免并发读-改-写丢更新。
+// 链本身始终保持 resolved（末尾 catch 兜底），单次 IO 失败不会毒化后续写入。
+let writeChain: Promise<unknown> = Promise.resolve();
 
-/** 串行地读 → 应用变换 → 写回，返回写入后的最新数据 */
+/** 串行地读 → 应用变换 → 写回，返回写入后的最新数据；本次写失败会 reject 给调用方，但不阻断后续 mutate */
 export function mutateFavorites(fn: (d: FavoritesData) => FavoritesData): Promise<FavoritesData> {
-	writeChain = writeChain.then(async () => {
+	const run = async (): Promise<FavoritesData> => {
 		const file = favoritesFile();
 		const next = fn(await readFavorites());
 		if (file) {
@@ -186,8 +241,11 @@ export function mutateFavorites(fn: (d: FavoritesData) => FavoritesData): Promis
 			);
 		}
 		return next;
-	});
-	return writeChain;
+	};
+	// .then(run, run)：无论上一次成功或失败都接着执行本次；writeChain 用 catch 收尾保证恒 resolved
+	const result = writeChain.then(run, run);
+	writeChain = result.catch(() => undefined);
+	return result;
 }
 
 /** 悬空过滤（仅用于展示，不改盘）：去掉文件已不存在的收藏项 */

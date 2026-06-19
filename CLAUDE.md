@@ -49,6 +49,8 @@ API 调用封装在 `src/api.ts`（`submitGeneration` / `queryResult`），Markd
 
 编辑链路的模块分工：`src/editSession.ts`（编辑区图片列表，主进程持有、统一存 data URI，webview 重建不丢）、`src/edit.ts`（`buildEditPrompt` 按编辑区顺序把 `![](文件名)` 替换为 `[imageN]`；`buildEditFinalPrompt` 再拼编辑模型注入句，提交与预览共用、不拼 IMAGES.md）、`src/prompts.ts`（扫描 `.image-flow/prompts/` 下的 `.md` 模板）、`src/refs.ts`（前后端共用的引用片段纯函数，禁止引入 vscode/node 模块）。编辑页参数（模型/比例/分辨率/并发）经 `editConfigView`（`src/config.ts`）覆盖主参数后走同一套 api 层。
 
+收藏链路：收藏数据落工作区根 `.image-flow/favorites.json`（`collections[]` + 顶层 `activeCollectionId`，绝对 file Uri 字符串，不进 vscode state、天然按工作区隔离）。`src/favorites.ts` 分两层——无副作用纯逻辑（`migrateFavorites`/`toggleFavorite`/`moveFavorite`/分组 CRUD/`favoriteUriSet`/`dedupeName`，在 `logic.test.ts` 直测）与 IO（`readFavorites`/串行化 `mutateFavorites` 防连点丢更新/`pruneMissing` 悬空过滤）。`SidebarProvider` 构造各 webview 视图时给 `WebviewImage` 打 `favorited` 标记下发（前端只读不比对），收藏变更后经 `pushAfterFavoritesChange` 重推带星标的列表，`exportCollection` 用 `showOpenDialog` 选目录后只复制图片、重名追加序号。前端 `StarButton.tsx`（左键 toggle 进当前夹、右键菜单移动到指定夹）叠加在任务/素材缩略图上，`Favorites.tsx` 是独立「收藏」标签页（收藏夹栏切换浏览 + 显式「设为当前」+ 新建/重命名/删除 + 一键导出）。
+
 ## 代码约定
 
 ESLint（`eslint.config.mjs`，flat config，作用于 `**/*.{ts,tsx}`）强制：`curly`、`eqeqeq`、`no-throw-literal`、`semi` 均为 warn；import 命名须为 camelCase 或 PascalCase。lint 是 `compile`/`package` 的前置步骤，不要留 warning。

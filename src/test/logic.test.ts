@@ -37,6 +37,7 @@ const baseConfig: ImageFlowConfig = {
 	concurrency: 1,
 	workbenchCols: 4,
 	tasksCols: 2,
+	favoritesCols: 2,
 	modelInjections: {},
 	editModel: 'gpt-image-2',
 	editAspectRatio: '16:9',
@@ -423,6 +424,25 @@ suite('favorites', () => {
 		assert.strictEqual(migrateFavorites('garbage', now).collections.length, 1);
 	});
 
+	test('migrateFavorites v2 半坏数据：丢弃无 id 的夹、items 非数组置空、丢弃无 uri 的项', () => {
+		const raw = {
+			version: 2,
+			activeCollectionId: DEFAULT_COLLECTION_ID,
+			collections: [
+				{ id: DEFAULT_COLLECTION_ID, name: '默认收藏', createdAt: 1, items: 'oops' },
+				{ name: '无id', items: [] },
+				{ id: 'c_x', name: 'X', items: [{ uri: u('a') }, { note: '无uri' }] },
+			],
+		};
+		const d = migrateFavorites(raw, now);
+		assert.strictEqual(d.collections.length, 2); // 无 id 的夹被丢弃
+		const def = d.collections.find((c) => c.id === DEFAULT_COLLECTION_ID)!;
+		assert.deepStrictEqual(def.items, []); // items 非数组 → []
+		const cx = d.collections.find((c) => c.id === 'c_x')!;
+		assert.strictEqual(cx.items.length, 1); // 无 uri 的项被丢弃
+		assert.strictEqual(cx.items[0].addedAt, now); // addedAt 缺失补默认
+	});
+
 	test('toggleFavorite 未收藏则加入当前夹', () => {
 		const d = toggleFavorite(emptyFavorites(now), u('a'), now);
 		assert.ok(favoriteUriSet(d).has(u('a')));
@@ -462,9 +482,16 @@ suite('favorites', () => {
 		assert.strictEqual(d.collections[1].name, 'B');
 	});
 
-	test('deleteCollection 拒删默认夹', () => {
+	test('deleteCollection 只剩一个夹时拒删', () => {
 		const d = deleteCollection(emptyFavorites(now), DEFAULT_COLLECTION_ID, false);
 		assert.strictEqual(d.collections.length, 1);
+	});
+
+	test('deleteCollection 仍有其它夹时可删默认夹', () => {
+		let d = createCollection(emptyFavorites(now), 'A', now);
+		d = deleteCollection(d, DEFAULT_COLLECTION_ID, false);
+		assert.strictEqual(d.collections.length, 1);
+		assert.ok(!d.collections.some((c) => c.id === DEFAULT_COLLECTION_ID));
 	});
 
 	test('deleteCollection moveToDefault 把图并入默认夹', () => {
@@ -476,7 +503,16 @@ suite('favorites', () => {
 		assert.strictEqual(d.collections[0].items.length, 1);
 	});
 
-	test('deleteCollection 删当前夹后当前回落默认', () => {
+	test('deleteCollection 删默认夹时图并入剩余第一个夹', () => {
+		let d = createCollection(emptyFavorites(now), 'A', now);
+		d = toggleFavorite(d, u('a'), now); // 进默认夹
+		d = deleteCollection(d, DEFAULT_COLLECTION_ID, true);
+		assert.strictEqual(d.collections.length, 1);
+		assert.strictEqual(d.collections[0].name, 'A');
+		assert.strictEqual(d.collections[0].items.length, 1);
+	});
+
+	test('deleteCollection 删当前夹后当前回落剩余第一个夹', () => {
 		let d = createCollection(emptyFavorites(now), 'A', now);
 		const id = d.collections[1].id;
 		d = setActiveCollection(d, id);
@@ -484,9 +520,21 @@ suite('favorites', () => {
 		assert.strictEqual(d.activeCollectionId, DEFAULT_COLLECTION_ID);
 	});
 
-	test('setActiveCollection 不存在的 id 回落默认', () => {
+	test('setActiveCollection 不存在的 id 回落第一个夹', () => {
 		const d = setActiveCollection(emptyFavorites(now), 'c_nope');
 		assert.strictEqual(d.activeCollectionId, DEFAULT_COLLECTION_ID);
+	});
+
+	test('migrateFavorites v2 缺默认夹不强行恢复（尊重用户删除）', () => {
+		const raw = {
+			version: 2,
+			activeCollectionId: 'c_x',
+			collections: [{ id: 'c_x', name: 'X', createdAt: 1, items: [] }],
+		};
+		const d = migrateFavorites(raw, now);
+		assert.strictEqual(d.collections.length, 1);
+		assert.ok(!d.collections.some((c) => c.id === DEFAULT_COLLECTION_ID));
+		assert.strictEqual(d.activeCollectionId, 'c_x');
 	});
 
 	test('dedupeName 重名追加序号', () => {
