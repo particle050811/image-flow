@@ -13,11 +13,13 @@ export function Workbench({
 	autoLibraries,
 	collections,
 	cols,
+	tabCols,
 	onChange,
 	onGenerate,
 	onPreview,
 	onAddLibrary,
 	onRemoveLibrary,
+	onSendToEdit,
 }: {
 	hidden: boolean;
 	config: Config;
@@ -29,11 +31,13 @@ export function Workbench({
 	autoLibraries: WebviewLibrary[];
 	collections: WebviewCollection[];
 	cols: number;
+	tabCols: number;
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
 	onGenerate: () => void;
 	onPreview: () => void;
 	onAddLibrary: () => void;
 	onRemoveLibrary: (folder: string) => void;
+	onSendToEdit: (uri: string) => void;
 }) {
 	return (
 		<div className="page" data-page="workbench" hidden={hidden}>
@@ -43,8 +47,10 @@ export function Workbench({
 					libraries={libraries}
 					collections={collections}
 					cols={cols}
+					tabCols={tabCols}
 					onAdd={onAddLibrary}
 					onRemove={onRemoveLibrary}
+					onSendToEdit={onSendToEdit}
 				/>
 			</div>
 

@@ -24,6 +24,7 @@ import {
 	mergeTargetId,
 	setActiveCollection,
 	dedupeName,
+	collectionNameError,
 } from './favorites';
 import {
 	getLibraryFolders,
@@ -245,6 +246,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				const name = await vscode.window.showInputBox({
 					prompt: '新收藏夹名称',
 					placeHolder: '例如：产品主图',
+					validateInput: collectionNameError,
 				});
 				if (name?.trim()) {
 					await mutateFavorites((d) => createCollection(d, name, Date.now()));
@@ -257,7 +259,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				if (!col) {
 					break;
 				}
-				const name = await vscode.window.showInputBox({ prompt: '重命名收藏夹', value: col.name });
+				const name = await vscode.window.showInputBox({
+					prompt: '重命名收藏夹',
+					value: col.name,
+					validateInput: collectionNameError,
+				});
 				if (name?.trim() && name.trim() !== col.name) {
 					await mutateFavorites((d) => renameCollection(d, msg.id, name));
 					await this.pushFavorites();
@@ -329,12 +335,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			canSelectFiles: false,
 			canSelectFolders: true,
 			canSelectMany: false,
-			openLabel: '导出到此文件夹',
+			openLabel: '在此处新建收藏夹文件夹',
 		});
 		if (!picked?.length) {
 			return;
 		}
-		const dest = picked[0];
+		// 在所选目录下新建以收藏夹命名的子文件夹（清洗 Windows 非法字符），图片导出其中
+		const safeName = col.name.replace(/[\\/:*?"<>|]/g, '_').trim() || '收藏夹';
+		const dest = vscode.Uri.joinPath(picked[0], safeName);
+		await vscode.workspace.fs.createDirectory(dest);
 		const used = new Set<string>();
 		let ok = 0;
 		let skipped = 0;

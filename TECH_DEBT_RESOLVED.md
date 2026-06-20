@@ -4,10 +4,24 @@
 
 ## 轮次记录
 
+- **2026-06-19 第四轮（聚焦：前端重复造轮子 + 大文件拆分）**：新增 F052–F057。F052/F053/F054/F055/F057 当轮重构去重（commit 35eecc5）——抽出 `src/webview/Thumb.tsx`、`usePicker.ts`、`useCooldown.ts` 与 `src/toWebview.ts`，重复块全部收敛为单一来源。F056（god 文件）下沉图转换簇令 `sidebarProvider.ts` 726→663，收藏夹 CRUD 簇评估后有意保留，663 行经维护者决策接受、结案。`compile` + 收藏单测全绿，过代码审核（ready to merge）。
 - **2026-06-11 F051/F042② 实装**：真缩略图上线（新增 `src/thumbs.ts` 与 `src/webview/thumbs.ts`），顺路完成 F042 第②步，整项 F042 终结。`npm test`（55 项）全绿。
 - **2026-06-11 第三轮**：复核 F001–F031 全部成立；F032 因毫秒时间戳自然解决；新增 F039–F049，其中 F039–F041/F043–F047/F049 当轮修复（commit fc21dcd），F042 完成第①步。`compile`/`npm test`（52 项）全绿，已过代码审核（ready to merge）。
 - **2026-06-09 第二轮**：新增 F023–F038；F023–F028/F030/F031 当轮修复，F029 部分修复（npm audit fix 修掉 glob 高危）。抽出纯函数 isTaskActive/aggregateProgress/replaceImageRefs/isImageFileName，logic.test.ts 25→35 项。
 - **2026-06-08 首轮**：F001–F022 全部修复。新增 `src/images.ts`、`src/paths.ts`、`src/test/logic.test.ts`，删除一次性迁移代码 `migrateLegacySettings`，补测试时抓出并修掉尖括号正则截断 bug（F009）。
+
+## 第四轮已修（2026-06-19，commit 35eecc5）
+
+聚焦"前端有没有重复造轮子 + 单文件是否过大"。重复确为净增约 90 行的纯重构（抽象固定成本 > 小库里 2–4 个调用点省下的重复），但重复块均收敛为单一来源；维护者复核后决定全部保留。
+
+| ID | Status | Category | File:Line | Sev | Effort | Description | 修复 |
+|----|--------|----------|-----------|-----|--------|-------------|------|
+| F052 | ✅RESOLVED | Architecture (duplication) | Tasks/Materials/Favorites/Edit.tsx | Medium | M | 缩略图项 `thumb-wrap`+`<img>`+`StarButton` 在 4 个组件各写一份，差异仅在角标动作与 drag/contextMenu。 | 抽 `src/webview/Thumb.tsx` 的 `<Thumb>`（draggable/onClick/onContextMenu/star/children 可选 props），4 处复用；拖拽串 `application/x-imageflow-uri` 由 2 处→1 处。className/key/title 全保持，行为等价（已审核）。 |
+| F053 | ✅RESOLVED | Architecture (duplication) | Tasks/Materials/Favorites.tsx | Medium | M | "选择栏失效回落第一项"`find(k)??items[0]` 在 3 处复刻。 | 抽 `src/webview/usePicker.ts`，初值经 initialKey 表达（Favorites=activeCollectionId，余为 null）；回落逻辑由 3 处→1 处。 |
+| F054 | ✅RESOLVED | Consistency (duplication) | App.tsx / Edit.tsx | Low | S | 0.5s 防连点冷却 `setTimeout(…,500)` 两份。 | 抽 `src/webview/useCooldown.ts` 返回 `[cooling, trigger]`；保留 App 的 `busy||genCooling` 与 Edit 的 `if(busy||cooling)return` 语义，未触碰 switchTab 闭包护栏。 |
+| F055 | ✅RESOLVED | Type debt | App/Workbench/Edit.tsx | Low | S | 状态形状 `{text,error}` 在 3 文件内联声明，绕过 shared.ts 单点定义。 | shared.ts 新增 `StatusState`，经 webview/vscode.ts re-export，3 处引用。 |
+| F056 | ✅可接受 | Architecture (god file) | src/sidebarProvider.ts | Medium | M | 726 行 god 文件：生命周期 + 消息路由 + 收藏夹 CRUD + 导出 + 图转换 + HTML。 | 图转换簇（5 函数）下沉 `src/toWebview.ts` 纯函数（726→663）。收藏夹 CRUD 簇评估后保留——抽出需传 3–4 个回调，耦合得不偿失；663 行对 webview 宿主属常见体量，维护者决策接受、不再拆。 |
+| F057 | ✅RESOLVED | Architecture (duplication) | sidebarProvider.ts / favorites.ts | Low | S | 删收藏夹"归并目标"（剩余夹优先默认夹否则第一个）在弹窗标签与实际删除两处各算一遍，易漂移。 | favorites.ts 导出 `mergeTargetId(collections, victimId)`，`deleteCollection` 与 provider 弹窗共用。 |
 
 ## F051/F042② 已修（2026-06-11）
 

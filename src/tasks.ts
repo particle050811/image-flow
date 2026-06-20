@@ -31,10 +31,14 @@ interface StartOptions {
 
 /** globalState 中存放未完成任务的键 */
 const PENDING_KEY = 'image-flow.pendingTasks';
-/** 轮询间隔（ms） */
-const POLL_INTERVAL = 4000;
+/** 轮询间隔（ms）：前 10 分钟快轮询 */
+const POLL_INTERVAL_FAST = 4000;
+/** 轮询间隔（ms）：运行超过 10 分钟后降到 30s，减少远端压力与本地开销 */
+const POLL_INTERVAL_SLOW = 30 * 1000;
+/** 切到慢轮询的阈值（ms）：任务运行超过此时长即降速 */
+const SLOW_AFTER = 10 * 60 * 1000;
 /** 单个任务超时兜底（ms）：超过则把仍 running 的 job 标记失败，避免僵死记录永不清除 */
-const TASK_TIMEOUT = 10 * 60 * 1000;
+const TASK_TIMEOUT = 30 * 60 * 1000;
 
 /**
  * 是否为可重试的网络瞬时错误。
@@ -86,6 +90,8 @@ export function aggregateProgress(jobs: PendingJob[]): number {
 export class TaskManager {
 	private tasks: PendingTask[] = [];
 	private timer?: ReturnType<typeof setInterval>;
+	/** 当前定时器的间隔（ms），用于判断是否需要在快/慢轮询间切换重建定时器 */
+	private timerInterval?: number;
 	private listeners = new Set<() => void>();
 	/** 轮询重入锁：一轮 poll 的下载可能超过定时器间隔，禁止并发轮询，否则同任务多 job 共享 images.length 计数会下成同名图互相覆盖 */
 	private polling = false;
@@ -136,15 +142,32 @@ export class TaskManager {
 		}
 	}
 
-	/** 有可轮询的 running job 时确保轮询定时器在跑；无则停掉（submitting 态尚无 id，不轮询） */
+	/**
+	 * 有可轮询的 running job 时确保轮询定时器在跑；无则停掉（submitting 态尚无 id，不轮询）。
+	 * 轮询间隔随任务运行时长动态调整：任一 running 任务运行未满 10 分钟则快轮询（4s），
+	 * 全部超过 10 分钟则降到慢轮询（30s）。每轮 poll 后都会重新评估，以便在 10 分钟阈值处切换。
+	 */
 	private ensureTimer(): void {
-		const hasRunning = this.tasks.some((t) => t.jobs.some((j) => j.status === 'running'));
-		if (hasRunning && !this.timer) {
-			this.timer = setInterval(() => void this.poll(), POLL_INTERVAL);
-		} else if (!hasRunning && this.timer) {
-			clearInterval(this.timer);
-			this.timer = undefined;
+		const running = this.tasks.filter((t) => t.jobs.some((j) => j.status === 'running'));
+		if (!running.length) {
+			if (this.timer) {
+				clearInterval(this.timer);
+				this.timer = undefined;
+				this.timerInterval = undefined;
+			}
+			return;
 		}
+		const now = Date.now();
+		const wantFast = running.some((t) => now - t.createdAt < SLOW_AFTER);
+		const interval = wantFast ? POLL_INTERVAL_FAST : POLL_INTERVAL_SLOW;
+		if (this.timer && this.timerInterval === interval) {
+			return;
+		}
+		if (this.timer) {
+			clearInterval(this.timer);
+		}
+		this.timerInterval = interval;
+		this.timer = setInterval(() => void this.poll(), interval);
 	}
 
 	/**
@@ -310,7 +333,7 @@ export class TaskManager {
 	/** 扩展启动时调用：若有持久化的未完成任务，立即拉一次并启动定时轮询 */
 	resume(): void {
 		if (this.tasks.length) {
-			// 超时基于「本次会话起算」而非创建时间：关机时长不计入，否则离线超 10 分钟的可恢复任务会被误判超时丢弃
+			// 超时基于「本次会话起算」而非创建时间：关机时长不计入，否则离线超 30 分钟的可恢复任务会被误判超时丢弃
 			const now = Date.now();
 			for (const task of this.tasks) {
 				// 旧版持久化记录无 startedAt：用其原 createdAt（重置前的真实提交时间）兜底回填
@@ -396,9 +419,10 @@ export class TaskManager {
 
 		if (changed) {
 			await this.persist();
-			this.ensureTimer();
 			this.emit();
 		}
+		// 无论本轮是否有状态变更，都重新评估定时器，以便运行满 10 分钟时从快轮询切到慢轮询
+		this.ensureTimer();
 	}
 
 	/** 任务终结时：若有图成功则不打扰；若全失败/部分失败，弹通知呈现错误 */
@@ -449,6 +473,7 @@ export class TaskManager {
 		if (this.timer) {
 			clearInterval(this.timer);
 			this.timer = undefined;
+			this.timerInterval = undefined;
 		}
 		this.listeners.clear();
 	}

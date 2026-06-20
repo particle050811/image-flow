@@ -49,6 +49,9 @@ const DEFAULTS: StoredConfig = {
 	workbenchCols: 4,
 	tasksCols: 2,
 	favoritesCols: 2,
+	workbenchTabCols: 4,
+	tasksTabCols: 2,
+	favoritesTabCols: 2,
 	modelInjections: {},
 	editModel: 'nano-banana-2',
 	editAspectRatio: '3:4',
@@ -56,6 +59,7 @@ const DEFAULTS: StoredConfig = {
 	editConcurrency: 1,
 	namingModel: 'gemini-3.1-flash-lite',
 	autoName: true,
+	showThumbActions: true,
 };
 
 /** 读取完整配置：非敏感项来自 globalState，apiKey 来自加密的 secrets */

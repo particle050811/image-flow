@@ -164,6 +164,8 @@ export function App() {
 	return (
 		<Tabs.Root
 			className="tabs-root"
+			// 控制缩略图 ⭐/✎ 按钮是否常驻：'true' 常显，'false' 仅 hover（CSS 据此切换）
+			data-show-thumb-actions={config.showThumbActions ? 'true' : 'false'}
 			value={tab}
 			onValueChange={(v) => switchTab(v as TabId)}
 		>
@@ -196,11 +198,13 @@ export function App() {
 					autoLibraries={autoLibraries}
 					collections={collections}
 					cols={config.workbenchCols}
+					tabCols={config.workbenchTabCols}
 					onChange={saveField}
 					onGenerate={generate}
 					onPreview={previewRequest}
 					onAddLibrary={addLibrary}
 					onRemoveLibrary={removeLibrary}
+					onSendToEdit={sendToEdit}
 				/>
 			</Tabs.Content>
 			<Tabs.Content value="edit" forceMount className="tabpanel">
@@ -223,6 +227,7 @@ export function App() {
 					pendingTasks={pendingTasks}
 					collections={collections}
 					cols={config.tasksCols}
+					tabCols={config.tasksTabCols}
 					onSendToEdit={sendToEdit}
 				/>
 			</Tabs.Content>
@@ -232,6 +237,8 @@ export function App() {
 					collections={collections}
 					activeCollectionId={activeCollectionId}
 					cols={config.favoritesCols}
+					tabCols={config.favoritesTabCols}
+					onSendToEdit={sendToEdit}
 				/>
 			</Tabs.Content>
 			<Tabs.Content value="api" forceMount className="tabpanel">

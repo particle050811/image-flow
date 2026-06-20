@@ -10,12 +10,18 @@ export interface ImageFlowConfig {
 	aspectRatio: string;
 	imageSize: string;
 	concurrency: number;
-	/** 工作台素材库每行显示几张 */
+	/** 工作台素材库图片每行显示几张 */
 	workbenchCols: number;
-	/** 任务栏每行显示几张 */
+	/** 任务栏图片每行显示几张 */
 	tasksCols: number;
-	/** 收藏页每行显示几张 */
+	/** 收藏页图片每行显示几张 */
 	favoritesCols: number;
+	/** 工作台选择栏（标签）每行显示几个 */
+	workbenchTabCols: number;
+	/** 任务栏选择栏（标签）每行显示几个 */
+	tasksTabCols: number;
+	/** 收藏页选择栏（标签）每行显示几个 */
+	favoritesTabCols: number;
 	/** 模型 → 用户自定义注入句的覆盖表；缺省回退内置默认表 */
 	modelInjections: Record<string, string>;
 	/** 编辑页专属模型（与主生成界面互不影响） */
@@ -30,6 +36,8 @@ export interface ImageFlowConfig {
 	namingModel: string;
 	/** 是否在提交任务时自动 AI 命名（生成与编辑通用） */
 	autoName: boolean;
+	/** 缩略图上的收藏 ⭐ / 编辑 ✎ 按钮是否常驻显示（关闭则仅 hover 出现；编辑区除外） */
+	showThumbActions: boolean;
 }
 
 /**
@@ -188,6 +196,10 @@ export interface WebviewPendingTask {
 	id: string;
 	folder: string;
 	model: string;
+	/** 比例（与历史卡片同源，取 meta.aspectRatio），用于详情头与历史一致展示 */
+	aspectRatio: string;
+	/** 分辨率（与历史卡片同源，取 meta.imageSize） */
+	imageSize: string;
 	/** AI 命名的可读短名（编辑任务），命名返回后展示，未命名前为 undefined */
 	title?: string;
 	/** 来源 md 名（编辑任务为 edit），即产出图片文件名前缀 */

@@ -41,27 +41,55 @@ export function ApiConfig({
 			/>
 			<div className="row">
 				<Stepper
-					label="工作台每行张数"
+					label="工作台图片每行张数"
 					value={config.workbenchCols}
 					min={1}
 					max={8}
 					onChange={(v) => onChange('workbenchCols', v)}
 				/>
 				<Stepper
-					label="任务栏每行张数"
+					label="任务栏图片每行张数"
 					value={config.tasksCols}
 					min={1}
 					max={8}
 					onChange={(v) => onChange('tasksCols', v)}
 				/>
 				<Stepper
-					label="收藏夹每行张数"
+					label="收藏夹图片每行张数"
 					value={config.favoritesCols}
 					min={1}
 					max={8}
 					onChange={(v) => onChange('favoritesCols', v)}
 				/>
 			</div>
+			<div className="row">
+				<Stepper
+					label="工作台标签每行个数"
+					value={config.workbenchTabCols}
+					min={1}
+					max={8}
+					onChange={(v) => onChange('workbenchTabCols', v)}
+				/>
+				<Stepper
+					label="任务栏标签每行个数"
+					value={config.tasksTabCols}
+					min={1}
+					max={8}
+					onChange={(v) => onChange('tasksTabCols', v)}
+				/>
+				<Stepper
+					label="收藏夹标签每行个数"
+					value={config.favoritesTabCols}
+					min={1}
+					max={8}
+					onChange={(v) => onChange('favoritesTabCols', v)}
+				/>
+			</div>
+			<Checkbox
+				label="缩略图常驻显示收藏/编辑按钮（关闭则仅 hover 出现）"
+				checked={config.showThumbActions}
+				onChange={(v) => onChange('showThumbActions', v)}
+			/>
 			<Checkbox
 				label="自动为任务 AI 命名"
 				checked={config.autoName}

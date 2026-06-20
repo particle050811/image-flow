@@ -45,20 +45,6 @@ function Thumbs({
 	);
 }
 
-/** 查看本任务提交的提示词（打开任务文件夹内的 .md 文件） */
-function PromptButton({ folder }: { folder: string }) {
-	return (
-		<div className="task-actions">
-			<button
-				className="link"
-				onClick={() => vscode.postMessage({ type: 'openPrompt', folder })}
-			>
-				查看提示词
-			</button>
-		</div>
-	);
-}
-
 /** 成功率配色类：≥75% 绿、≤25% 红、中间黄（requested 为 0 时按红处理） */
 function rateClass(succeeded: number, requested: number): string {
 	const rate = requested > 0 ? succeeded / requested : 0;
@@ -102,20 +88,24 @@ function PendingDetail({
 	onSendToEdit: (uri: string) => void;
 }) {
 	const elapsed = useElapsed(task.startedAt);
-	const running = task.total - task.done - task.failed - task.submitting;
-	// 提交阶段（尚无 job id）显示「提交中」，其余显示生成进度
-	const headline =
-		task.submitting > 0
-			? `提交中 ${task.submitting}/${task.total}`
-			: `生成中 ${task.done}/${task.total}`;
 	return (
 		<div className="task-detail">
+			{/* 头部与历史详情一致：提示词链接 + 模型 + 分辨率 + 比例 + 进度（已存/总数） */}
 			<div className="task-detail-head">
+				<button
+					className="link"
+					onClick={() => vscode.postMessage({ type: 'openPrompt', folder: task.folder })}
+				>
+					提示词
+				</button>
 				<span className="task-model">{task.model}</span>
+				<span>{task.imageSize}</span>
+				<span>{task.aspectRatio}</span>
+				{/* 进行中 done/total 是进度而非成功率，用中性色避免误显红/黄（进度由进度条表达） */}
 				<span>
-					{headline}
-					{task.failed > 0 ? ` · 失败 ${task.failed}` : ''} · {elapsed}
+					{task.done}/{task.total}
 				</span>
+				<span className="task-elapsed">{elapsed}</span>
 			</div>
 			<div className="progress-row">
 				<div className="progress-bar">
@@ -123,14 +113,12 @@ function PendingDetail({
 				</div>
 				<span className="progress-pct">{task.progress}%</span>
 			</div>
-			<PromptButton folder={task.folder} />
 			{task.images.length > 0 && (
 				<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
 			)}
 			{task.submitting > 0 && (
 				<div className="pending-hint">正在提交 {task.submitting} 个请求…</div>
 			)}
-			{running > 0 && <div className="pending-hint">还有 {running} 张正在生成…</div>}
 			{task.errors.length > 0 && <div className="pending-err">{task.errors.join('；')}</div>}
 		</div>
 	);
@@ -149,17 +137,26 @@ function HistoryDetail({
 	const { meta } = task;
 	return (
 		<div className="task-detail">
-			{meta ? (
-				<div className="task-detail-head">
-					<span className="task-model">{meta.model}</span>
-					<span className={rateClass(meta.succeeded, meta.requested)}>
-						{meta.succeeded}/{meta.requested}
-					</span>
-				</div>
-			) : (
-				<div className="task-detail-head">{task.images.length} 张</div>
-			)}
-			<PromptButton folder={task.folder} />
+			<div className="task-detail-head">
+				<button
+					className="link"
+					onClick={() => vscode.postMessage({ type: 'openPrompt', folder: task.folder })}
+				>
+					提示词
+				</button>
+				{meta ? (
+					<>
+						<span className="task-model">{meta.model}</span>
+						<span>{meta.imageSize}</span>
+						<span>{meta.aspectRatio}</span>
+						<span className={rateClass(meta.succeeded, meta.requested)}>
+							{meta.succeeded}/{meta.requested}
+						</span>
+					</>
+				) : (
+					<span>{task.images.length} 张</span>
+				)}
+			</div>
 			<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
 		</div>
 	);
@@ -172,6 +169,7 @@ export function Tasks({
 	pendingTasks,
 	collections,
 	cols,
+	tabCols,
 	onSendToEdit,
 }: {
 	hidden: boolean;
@@ -179,6 +177,7 @@ export function Tasks({
 	pendingTasks: WebviewPendingTask[];
 	collections: WebviewCollection[];
 	cols: number;
+	tabCols: number;
 	onSendToEdit: (uri: string) => void;
 }) {
 	// 进行中与历史按文件夹名（毫秒时间戳）倒序合并，新任务在前
@@ -195,8 +194,8 @@ export function Tasks({
 			className="page picker-page"
 			data-page="tasks"
 			hidden={hidden}
-			style={{ ['--cols' as string]: cols }}
-			data-compact={cols >= 3 ? 'true' : undefined}
+			style={{ ['--cols' as string]: cols, ['--tab-cols' as string]: tabCols }}
+			data-compact={tabCols >= 3 ? 'true' : undefined}
 		>
 			{items.length === 0 ? (
 				<div className="empty">暂无生成记录。</div>
@@ -210,6 +209,20 @@ export function Tasks({
 									: item.task.meta?.title || item.task.promptName;
 							const model =
 								item.kind === 'pending' ? item.task.model : item.task.meta?.model;
+							// 成功率优先展示：进行中用 已存/总数，历史用 成功/申请
+							const rate =
+								item.kind === 'pending'
+									? `${item.task.done}/${item.task.total}`
+									: item.task.meta
+										? `${item.task.meta.succeeded}/${item.task.meta.requested}`
+										: undefined;
+							// 与详情行一致的成功率配色
+							const rateCls =
+								item.kind === 'pending'
+									? rateClass(item.task.done, item.task.total)
+									: item.task.meta
+										? rateClass(item.task.meta.succeeded, item.task.meta.requested)
+										: '';
 							return (
 								<button
 									key={item.key}
@@ -219,7 +232,10 @@ export function Tasks({
 									onClick={() => setSelected(item.key)}
 								>
 									<span className="chip-name">{title}</span>
-									{model && <span className="chip-sub">{model}</span>}
+									{tabCols <= 1 && model && <span className="chip-sub">{model}</span>}
+									{tabCols <= 3 && rate && (
+										<span className={`chip-rate ${rateCls}`}>{rate}</span>
+									)}
 								</button>
 							);
 						})}

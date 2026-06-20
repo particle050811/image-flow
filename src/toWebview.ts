@@ -69,6 +69,8 @@ export async function toWebviewPendingTask(
 		id: task.id,
 		folder: task.folder,
 		model: task.model,
+		aspectRatio: task.meta.aspectRatio,
+		imageSize: task.meta.imageSize,
 		title: task.title,
 		promptName: task.prefix,
 		total: task.jobs.length,

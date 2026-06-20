@@ -26,6 +26,7 @@ import {
 	deleteCollection,
 	setActiveCollection,
 	dedupeName,
+	collectionNameError,
 } from '../favorites';
 
 const baseConfig: ImageFlowConfig = {
@@ -38,6 +39,9 @@ const baseConfig: ImageFlowConfig = {
 	workbenchCols: 4,
 	tasksCols: 2,
 	favoritesCols: 2,
+	workbenchTabCols: 4,
+	tasksTabCols: 2,
+	favoritesTabCols: 2,
 	modelInjections: {},
 	editModel: 'gpt-image-2',
 	editAspectRatio: '16:9',
@@ -45,6 +49,7 @@ const baseConfig: ImageFlowConfig = {
 	editConcurrency: 3,
 	namingModel: 'gemini-3.5-flash',
 	autoName: true,
+	showThumbActions: true,
 };
 
 suite('images', () => {
@@ -543,5 +548,15 @@ suite('favorites', () => {
 		used.add('a-1.png');
 		assert.strictEqual(dedupeName(used, 'a.png'), 'a-2.png');
 		assert.strictEqual(dedupeName(used, 'b.png'), 'b.png');
+	});
+
+	test('collectionNameError 拦截空名与非法文件夹字符', () => {
+		assert.strictEqual(collectionNameError('产品主图'), null);
+		assert.ok(collectionNameError(''));
+		assert.ok(collectionNameError('   '));
+		assert.ok(collectionNameError('a/b'));
+		assert.ok(collectionNameError('a:b'));
+		assert.ok(collectionNameError('a*?"<>|b'));
+		assert.ok(collectionNameError('..'));
 	});
 });

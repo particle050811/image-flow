@@ -190,6 +190,27 @@ export function setActiveCollection(data: FavoritesData, id: string): FavoritesD
 	return { ...data, activeCollectionId: data.collections.some((c) => c.id === id) ? id : resolveActive(data) };
 }
 
+/** 文件夹名非法字符（Windows 保留 + 控制字符）；收藏夹要作导出文件夹名，取名时据此拦截 */
+const ILLEGAL_NAME_CHARS = /[\\/:*?"<>|]/;
+
+/**
+ * 校验收藏夹名能否安全用作导出文件夹名：空、含非法字符、纯点（. / ..）均拒绝。
+ * 合法返回 null，非法返回错误文案（供 showInputBox 的 validateInput 直接展示）。
+ */
+export function collectionNameError(name: string): string | null {
+	const trimmed = name.trim();
+	if (!trimmed) {
+		return '名称不能为空。';
+	}
+	if (ILLEGAL_NAME_CHARS.test(trimmed)) {
+		return '名称不能包含 \\ / : * ? " < > | 等字符。';
+	}
+	if (/^\.+$/.test(trimmed)) {
+		return '名称不能只由点组成。';
+	}
+	return null;
+}
+
 /** 导出重名去重：a.png 占用则 a-1.png、a-2.png… */
 export function dedupeName(used: Set<string>, name: string): string {
 	if (!used.has(name)) {

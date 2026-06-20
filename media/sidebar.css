@@ -394,13 +394,13 @@ textarea::placeholder {
 /* 参数行（工作台 dock / 编辑页）：模型名长，加宽模型列 */
 .dock .row > .field:first-child,
 [data-page='edit'] .row > .field:first-child {
-	flex: 2;
+	flex: 2.3;
 }
 
-/* 参数行：并发数列内含加减按钮（各 34px），加宽避免输入框被挤窄 */
+/* 参数行：并发数仅 1 位数字，收窄输入框给模型名腾位（加减按钮各 34px 固定不缩） */
 .dock .row > .field:last-child,
 [data-page='edit'] .row > .field:last-child {
-	flex: 1.6;
+	flex: 1.3;
 }
 
 /* ---------- 数字步进器 ---------- */
@@ -426,8 +426,8 @@ textarea::placeholder {
 }
 
 .stepper .step {
-	width: 34px;
-	flex: 0 0 34px;
+	width: 26px;
+	flex: 0 0 26px;
 	padding: 0;
 	background: var(--field-bg);
 	color: var(--vscode-foreground);
@@ -611,6 +611,17 @@ button.secondary {
 	margin-bottom: var(--sp-1);
 }
 
+/* 详情头内联的「提示词」链接：去掉默认上边距以与同行元信息居中对齐 */
+.task-detail-head .link {
+	margin-top: 0;
+}
+
+/* 进行中详情头的已进行时间：靠右对齐、等宽数字避免跳动 */
+.task-elapsed {
+	margin-left: auto;
+	font-variant-numeric: tabular-nums;
+}
+
 .pending-hint {
 	font-size: var(--fs-sub);
 	opacity: 0.65;
@@ -677,22 +688,29 @@ button.secondary {
 	gap: var(--sp-2);
 }
 
+/* 素材库选择栏与下方缩略图网格之间留白，避免标签底边与图片上边黏在一起 */
+.materials .thumbs {
+	margin-top: var(--sp-2);
+}
+
 .thumbs img {
 	width: 100%;
 	aspect-ratio: 1;
 	object-fit: contain;
 	border-radius: var(--radius-sm);
-	border: 1px solid var(--hair);
+	/* 留白处透明融入背景，但用明确的边框勾出每个单元格，避免相邻深色图「黏」成一片 */
+	border: 1px solid var(--vscode-panel-border, #3c3c3c);
 	cursor: pointer;
-	background: #000;
+	background: transparent;
 	transition: outline-color var(--dur) var(--ease), transform var(--dur) var(--ease),
 		box-shadow var(--dur) var(--ease);
 	outline: 2px solid transparent;
 	outline-offset: -2px;
 }
 
-/* 任务页缩略图：按真实比例显示 */
-.thumbs-lg img {
+/* 任务页 / 工作台素材库缩略图：按真实比例显示，不强制方形 */
+.thumbs-lg img,
+.materials .thumbs img {
 	aspect-ratio: auto;
 	height: auto;
 	object-fit: contain;
@@ -764,7 +782,7 @@ button.secondary {
 	position: absolute;
 	top: 2px;
 	right: 2px;
-	display: none;
+	display: none; /* 与 ⭐ 一致：默认隐藏，仅 hover 出现，避免平时盖图 */
 	width: 20px;
 	height: 20px;
 	padding: 0;
@@ -776,14 +794,9 @@ button.secondary {
 	border: none;
 	cursor: pointer;
 }
-
-.thumb-wrap:hover .thumb-action {
-	display: block;
-}
-
-.task-actions {
-	margin: var(--sp-1) 0;
-}
+.thumb-wrap:hover .thumb-action { display: block; }
+/* 编辑区移除 × 常驻：管理上传图时随时可删，不依赖 hover */
+.thumb-remove { display: block; }
 
 .thumb-star {
 	position: absolute;
@@ -805,6 +818,9 @@ button.secondary {
 /* 已收藏常显（让收藏态一眼可见），未收藏则仅 hover 时出现，避免平时盖图 */
 .thumb-star[data-on='true'],
 .thumb-wrap:hover .thumb-star { display: block; }
+/* 设置「常驻显示」开关开启时：⭐/✎ 不依赖 hover 始终显示（编辑区 × 本就常驻，不受影响） */
+[data-show-thumb-actions='true'] .thumb-action,
+[data-show-thumb-actions='true'] .thumb-star { display: block; }
 .star-menu-backdrop { position: fixed; inset: 0; z-index: 50; }
 .star-menu {
 	position: fixed;
@@ -823,10 +839,12 @@ button.secondary {
 /* 选择栏：按 --cols 每行排列条目，超出自身上限时内部滚动，不挤占下方内容/生成区 */
 .picker-bar {
 	display: grid;
-	grid-template-columns: repeat(var(--cols, 2), 1fr);
+	/* 标签每行个数由 --tab-cols 单独控制，与图片网格的 --cols 解耦；缺省回退 --cols */
+	grid-template-columns: repeat(var(--tab-cols, var(--cols, 2)), 1fr);
 	gap: var(--sp-1);
 	flex: 0 0 auto;
-	max-height: 38%;
+	/* 标签多时本栏内部滚动，不把下方图片挤下去 */
+	max-height: 25%;
 	overflow-y: auto;
 }
 
@@ -873,7 +891,20 @@ button.secondary {
 .chip-sub {
 	flex: 0 0 auto;
 	opacity: 0.6;
+	font-size: var(--fs-sub);
+	font-variant-numeric: tabular-nums;
+}
+
+/* 当前收藏夹标记：固定在标签末尾，始终展示 */
+.chip-pin {
+	flex: 0 0 auto;
 	font-size: 11px;
+}
+
+/* 成功率始终展示（不随 data-compact 隐藏）；与标签其余文字同号、带配色 */
+.chip-rate {
+	flex: 0 0 auto;
+	font-size: var(--fs-sub);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -893,7 +924,7 @@ button.secondary {
 	opacity: 1;
 }
 
-/* 每行张数多（cols≥3，由 React 打 data-compact）时选择栏窄，隐藏模型名等次要信息 */
+/* 标签每行个数多（tabCols≥3，由 React 打 data-compact）时选择栏窄，隐藏数量等次要信息（收藏/素材的张数） */
 .picker-page[data-compact='true'] .chip-sub {
 	display: none;
 }

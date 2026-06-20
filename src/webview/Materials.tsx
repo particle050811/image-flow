@@ -7,9 +7,11 @@ import { usePicker } from './usePicker';
 function LibThumbs({
 	lib,
 	collections,
+	onSendToEdit,
 }: {
 	lib: WebviewLibrary;
 	collections: WebviewCollection[];
+	onSendToEdit: (uri: string) => void;
 }) {
 	if (lib.images.length === 0) {
 		return <div className="empty">这个素材库没有图片。</div>;
@@ -30,7 +32,18 @@ function LibThumbs({
 					}}
 					collections={collections}
 					favorited={img.favorited}
-				/>
+				>
+					<button
+						className="thumb-action"
+						title="送入编辑"
+						onClick={(e) => {
+							e.stopPropagation();
+							onSendToEdit(img.uri);
+						}}
+					>
+						✎
+					</button>
+				</Thumb>
 			))}
 		</div>
 	);
@@ -43,15 +56,19 @@ export function Materials({
 	libraries,
 	collections,
 	cols,
+	tabCols,
 	onAdd,
 	onRemove,
+	onSendToEdit,
 }: {
 	autoLibraries: WebviewLibrary[];
 	libraries: WebviewLibrary[];
 	collections: WebviewCollection[];
 	cols: number;
+	tabCols: number;
 	onAdd: () => void;
 	onRemove: (folder: string) => void;
+	onSendToEdit: (uri: string) => void;
 }) {
 	// 选中库的 key：auto:<folder> / manual:<folder>，跨两组唯一
 	const items = [
@@ -62,7 +79,10 @@ export function Materials({
 	const { current, setSelected } = usePicker(items, (i) => i.key);
 
 	return (
-		<div className="materials" style={{ ['--cols' as string]: cols }}>
+		<div
+			className="materials"
+			style={{ ['--cols' as string]: cols, ['--tab-cols' as string]: tabCols }}
+		>
 			<div className="materials-head">
 				<span className="materials-title">当前路径</span>
 			</div>
@@ -118,7 +138,9 @@ export function Materials({
 				</div>
 			)}
 
-			{current && <LibThumbs lib={current.lib} collections={collections} />}
+			{current && (
+				<LibThumbs lib={current.lib} collections={collections} onSendToEdit={onSendToEdit} />
+			)}
 		</div>
 	);
 }
