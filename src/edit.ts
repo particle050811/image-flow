@@ -1,4 +1,4 @@
-import { parseImageRefs, replaceImageRefs } from './command';
+import { archiveImageRefs, parseImageRefs, replaceImageRefs } from './command';
 import { editConfigView } from './config';
 import { joinPrompt, modelInjection } from './inject';
 import type { ImageFlowConfig } from './shared';
@@ -27,4 +27,14 @@ export function buildEditPrompt(content: string, names: string[]): string {
 export function buildEditFinalPrompt(base: ImageFlowConfig, rawPrompt: string, names: string[]): string {
 	const config = editConfigView(base);
 	return joinPrompt([modelInjection(base, config.model), buildEditPrompt(rawPrompt.trim(), names)]);
+}
+
+/**
+ * 编辑任务的归档正文：把 `![](文件名)` 改写为指向任务 input/ 归档图的 `![](input/原名)`，
+ * 不拼注入句——归档为可直接重新生成的正文。序号同 buildEditPrompt（按编辑区 names 顺序），
+ * fileNames 为去重后的归档落盘名（与 archiveInputs 一致），引用才能对上。
+ */
+export function buildEditArchivePrompt(rawPrompt: string, names: string[], fileNames: string[]): string {
+	const indexByName = new Map(names.map((n, i) => [n, i + 1] as const));
+	return archiveImageRefs(rawPrompt.trim(), indexByName, fileNames);
 }

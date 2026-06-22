@@ -47,6 +47,7 @@ function normalizeCollection(raw: unknown, now: number): FavoriteCollection | un
 		items: (Array.isArray(c.items) ? c.items : [])
 			.map((i) => normalizeItem(i, now))
 			.filter((i): i is FavoriteItem => i !== undefined),
+		lastExportDir: typeof c.lastExportDir === 'string' ? c.lastExportDir : undefined,
 	};
 }
 
@@ -139,6 +140,17 @@ export function createCollection(data: FavoritesData, name: string, now: number)
 	return {
 		...data,
 		collections: [...data.collections, { id: `c_${now}`, name: name.trim() || '未命名', createdAt: now, items: [] }],
+	};
+}
+
+/** 图片文件被重命名后：把所有夹中等于 oldUri 的项改写为 newUri（保留 note/addedAt） */
+export function renameFavoriteUri(data: FavoritesData, oldUri: string, newUri: string): FavoritesData {
+	return {
+		...data,
+		collections: data.collections.map((c) => ({
+			...c,
+			items: c.items.map((i) => (i.uri === oldUri ? { ...i, uri: newUri } : i)),
+		})),
 	};
 }
 

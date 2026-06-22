@@ -12,6 +12,12 @@ export class TransientError extends Error {
 const FETCH_TIMEOUT = 30000;
 
 /**
+ * generate 提交专用超时（ms）：提交要上传参考图的完整 base64，体量远大于查询/下载，
+ * 给更长窗口避免大图（如编辑任务拖入的高清原图）上传被 30s 腰斩。
+ */
+const SUBMIT_TIMEOUT = 120000;
+
+/**
  * 带超时的 fetch：超时即 abort 抛错，由调用方按瞬时错误处理。
  * 抽出供 generate/result/下载图片共用，避免任一请求挂死拖垮整个轮询。
  */
@@ -206,7 +212,7 @@ export async function submitGeneration(
 			Authorization: `Bearer ${config.apiKey}`,
 		},
 		body: JSON.stringify(body),
-	});
+	}, SUBMIT_TIMEOUT);
 
 	const data = parseGenerateResponse(await response.json());
 

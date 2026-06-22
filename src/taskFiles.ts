@@ -49,8 +49,8 @@ export function dataUriBytes(dataUri: string): Uint8Array {
 }
 
 /**
- * 归档参考图到任务文件夹 input/ 子目录：image<N>-<原名>，
- * 与提示词文件中的 [imageN] 一一对应。无参考图则不建目录。
+ * 归档参考图到任务文件夹 input/ 子目录：保留原文件名（重名已由调用方去重），
+ * 与提示词文件里 ![](input/原名) 的引用一一对应。无参考图则不建目录。
  */
 export async function archiveInputs(
 	taskDir: vscode.Uri,
@@ -61,8 +61,8 @@ export async function archiveInputs(
 	}
 	const dir = vscode.Uri.joinPath(taskDir, 'input');
 	await vscode.workspace.fs.createDirectory(dir);
-	for (let i = 0; i < refs.length; i++) {
-		const file = vscode.Uri.joinPath(dir, `image${i + 1}-${refs[i].name}`);
-		await vscode.workspace.fs.writeFile(file, dataUriBytes(refs[i].data));
+	for (const ref of refs) {
+		const file = vscode.Uri.joinPath(dir, ref.name);
+		await vscode.workspace.fs.writeFile(file, dataUriBytes(ref.data));
 	}
 }

@@ -131,6 +131,7 @@ export function Edit({
 
 	return (
 		<div className="page" data-page="edit" hidden={hidden}>
+			<div className="gallery">
 			<div
 				className={`edit-drop${dragOver ? ' over' : ''}`}
 				onDragOver={(e) => {
@@ -140,33 +141,35 @@ export function Edit({
 				onDragLeave={() => setDragOver(false)}
 				onDrop={onDrop}
 			>
-				{images.length === 0 ? (
-					<div className="empty">拖入图片（VS Code 资源管理器需按住 Shift 拖），或点击下方「上传」。右键图片可在提示词中插入引用。</div>
-				) : (
-					<div className="thumbs" style={{ ['--cols' as string]: config.workbenchCols }}>
-						{images.map((img, i) => (
-							<Thumb
-								key={img.name}
-								src={img.src}
-								title={`${img.name}（左键打开 · 右键插入引用）`}
-								onClick={() => vscode.postMessage({ type: 'editOpenImage', name: img.name })}
-								onContextMenu={(e) => {
-									e.preventDefault();
-									insertAtCursor(imageRefSnippet(img.name));
-								}}
-							>
-								<span className="thumb-index">{i + 1}</span>
-								<button
-									className="thumb-action thumb-remove"
-									title="移除"
-									onClick={() => vscode.postMessage({ type: 'editRemoveImage', name: img.name })}
+				<div className="edit-images">
+					{images.length === 0 ? (
+						<div className="empty">拖入图片（VS Code 资源管理器需按住 Shift 拖），或点击下方「上传」。右键图片可在提示词中插入引用。</div>
+					) : (
+						<div className="thumbs" style={{ ['--cols' as string]: config.workbenchCols }}>
+							{images.map((img, i) => (
+								<Thumb
+									key={img.name}
+									src={img.src}
+									title={`${img.name}（左键打开 · 右键插入引用）`}
+									onClick={() => vscode.postMessage({ type: 'editOpenImage', name: img.name })}
+									onContextMenu={(e) => {
+										e.preventDefault();
+										insertAtCursor(imageRefSnippet(img.name));
+									}}
 								>
-									×
-								</button>
-							</Thumb>
-						))}
-					</div>
-				)}
+									<span className="thumb-index">{i + 1}</span>
+									<button
+										className="thumb-action thumb-remove"
+										title="移除"
+										onClick={() => vscode.postMessage({ type: 'editRemoveImage', name: img.name })}
+									>
+										×
+									</button>
+								</Thumb>
+							))}
+						</div>
+					)}
+				</div>
 				<button className="lib-add" onClick={() => vscode.postMessage({ type: 'editUpload' })}>
 					+ 上传
 				</button>
@@ -196,7 +199,9 @@ export function Edit({
 					onChange={(e) => setPrompt(e.target.value)}
 				/>
 			</Field>
+			</div>
 
+			<div className="dock">
 			<div className="row">
 				<Select
 					label="模型"
@@ -238,6 +243,7 @@ export function Edit({
 			</div>
 
 			<div className={`status${status.error ? ' error' : ''}`}>{status.text}</div>
+			</div>
 		</div>
 	);
 }

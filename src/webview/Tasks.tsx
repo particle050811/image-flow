@@ -88,6 +88,10 @@ function PendingDetail({
 	onSendToEdit: (uri: string) => void;
 }) {
 	const elapsed = useElapsed(task.startedAt);
+	// 阶段：还有 job 没拿到 id 即「提交中」，进度条按已提交占比走；全部提交完转「生成中」用聚合进度
+	const submitted = task.total - task.submitting;
+	const inSubmit = task.submitting > 0;
+	const barPct = inSubmit ? Math.round((submitted / task.total) * 100) : task.progress;
 	return (
 		<div className="task-detail">
 			{/* 头部与历史详情一致：提示词链接 + 模型 + 分辨率 + 比例 + 进度（已存/总数） */}
@@ -101,23 +105,23 @@ function PendingDetail({
 				<span className="task-model">{task.model}</span>
 				<span>{task.imageSize}</span>
 				<span>{task.aspectRatio}</span>
-				{/* 进行中 done/total 是进度而非成功率，用中性色避免误显红/黄（进度由进度条表达） */}
-				<span>
+				{/* 进行中 done/total 是进度而非成功率，加粗 + 链接色以醒目（已完成/提交或生成中的总数） */}
+				<span className="task-progress-count">
 					{task.done}/{task.total}
 				</span>
 				<span className="task-elapsed">{elapsed}</span>
 			</div>
 			<div className="progress-row">
 				<div className="progress-bar">
-					<div className="progress-fill" style={{ width: `${task.progress}%` }} />
+					{/* 两段式进度条：提交阶段按「已提交/总数」涨满，全部提交后切回生成聚合进度从头演示 */}
+					<div className="progress-fill" style={{ width: `${barPct}%` }} />
 				</div>
-				<span className="progress-pct">{task.progress}%</span>
+				<span className="progress-pct">
+					{inSubmit ? `提交中 ${submitted}/${task.total}` : `生成中 ${task.progress}%`}
+				</span>
 			</div>
 			{task.images.length > 0 && (
 				<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
-			)}
-			{task.submitting > 0 && (
-				<div className="pending-hint">正在提交 {task.submitting} 个请求…</div>
 			)}
 			{task.errors.length > 0 && <div className="pending-err">{task.errors.join('；')}</div>}
 		</div>

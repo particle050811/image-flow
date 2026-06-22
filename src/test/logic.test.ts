@@ -4,11 +4,11 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { toVipPixels, buildRequestBody, TransientError } from '../api';
 import { mdStems, imageStem, sortDescFirst, readImageDesc } from '../materials';
-import { formatStamp, parseImageRefs, replaceImageRefs } from '../command';
+import { formatStamp, parseImageRefs, replaceImageRefs, archiveImageRefs, dedupeArchiveNames } from '../command';
 import { isImageExt, isImageFileName, mimeOf } from '../images';
 import { editConfigView } from '../config';
 import { imageRefSnippet } from '../refs';
-import { buildEditPrompt, buildEditFinalPrompt } from '../edit';
+import { buildEditPrompt, buildEditFinalPrompt, buildEditArchivePrompt } from '../edit';
 import { buildPromptFileContent, dataUriBytes } from '../taskFiles';
 import { EditSession } from '../editSession';
 import { thumbKeyOf } from '../thumbs';
@@ -21,6 +21,7 @@ import {
 	favoriteUriSet,
 	toggleFavorite,
 	moveFavorite,
+	renameFavoriteUri,
 	createCollection,
 	renameCollection,
 	deleteCollection,
@@ -170,6 +171,32 @@ suite('replaceImageRefs', () => {
 	});
 });
 
+suite('dedupeArchiveNames', () => {
+	test('保留原名，重名追加序号', () => {
+		assert.deepStrictEqual(dedupeArchiveNames(['a.png', 'b.png', 'a.png']), ['a.png', 'b.png', 'a-1.png']);
+	});
+	test('无重名原样返回', () => {
+		assert.deepStrictEqual(dedupeArchiveNames(['x.png', 'y.jpg']), ['x.png', 'y.jpg']);
+	});
+});
+
+suite('archiveImageRefs', () => {
+	test('引用改写为 ![](input/原名)，序号取归档文件名', () => {
+		const src = '![a](pics/x.png) 文 ![b](y.jpg) 再 ![c](pics/x.png)';
+		const { indexByPath } = parseImageRefs(src);
+		const out = archiveImageRefs(src, indexByPath, ['x.png', 'y.jpg']);
+		assert.strictEqual(out, '![](input/x.png) 文 ![](input/y.jpg) 再 ![](input/x.png)');
+	});
+	test('含空格的归档名用尖括号包裹', () => {
+		const src = '![a](<../my image (1).png>)';
+		const { indexByPath } = parseImageRefs(src);
+		assert.strictEqual(archiveImageRefs(src, indexByPath, ['my image (1).png']), '![](<input/my image (1).png>)');
+	});
+	test('无图片原样返回', () => {
+		assert.strictEqual(archiveImageRefs('纯文本', new Map(), []), '纯文本');
+	});
+});
+
 suite('isTaskActive', () => {
 	const task = (statuses: PendingJob['status'][]): PendingTask =>
 		({ jobs: statuses.map((status) => ({ status })) } as PendingTask);
@@ -252,6 +279,15 @@ suite('buildEditFinalPrompt', () => {
 	});
 	test('编辑模型无注入句时只剩替换后的提示词', () => {
 		assert.strictEqual(buildEditFinalPrompt(baseConfig, '纯文本', []), '纯文本');
+	});
+});
+
+suite('buildEditArchivePrompt', () => {
+	test('引用改写为 ![](input/原名)，不拼注入句', () => {
+		const names = ['猫.png', '狗.png'];
+		const fileNames = dedupeArchiveNames(names);
+		const out = buildEditArchivePrompt(' 把 ![](狗.png) 放进 ![](猫.png) ', names, fileNames);
+		assert.strictEqual(out, '把 ![](input/狗.png) 放进 ![](input/猫.png)');
 	});
 });
 
@@ -485,6 +521,16 @@ suite('favorites', () => {
 		d = renameCollection(d, id, 'B');
 		assert.strictEqual(d.collections[1].id, id);
 		assert.strictEqual(d.collections[1].name, 'B');
+	});
+
+	test('renameFavoriteUri 改写所有夹中的旧 uri 并保留收藏信息', () => {
+		let d = createCollection(emptyFavorites(now), 'A', now);
+		const id = d.collections[1].id;
+		d = moveFavorite(d, u('old'), id, now);
+		d = renameFavoriteUri(d, u('old'), u('new'));
+		assert.ok(!favoriteUriSet(d).has(u('old')));
+		assert.ok(favoriteUriSet(d).has(u('new')));
+		assert.strictEqual(d.collections[1].items[0].addedAt, now);
 	});
 
 	test('deleteCollection 只剩一个夹时拒删', () => {

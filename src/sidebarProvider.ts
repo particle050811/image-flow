@@ -8,7 +8,7 @@ import { listHistory, openRequestPreview, buildPreviewText, openTextPreview } fr
 import { TaskManager } from './tasks';
 import { EditSession } from './editSession';
 import { listPromptTemplates } from './prompts';
-import { tasksRoot } from './storage';
+import { tasksRoot, workspaceRoot } from './storage';
 import { saveThumb } from './thumbs';
 import { buildEditFinalPrompt } from './edit';
 import {
@@ -18,6 +18,7 @@ import {
 	favoriteUriSet,
 	toggleFavorite,
 	moveFavorite,
+	renameFavoriteUri,
 	createCollection,
 	renameCollection,
 	deleteCollection,
@@ -237,6 +238,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				await mutateFavorites((d) => moveFavorite(d, msg.uri, msg.collectionId, Date.now()));
 				await this.pushAfterFavoritesChange();
 				break;
+			case 'renameImage':
+				await this.renameImage(msg.uri);
+				break;
 			case 'setActiveCollection':
 				await mutateFavorites((d) => setActiveCollection(d, msg.collectionId));
 				await this.pushFavorites();
@@ -335,11 +339,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			canSelectFiles: false,
 			canSelectFolders: true,
 			canSelectMany: false,
+			// 该夹上次导出的父目录，没有则回落工作区根
+			defaultUri: col.lastExportDir ? vscode.Uri.parse(col.lastExportDir) : workspaceRoot(),
 			openLabel: '在此处新建收藏夹文件夹',
 		});
 		if (!picked?.length) {
 			return;
 		}
+		// 记住本次选定的父目录，下次该夹导出默认回到这里（落 favorites.json，按夹各记一个）
+		await mutateFavorites((d) => ({
+			...d,
+			collections: d.collections.map((c) =>
+				c.id === collectionId ? { ...c, lastExportDir: picked[0].toString() } : c
+			),
+		}));
 		// 在所选目录下新建以收藏夹命名的子文件夹（清洗 Windows 非法字符），图片导出其中
 		const safeName = col.name.replace(/[\\/:*?"<>|]/g, '_').trim() || '收藏夹';
 		const dest = vscode.Uri.joinPath(picked[0], safeName);
@@ -358,7 +371,37 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				skipped++; // 源缺失/复制失败
 			}
 		}
-		this.post({ type: 'status', message: `已导出 ${ok} 张${skipped ? `，跳过 ${skipped} 张` : ''}。` });
+		void vscode.window.showInformationMessage(`已导出 ${ok} 张${skipped ? `，跳过 ${skipped} 张` : ''}。`);
+	}
+
+	/**
+	 * 重命名收藏图片的磁盘文件名（仅改文件名，扩展名保留），并同步 favorites.json 中的引用。
+	 * 入参 uri 即 favorites.json 中存的字符串，故改写收藏项时直接拿它匹配。
+	 */
+	private async renameImage(uri: string): Promise<void> {
+		const src = vscode.Uri.parse(uri);
+		const base = uriBaseName(src);
+		const ext = path.extname(base);
+		const stem = path.basename(base, ext);
+		const input = await vscode.window.showInputBox({
+			prompt: '重命名图片文件（不含扩展名）',
+			value: stem,
+			validateInput: collectionNameError,
+		});
+		const next = input?.trim();
+		if (!next || next === stem) {
+			return;
+		}
+		const dest = vscode.Uri.joinPath(src, '..', next + ext);
+		try {
+			await vscode.workspace.fs.rename(src, dest, { overwrite: false });
+		} catch (err: unknown) {
+			const reason = err instanceof Error ? err.message : String(err);
+			this.post({ type: 'error', message: `重命名为「${next + ext}」失败：${reason}` });
+			return;
+		}
+		await mutateFavorites((d) => renameFavoriteUri(d, uri, dest.toString()));
+		await this.pushAfterFavoritesChange();
 	}
 
 	/** 弹出文件选择器，把选中图片加入编辑区 */
@@ -434,7 +477,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'busy', busy: true });
 		try {
 			await this.tasks.submitEdit(prompt, this.edit.list());
-			this.post({ type: 'status', message: '已提交编辑任务，正在后台生成…' });
 			this.post({ type: 'navigate', tab: 'tasks' });
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -606,7 +648,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'busy', busy: true });
 		try {
 			await this.tasks.submit(mdUri);
-			this.post({ type: 'status', message: '已提交生成任务，正在后台生成…' });
 			this.post({ type: 'navigate', tab: 'tasks' });
 		} catch (err: unknown) {
 			const message = err instanceof Error ? err.message : String(err);

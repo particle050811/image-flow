@@ -6,6 +6,8 @@ import { readConfig } from './config';
 import { isImageExt, isImageFileName, mimeOf } from './images';
 import { uriStem } from './paths';
 import { buildInjectedPrompt } from './inject';
+import { dedupeName } from './favorites';
+import { imageRefSnippet } from './refs';
 import { tasksRoot } from './storage';
 import { readTaskMeta } from './taskFiles';
 
@@ -40,7 +42,10 @@ export function parseImageRefs(content: string): { order: string[]; indexByPath:
 interface PromptResult {
 	prompt: string;
 	images: string[];
+	/** 归档落盘文件名（保留原名，重名已去重），与 archivePrompt 的引用一一对应 */
 	names: string[];
+	/** 归档用正文：图片引用改写为指向任务 input/ 的 markdown，可直接右键重新生成 */
+	archivePrompt: string;
 }
 
 /**
@@ -57,6 +62,33 @@ export function replaceImageRefs(content: string, indexByPath: Map<string, numbe
 		}
 		const baseName = path.basename(relPath, path.extname(relPath));
 		return `[image${index}](${baseName})`;
+	});
+}
+
+/** 归档参考图文件名去重：保留原名，同名后续追加序号（a.png、a-1.png…），与 archiveInputs 落盘一致 */
+export function dedupeArchiveNames(names: string[]): string[] {
+	const used = new Set<string>();
+	return names.map((name) => {
+		const final = dedupeName(used, name);
+		used.add(final);
+		return final;
+	});
+}
+
+/**
+ * 把正文里的每处图片语法替换为指向任务文件夹 input/ 归档参考图的 markdown 引用 `![](input/原名)`，
+ * 用于把提示词正文归档成可「直接右键生成」的 MD。序号与 replaceImageRefs 一致（共用同一编号表），
+ * fileNames 是 archiveInputs 落盘的最终文件名（已去重），按序号顺序排列（fileNames[N-1] 即 imageN）。
+ * 含空格/括号的名字由 imageRefSnippet 用尖括号包裹。未在编号表中的引用原样保留。
+ */
+export function archiveImageRefs(content: string, indexBy: Map<string, number>, fileNames: string[]): string {
+	return content.replace(IMAGE_REGEX, (full, bracketed?: string, plain?: string) => {
+		const key = (bracketed ?? plain ?? '').trim();
+		const index = indexBy.get(key);
+		if (index === undefined) {
+			return full;
+		}
+		return imageRefSnippet(`input/${fileNames[index - 1]}`);
 	});
 }
 
@@ -90,8 +122,11 @@ export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<P
 
 	// 第二遍：把图片语法替换为有序引用 [imageN](文件名)
 	const prompt = replaceImageRefs(content, indexByPath);
+	// 归档文件名：保留原名、重名去重，归档正文与 input/ 落盘共用，引用才能对上
+	const fileNames = dedupeArchiveNames(names);
+	const archivePrompt = archiveImageRefs(content, indexByPath, fileNames);
 
-	return { prompt, images, names };
+	return { prompt, images, names: fileNames, archivePrompt };
 }
 
 /** 把 Date 格式化为 yyMMddHHmmssSSS（毫秒级，任务文件夹名唯一性依赖它） */

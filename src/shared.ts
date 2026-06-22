@@ -207,7 +207,7 @@ export interface WebviewPendingTask {
 	total: number;
 	done: number;
 	failed: number;
-	/** 仍在提交（尚未拿到 job id）的数量，>0 时卡片显示「提交中」 */
+	/** 仍在提交（尚未拿到 job id）的 job 数，>0 表示任务处于「提交中」阶段，前端据此区分提交/生成 */
 	submitting: number;
 	/** 整任务聚合进度 0~100：已完成 job 记满分，running job 取远端进度均摊 */
 	progress: number;
@@ -230,6 +230,8 @@ export interface FavoriteCollection {
 	name: string;
 	createdAt: number;
 	items: FavoriteItem[];
+	/** 上次导出选定的父目录（file Uri 字符串），下次导出对话框据此回到该目录 */
+	lastExportDir?: string;
 }
 
 /** 收藏数据全文（落 .image-flow/favorites.json）；activeCollectionId = 左键收藏的目标夹 */
@@ -287,6 +289,7 @@ export type OutboundMessage =
 	| { type: 'saveEditThumb'; name: string; srcLength: number; data: string }
 	| { type: 'toggleFavorite'; uri: string }
 	| { type: 'moveFavoriteTo'; uri: string; collectionId: string }
+	| { type: 'renameImage'; uri: string }
 	| { type: 'setActiveCollection'; collectionId: string }
 	| { type: 'createCollection' }
 	| { type: 'renameCollection'; id: string }

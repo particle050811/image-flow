@@ -125,6 +125,7 @@ body {
 
 /* 工作台 / 任务 / 收藏：纵向限高，选择栏在上、内容区内部滚动，不随条目无限撑高 */
 .page[data-page='workbench']:not([hidden]),
+.page[data-page='edit']:not([hidden]),
 .page[data-page='tasks']:not([hidden]),
 .page[data-page='favorites']:not([hidden]) {
 	display: flex;
@@ -134,7 +135,8 @@ body {
 }
 
 /* 工作台底部 dock 自带上边距，去掉页内底 padding 让其贴底 */
-.page[data-page='workbench']:not([hidden]) {
+.page[data-page='workbench']:not([hidden]),
+.page[data-page='edit']:not([hidden]) {
 	padding-bottom: 0;
 }
 
@@ -622,10 +624,10 @@ button.secondary {
 	font-variant-numeric: tabular-nums;
 }
 
-.pending-hint {
-	font-size: var(--fs-sub);
-	opacity: 0.65;
-	margin: var(--sp-1) 0 0 var(--sp-2);
+/* 进度计数 done/total：从淡化的元信息行里挑出来，加粗 + 链接色以醒目 */
+.task-progress-count {
+	font-weight: 600;
+	color: var(--vscode-textLink-foreground);
 }
 
 .pending-err {
@@ -668,10 +670,11 @@ button.secondary {
 	transition: width var(--dur) var(--ease);
 }
 
+/* 阶段标签（提交中 X/N · 生成中 N%）：进度的主提示，需一眼可读，故满亮度 + 中等字重 */
 .progress-pct {
 	flex: 0 0 auto;
 	font-size: var(--fs-sub);
-	opacity: 0.65;
+	font-weight: 500;
 	font-variant-numeric: tabular-nums;
 }
 
@@ -695,7 +698,7 @@ button.secondary {
 
 .thumbs img {
 	width: 100%;
-	aspect-ratio: 1;
+	height: auto;
 	object-fit: contain;
 	border-radius: var(--radius-sm);
 	/* 留白处透明融入背景，但用明确的边框勾出每个单元格，避免相邻深色图「黏」成一片 */
@@ -706,14 +709,6 @@ button.secondary {
 		box-shadow var(--dur) var(--ease);
 	outline: 2px solid transparent;
 	outline-offset: -2px;
-}
-
-/* 任务页 / 工作台素材库缩略图：按真实比例显示，不强制方形 */
-.thumbs-lg img,
-.materials .thumbs img {
-	aspect-ratio: auto;
-	height: auto;
-	object-fit: contain;
 }
 
 .thumbs img:hover {
@@ -744,6 +739,11 @@ button.secondary {
 .edit-drop.over {
 	border-color: var(--vscode-focusBorder);
 	background: var(--vscode-list-hoverBackground);
+}
+
+/* 图片展示区：上方区域（.gallery）已统一限高并滚动，这里不再单独限高，避免嵌套滚动条 */
+.edit-images {
+	min-height: 200px;
 }
 
 .edit-drop .lib-add {
@@ -797,11 +797,37 @@ button.secondary {
 .thumb-wrap:hover .thumb-action { display: block; }
 /* 编辑区移除 × 常驻：管理上传图时随时可删，不依赖 hover */
 .thumb-remove { display: block; }
+/* 收藏星标占据最右，其余动作按钮（✎ 送编辑等）依次左移让位 */
+.thumb-wrap:has(.thumb-star) .thumb-action { right: 26px; }
+
+/* 重命名按钮：仅收藏页渲染；星标右移后排在 ✎ 左侧。
+   带下划线的 R（rename 首字母），与 ✎ 区分；下划线走 CSS 不依赖字体字形 */
+.thumb-rename {
+	position: absolute;
+	top: 2px;
+	right: 50px;
+	display: none;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	line-height: 18px;
+	text-align: center;
+	font-weight: 600;
+	text-decoration: underline;
+	text-underline-offset: 1px;
+	border-radius: var(--radius-sm);
+	background: rgba(0, 0, 0, 0.6);
+	color: #fff;
+	border: none;
+	cursor: pointer;
+}
+.thumb-wrap:hover .thumb-rename,
+[data-show-thumb-actions='true'] .thumb-rename { display: block; }
 
 .thumb-star {
 	position: absolute;
 	top: 2px;
-	right: 26px; /* 紧贴编辑按钮（.thumb-action right:2px 宽 20px）左侧，成对不遮图 */
+	right: 2px; /* 收藏星标固定在最右，与其它动作按钮成排不遮图 */
 	display: none;
 	width: 20px;
 	height: 20px;

@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { submitGeneration, queryResult, requestTaskName, TransientError } from './api';
-import { buildPrompt, createTaskFolder, downloadImages, mdBaseName } from './command';
+import { buildPrompt, createTaskFolder, dedupeArchiveNames, downloadImages, mdBaseName } from './command';
 import { readConfig, editConfigView } from './config';
-import { buildEditFinalPrompt } from './edit';
+import { buildEditFinalPrompt, buildEditArchivePrompt } from './edit';
 import { buildInjectedPrompt } from './inject';
 import type { EditImage } from './editSession';
 import { archiveInputs, buildPromptFileContent, writePromptFile, writeTaskMeta } from './taskFiles';
@@ -21,11 +21,13 @@ interface StartOptions {
 	source: string;
 	/** 本次生效的配置（编辑任务传入 editConfigView 结果） */
 	config: ImageFlowConfig;
-	/** 注入后的最终提示词 */
+	/** 注入后的最终提示词（用于提交发送） */
 	prompt: string;
+	/** 归档正文：图片引用指向任务 input/，写入提示词文件，可直接右键重新生成 */
+	archivePrompt: string;
 	/** 参考图 data URI（按序） */
 	images: string[];
-	/** 参考图原文件名（与 images 等长，归档用） */
+	/** 参考图归档文件名（与 images 等长，保留原名、重名已去重，与 archivePrompt 引用对应） */
 	names: string[];
 }
 
@@ -181,7 +183,7 @@ export class TaskManager {
 			throw new Error('Markdown 文件内容为空，无法生成。');
 		}
 
-		const { prompt: basePrompt, images, names } = await buildPrompt(mdUri, content);
+		const { prompt: basePrompt, images, names, archivePrompt } = await buildPrompt(mdUri, content);
 		const prompt = await buildInjectedPrompt(config, basePrompt);
 		const prefix = mdBaseName(mdUri);
 		const task = await this.start({
@@ -192,6 +194,7 @@ export class TaskManager {
 			source: vscode.workspace.asRelativePath(mdUri),
 			config,
 			prompt,
+			archivePrompt,
 			images,
 			names,
 		});
@@ -212,7 +215,11 @@ export class TaskManager {
 		if (!rawPrompt.trim()) {
 			throw new Error('提示词为空，无法生成。');
 		}
-		const prompt = buildEditFinalPrompt(base, rawPrompt, refs.map((r) => r.name));
+		const names = refs.map((r) => r.name);
+		const prompt = buildEditFinalPrompt(base, rawPrompt, names);
+		// 归档落盘名保留原名、重名去重；发送提示词仍按编辑区原名编号 [imageN]
+		const fileNames = dedupeArchiveNames(names);
+		const archivePrompt = buildEditArchivePrompt(rawPrompt, names, fileNames);
 		const task = await this.start({
 			kind: 'edit',
 			prefix: 'edit',
@@ -220,8 +227,9 @@ export class TaskManager {
 			source: '（编辑任务）',
 			config,
 			prompt,
+			archivePrompt,
 			images: refs.map((r) => r.data),
-			names: refs.map((r) => r.name),
+			names: fileNames,
 		});
 		// AI 命名：后台非阻塞，用全局配置（namingModel/baseUrl/apiKey），失败静默回退占位名
 		if (base.autoName) {
@@ -251,7 +259,7 @@ export class TaskManager {
 	 */
 	private async start(opts: StartOptions): Promise<PendingTask> {
 		const [folder, dir] = await createTaskFolder();
-		await writePromptFile(dir, opts.promptFileName, buildPromptFileContent(opts.prompt));
+		await writePromptFile(dir, opts.promptFileName, buildPromptFileContent(opts.archivePrompt));
 		await archiveInputs(dir, opts.names.map((name, i) => ({ name, data: opts.images[i] })));
 
 		const count = Math.max(1, opts.config.concurrency);
@@ -301,21 +309,23 @@ export class TaskManager {
 		images: string[]
 	): Promise<void> {
 		const submitting = task.jobs.filter((j) => j.status === 'submitting');
-		await Promise.all(
-			submitting.map(async (job) => {
-				try {
-					job.id = await submitGeneration(config, prompt, images);
-					job.status = 'running';
-				} catch (err) {
-					job.status = 'failed';
-					job.error = err instanceof Error ? err.message : String(err);
-				}
-			})
-		);
+		// 串行（错开）提交而非并发：并发时多份大图 base64 抢同一条上行带宽，且各请求的超时计时
+		// 在同一瞬间一起起跑，整体上传一旦超过单请求窗口就会被一起 abort——大图编辑任务因此全军覆没。
+		// 逐个提交让每份上传独占带宽、超时窗口只需覆盖自身这一份；服务端生成仍并行，不影响出图速度。
+		for (const job of submitting) {
+			try {
+				job.id = await submitGeneration(config, prompt, images);
+				job.status = 'running';
+			} catch (err) {
+				job.status = 'failed';
+				job.error = err instanceof Error ? err.message : String(err);
+			}
+		}
 
-		// 不变量：自 Promise.all 解析起到下面的 filter 之间不得有 await。
-		// 否则 4s 轮询定时器可能插进来，观察到「全 failed 但仍在列表」的任务，
-		// 既 notifyFinished 又移除它，与此处的弹窗 + 移除重复（双弹窗/双移除）。
+		// 不变量：自上面的串行循环结束（最后一个 job 终结提交）到下面的 filter 之间不得有 await。
+		// 串行期间未轮到的 job 仍为 submitting，isTaskActive 为真，轮询不会误移除；但全部提交完后
+		// 若插入 await，4s 轮询可能观察到「全 failed 但仍在列表」的任务，既 notifyFinished 又移除它，
+		// 与此处的弹窗 + 移除重复（双弹窗/双移除）。
 		if (task.jobs.every((j) => j.status === 'failed')) {
 			// 全部提交失败：无产出，从进行中列表移除（无 running job，轮询不会接管它）并弹错误。
 			// 任务文件夹与 meta.json 保留，失败任务进入历史并以 0/N 留痕，不再静默删除。

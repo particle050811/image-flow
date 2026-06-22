@@ -107,6 +107,16 @@ export function Favorites({
 								>
 									✎
 								</button>
+								<button
+									className="thumb-rename"
+									title="重命名文件"
+									onClick={(e) => {
+										e.stopPropagation();
+										vscode.postMessage({ type: 'renameImage', uri: img.uri });
+									}}
+								>
+									R
+								</button>
 							</Thumb>
 						))}
 					</div>
