@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { uriBaseName } from './paths';
 import { readConfig, writeConfig, CONFIG_OPTIONS, editConfigView } from './config';
-import { listHistory, openRequestPreview, buildPreviewText, openTextPreview } from './command';
+import { listHistory, openRequestPreview, buildPreviewText, openTextPreview, isPreviewDoc } from './command';
 import { TaskManager } from './tasks';
 import { EditSession } from './editSession';
 import { listPromptTemplates } from './prompts';
@@ -127,10 +127,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	/** 当前活动编辑器若是 .md 则返回其 Uri，否则 undefined（非 Markdown 标签不改变生效 MD） */
+	/** 当前活动编辑器若是 .md 则返回其 Uri，否则 undefined（非 Markdown 标签不改变生效 MD）。
+	 *  请求预览文档虽是 .md 但内容是请求参数，排除掉避免它成为生效 MD 被误触生成 */
 	private activeMd(): vscode.Uri | undefined {
 		const uri = vscode.window.activeTextEditor?.document.uri;
-		if (uri && uri.path.toLowerCase().endsWith('.md')) {
+		if (uri && uri.path.toLowerCase().endsWith('.md') && !isPreviewDoc(uri)) {
 			return uri;
 		}
 		return undefined;

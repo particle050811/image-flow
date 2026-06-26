@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { previewRequestCommand } from './command';
+import { isPreviewDoc, previewRequestCommand } from './command';
 import { seedModelInjections } from './config';
 import { SidebarProvider } from './sidebarProvider';
 import { TaskManager } from './tasks';
@@ -24,6 +24,10 @@ export async function activate(context: vscode.ExtensionContext) {
 			const target = uri ?? vscode.window.activeTextEditor?.document.uri;
 			if (!target) {
 				vscode.window.showErrorMessage('Image Flow：请在 Markdown 文件上右键，或先打开一个文件。');
+				return;
+			}
+			if (isPreviewDoc(target)) {
+				vscode.window.showErrorMessage('Image Flow：这是请求预览文档，仅供调试查看，不能用于生成。请对源 Markdown 触发生成。');
 				return;
 			}
 			await sidebar.generateFor(target);

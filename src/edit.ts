@@ -1,40 +1,38 @@
-import { archiveImageRefs, parseImageRefs, replaceImageRefs } from './command';
+import { parseMediaDecls, buildNameTable, replaceMediaRefs, assertAllDeclsReferenced } from './command';
 import { editConfigView } from './config';
 import { joinPrompt, modelInjection } from './inject';
+import { mediaDeclSnippet, namedRefSnippet } from './refs';
 import type { ImageFlowConfig } from './shared';
 
 /**
- * 编辑提示词的引用替换：`![](文件名)` → `[imageN](文件名去扩展)`。
- * 序号按编辑区图片顺序（names 的下标 + 1），与文本出现顺序无关——
- * 参考图按编辑区顺序整体发送，删图/调序后无需改写提示词文本。
- * 引用了编辑区不存在的名字则报错中止（通常是图已删除）。
- */
-export function buildEditPrompt(content: string, names: string[]): string {
-	const { order } = parseImageRefs(content);
-	const known = new Set(names);
-	const unknown = order.filter((n) => !known.has(n));
-	if (unknown.length) {
-		throw new Error(`提示词引用了不存在的图片：${unknown.join('、')}`);
-	}
-	const indexByName = new Map(names.map((n, i) => [n, i + 1] as const));
-	return replaceImageRefs(content, indexByName);
-}
-
-/**
- * 编辑任务的最终提示词：引用替换 + 编辑模型注入句（不拼 IMAGES.md——编辑场景与图册说明无关）。
- * 提交（tasks.submitEdit）与预览（sidebarProvider.doEditPreview）共用，保证预览与实际提交永不漂移。
+ * 编辑任务的最终提示词：把编辑区全部图拼成顶部 `![主名](文件名)` 声明（按编辑区顺序），
+ * 正文即工作台 MD 格式，复用生成链路的 replaceMediaRefs——声明被删、命名引用 `[主名]`
+ * 替换为 `【@图片N】`，编号按编辑区顺序。再前置编辑模型注入句（不拼 IMAGES.md）。
+ * 提交（tasks.submitEdit）与预览（sidebarProvider.doEditPreview）共用，保证不漂移。
  */
 export function buildEditFinalPrompt(base: ImageFlowConfig, rawPrompt: string, names: string[]): string {
 	const config = editConfigView(base);
-	return joinPrompt([modelInjection(base, config.model), buildEditPrompt(rawPrompt.trim(), names)]);
+	const decls = names.map((n) => mediaDeclSnippet(stemOf(n), n)).join('\n');
+	const content = decls ? `${decls}\n${rawPrompt.trim()}` : rawPrompt.trim();
+	const parsed = parseMediaDecls(content);
+	assertAllDeclsReferenced(content, parsed);
+	const replaced = replaceMediaRefs(content, buildNameTable(parsed));
+	return joinPrompt([modelInjection(base, config.model), replaced]);
 }
 
 /**
- * 编辑任务的归档正文：把 `![](文件名)` 改写为指向任务 input/ 归档图的 `![](input/原名)`，
- * 不拼注入句——归档为可直接重新生成的正文。序号同 buildEditPrompt（按编辑区 names 顺序），
- * fileNames 为去重后的归档落盘名（与 archiveInputs 一致），引用才能对上。
+ * 编辑任务的归档正文：在用户正文（含 `[名]` 命名引用）最前面前置编辑区全部图的声明
+ * `![名](input/原名)`（按编辑区顺序），不拼注入句。归档即工作台 MD 格式，右键可直接重新生成——
+ * 声明 alt = 命名引用主名，重生成时 `[名]` 替换为 `【@图片N】` 且参考图从 input/ 读回。
+ * fileNames 为去重后的归档落盘名（与 archiveInputs 一致），与 names 一一对应。
  */
 export function buildEditArchivePrompt(rawPrompt: string, names: string[], fileNames: string[]): string {
-	const indexByName = new Map(names.map((n, i) => [n, i + 1] as const));
-	return archiveImageRefs(rawPrompt.trim(), indexByName, fileNames);
+	const decls = names.map((n, i) => mediaDeclSnippet(stemOf(n), `input/${fileNames[i]}`)).join('\n');
+	const body = rawPrompt.trim();
+	return decls ? `${decls}\n${body}` : body;
+}
+
+/** 文件名去扩展主名，与 namedRefSnippet 内部一致——声明 alt 与命名引用必须同名才能对上 */
+function stemOf(name: string): string {
+	return namedRefSnippet(name).slice(1, -1);
 }

@@ -4,7 +4,7 @@ import { Select, TextField, TextArea, Stepper, Checkbox } from './fields';
 
 const GET_KEY_URL = 'https://grsai.ai/zh/dashboard/api-keys';
 
-/** 设置页：API Key + 获取链接 + 节点 + 每行张数 + 模型注入提示词 */
+/** 设置页：API Key + 获取链接 + 每行张数 + 模型注入提示词 */
 export function ApiConfig({
 	hidden,
 	config,
@@ -33,12 +33,6 @@ export function ApiConfig({
 			>
 				获取 API Key →
 			</button>
-			<Select
-				label="节点"
-				value={config.baseUrl}
-				options={options.baseUrl}
-				onChange={(v) => onChange('baseUrl', v)}
-			/>
 			<div className="row">
 				<Stepper
 					label="工作台图片每行张数"
@@ -94,12 +88,6 @@ export function ApiConfig({
 				label="自动为任务 AI 命名"
 				checked={config.autoName}
 				onChange={(v) => onChange('autoName', v)}
-			/>
-			<Select
-				label="命名模型"
-				value={config.namingModel}
-				options={options.namingModel}
-				onChange={(v) => onChange('namingModel', v)}
 			/>
 			<Select
 				label="模型注入提示词 — 选择模型"

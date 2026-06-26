@@ -87,6 +87,11 @@ export class EditSession {
 		if (this.images.some((i) => i.name === name)) {
 			return `已存在同名图片，请改名后再添加：${name}`;
 		}
+		// 命名引用按「去扩展主名」匹配声明，主名相同（如 logo.png 与 logo.jpg）会让提交时编号冲突——入列即拦截
+		const stem = path.basename(name, path.extname(name));
+		if (this.images.some((i) => path.basename(i.name, path.extname(i.name)) === stem)) {
+			return `已存在同主名图片（命名引用会冲突），请改名后再添加：${name}`;
+		}
 		return null;
 	}
 }

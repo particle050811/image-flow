@@ -10,7 +10,7 @@ import {
 import { Select, Stepper, Field } from './fields';
 import { Thumb } from './Thumb';
 import { useCooldown } from './useCooldown';
-import { imageRefSnippet } from '../refs';
+import { namedRefSnippet } from '../refs';
 
 /** 编辑页：图片区（上传/拖入/点击插入引用）+ 模板 + 提示词 + 编辑专属参数 + 生成 */
 export function Edit({
@@ -154,7 +154,7 @@ export function Edit({
 									onClick={() => vscode.postMessage({ type: 'editOpenImage', name: img.name })}
 									onContextMenu={(e) => {
 										e.preventDefault();
-										insertAtCursor(imageRefSnippet(img.name));
+										insertAtCursor(namedRefSnippet(img.name));
 									}}
 								>
 									<span className="thumb-index">{i + 1}</span>

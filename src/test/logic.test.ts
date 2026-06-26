@@ -4,11 +4,11 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { toVipPixels, buildRequestBody, TransientError } from '../api';
 import { mdStems, imageStem, sortDescFirst, readImageDesc } from '../materials';
-import { formatStamp, parseImageRefs, replaceImageRefs, archiveImageRefs, dedupeArchiveNames } from '../command';
-import { isImageExt, isImageFileName, mimeOf } from '../images';
+import { formatStamp, parseImageRefs, archiveImageRefs, dedupeArchiveNames, parseMediaDecls, buildNameTable, replaceMediaRefs, assertAllDeclsReferenced } from '../command';
+import { isImageExt, isImageFileName, mimeOf, mediaTypeOf } from '../images';
 import { editConfigView } from '../config';
-import { imageRefSnippet } from '../refs';
-import { buildEditPrompt, buildEditFinalPrompt, buildEditArchivePrompt } from '../edit';
+import { namedRefSnippet, mediaDeclSnippet } from '../refs';
+import { buildEditFinalPrompt, buildEditArchivePrompt } from '../edit';
 import { buildPromptFileContent, dataUriBytes } from '../taskFiles';
 import { EditSession } from '../editSession';
 import { thumbKeyOf } from '../thumbs';
@@ -69,6 +69,24 @@ suite('images', () => {
 		assert.ok(isImageFileName('封面.JPEG'));
 		assert.ok(!isImageFileName('readme.md'));
 		assert.ok(!isImageFileName('noext'));
+	});
+});
+
+suite('mediaTypeOf', () => {
+	test('图片扩展名归 image', () => {
+		assert.strictEqual(mediaTypeOf('.png'), 'image');
+		assert.strictEqual(mediaTypeOf('.JPG'), 'image');
+	});
+	test('音频扩展名归 audio', () => {
+		assert.strictEqual(mediaTypeOf('.mp3'), 'audio');
+		assert.strictEqual(mediaTypeOf('.wav'), 'audio');
+	});
+	test('视频扩展名归 video', () => {
+		assert.strictEqual(mediaTypeOf('.mp4'), 'video');
+		assert.strictEqual(mediaTypeOf('.mov'), 'video');
+	});
+	test('未知扩展名回退 image', () => {
+		assert.strictEqual(mediaTypeOf('.txt'), 'image');
 	});
 });
 
@@ -134,6 +152,45 @@ suite('parseImageRefs', () => {
 	});
 });
 
+suite('parseMediaDecls', () => {
+	test('提取 alt、路径、类型，按出现顺序', () => {
+		const decls = parseMediaDecls('![传送石](./传送石.png) ![开场曲](./bgm.mp3)');
+		assert.deepStrictEqual(decls, [
+			{ alt: '传送石', path: './传送石.png', type: 'image' },
+			{ alt: '开场曲', path: './bgm.mp3', type: 'audio' },
+		]);
+	});
+	test('尖括号路径可解析', () => {
+		const decls = parseMediaDecls('![猫](<../my image (1).png>)');
+		assert.deepStrictEqual(decls, [{ alt: '猫', path: '../my image (1).png', type: 'image' }]);
+	});
+	test('无声明返回空', () => {
+		assert.deepStrictEqual(parseMediaDecls('纯文本 [传送石]'), []);
+	});
+});
+
+suite('buildNameTable', () => {
+	test('三类各自独立从 1 编号', () => {
+		const table = buildNameTable([
+			{ alt: '传送石', path: 'a.png', type: 'image' },
+			{ alt: '开场曲', path: 'b.mp3', type: 'audio' },
+			{ alt: '李樱', path: 'c.png', type: 'image' },
+		]);
+		assert.deepStrictEqual(table.get('传送石'), { type: 'image', index: 1 });
+		assert.deepStrictEqual(table.get('李樱'), { type: 'image', index: 2 });
+		assert.deepStrictEqual(table.get('开场曲'), { type: 'audio', index: 1 });
+	});
+	test('重名声明抛错', () => {
+		assert.throws(
+			() => buildNameTable([
+				{ alt: '传送石', path: 'a.png', type: 'image' },
+				{ alt: '传送石', path: 'b.png', type: 'image' },
+			]),
+			/传送石/
+		);
+	});
+});
+
 suite('isTransientNetworkError', () => {
 	test('上游 5xx 标记的 TransientError 可重试', () => {
 		assert.ok(isTransientNetworkError(new TransientError('HTTP 503')));
@@ -155,19 +212,54 @@ suite('isTransientNetworkError', () => {
 	});
 });
 
-suite('replaceImageRefs', () => {
-	test('按编号表替换为 [imageN](文件名)', () => {
-		const { indexByPath } = parseImageRefs('![a](pics/x.png) 文 ![b](y.jpg) 再 ![c](pics/x.png)');
-		const out = replaceImageRefs('![a](pics/x.png) 文 ![b](y.jpg) 再 ![c](pics/x.png)', indexByPath);
-		assert.strictEqual(out, '[image1](x) 文 [image2](y) 再 [image1](x)');
+suite('replaceMediaRefs', () => {
+	const tableOf = (content: string) => buildNameTable(parseMediaDecls(content));
+	test('删声明、命名引用替换为【@图片N】，未命中保留', () => {
+		const src = '- [传送石] 传送道具。![传送石](./传送石.png)\n[李樱]一手持[传送石]，一手持[魂符]';
+		const out = replaceMediaRefs(src, tableOf(src));
+		assert.strictEqual(out, '- 【@图片1】 传送道具。\n[李樱]一手持【@图片1】，一手持[魂符]');
 	});
-	test('尖括号路径（含空格/半角括号）能解析并替换（F009 回归）', () => {
-		const src = '![a](<../my image (1).png>)';
-		const { indexByPath } = parseImageRefs(src);
-		assert.strictEqual(replaceImageRefs(src, indexByPath), '[image1](my image (1))');
+	test('音频独立编号【@音频N】', () => {
+		const src = '![开场曲](./bgm.mp3) 配乐用[开场曲]';
+		const out = replaceMediaRefs(src, tableOf(src));
+		assert.strictEqual(out, ' 配乐用【@音频1】');
 	});
-	test('无图片原样返回', () => {
-		assert.strictEqual(replaceImageRefs('纯文本', new Map()), '纯文本');
+	test('只删语法本身，前后空格保留', () => {
+		const src = 'A ![猫](a.png) B';
+		assert.strictEqual(replaceMediaRefs(src, tableOf(src)), 'A  B');
+	});
+	test('markdown 链接 [文字](url) 不被替换', () => {
+		const src = '![猫](a.png) 见[猫](http://x) 和[猫]';
+		const out = replaceMediaRefs(src, tableOf(src));
+		assert.strictEqual(out, ' 见[猫](http://x) 和【@图片1】');
+	});
+	test('无声明无命中原样返回', () => {
+		assert.strictEqual(replaceMediaRefs('纯文本 [未知]', new Map()), '纯文本 [未知]');
+	});
+	// 以下两条锁定「按类型独立编号」的当前行为（已知限制：编号口径与 images[] 全局上传下标不对齐）
+	test('混合媒体：图片/音频各自从 1 编号', () => {
+		const src = '![传送石](a.png) ![开场曲](b.mp3) ![李樱](c.png) [传送石][开场曲][李樱]';
+		const out = replaceMediaRefs(src, tableOf(src));
+		assert.strictEqual(out, '   【@图片1】【@音频1】【@图片2】');
+	});
+	test('同一路径两个 alt 各自编号（仅上传 1 张，编号到 2 为已知限制）', () => {
+		const src = '![甲](x.png) ![乙](x.png) [甲][乙]';
+		const out = replaceMediaRefs(src, tableOf(src));
+		assert.strictEqual(out, '  【@图片1】【@图片2】');
+	});
+});
+
+suite('assertAllDeclsReferenced', () => {
+	test('声明名与引用名不一致（声明未被引用）→ 抛错列出未引用名', () => {
+		const src = '- [李樱] 主角。![李樱三视图](../李樱三视图.png)\n- [九胡] 女仆。![九胡三视图](../九胡三视图.png)';
+		assert.throws(() => assertAllDeclsReferenced(src, parseMediaDecls(src)), /李樱三视图/);
+	});
+	test('全部声明都被引用 → 不抛', () => {
+		const src = '![传送石](a.png) [传送石]手持';
+		assert.doesNotThrow(() => assertAllDeclsReferenced(src, parseMediaDecls(src)));
+	});
+	test('无声明 → 不抛', () => {
+		assert.doesNotThrow(() => assertAllDeclsReferenced('纯文本 [未知]', parseMediaDecls('纯文本 [未知]')));
 	});
 });
 
@@ -181,16 +273,16 @@ suite('dedupeArchiveNames', () => {
 });
 
 suite('archiveImageRefs', () => {
-	test('引用改写为 ![](input/原名)，序号取归档文件名', () => {
-		const src = '![a](pics/x.png) 文 ![b](y.jpg) 再 ![c](pics/x.png)';
+	test('引用改写为 ![alt](input/原名)，保留 alt 供命名引用重生成', () => {
+		const src = '![传送石](pics/x.png) 文 ![李樱](y.jpg) 再 ![传送石2](pics/x.png)';
 		const { indexByPath } = parseImageRefs(src);
 		const out = archiveImageRefs(src, indexByPath, ['x.png', 'y.jpg']);
-		assert.strictEqual(out, '![](input/x.png) 文 ![](input/y.jpg) 再 ![](input/x.png)');
+		assert.strictEqual(out, '![传送石](input/x.png) 文 ![李樱](input/y.jpg) 再 ![传送石2](input/x.png)');
 	});
-	test('含空格的归档名用尖括号包裹', () => {
-		const src = '![a](<../my image (1).png>)';
+	test('含空格的归档名用尖括号包裹，alt 保留', () => {
+		const src = '![猫](<../my image (1).png>)';
 		const { indexByPath } = parseImageRefs(src);
-		assert.strictEqual(archiveImageRefs(src, indexByPath, ['my image (1).png']), '![](<input/my image (1).png>)');
+		assert.strictEqual(archiveImageRefs(src, indexByPath, ['my image (1).png']), '![猫](<input/my image (1).png>)');
 	});
 	test('无图片原样返回', () => {
 		assert.strictEqual(archiveImageRefs('纯文本', new Map(), []), '纯文本');
@@ -242,52 +334,60 @@ suite('editConfigView', () => {
 	});
 });
 
-suite('imageRefSnippet', () => {
-	test('普通文件名直接拼接', () => {
-		assert.strictEqual(imageRefSnippet('猫.png'), '![](猫.png)');
+suite('namedRefSnippet', () => {
+	test('去扩展名后用中括号包裹', () => {
+		assert.strictEqual(namedRefSnippet('传送石.png'), '[传送石]');
 	});
-	test('含空格或半角括号用尖括号包裹', () => {
-		assert.strictEqual(imageRefSnippet('my cat (1).png'), '![](<my cat (1).png>)');
+	test('含空格的文件名取主名', () => {
+		assert.strictEqual(namedRefSnippet('my cat (1).png'), '[my cat (1)]');
+	});
+	test('无扩展名原样', () => {
+		assert.strictEqual(namedRefSnippet('李樱'), '[李樱]');
 	});
 });
 
-suite('buildEditPrompt', () => {
-	const names = ['猫.png', '狗 (1).png'];
-	test('按编辑区顺序替换为 [imageN](名去扩展)', () => {
-		const out = buildEditPrompt('把 ![](<狗 (1).png>) 放进 ![](猫.png) 的场景', names);
-		// 序号按编辑区顺序：猫=1、狗=2，与文本出现顺序无关
-		assert.strictEqual(out, '把 [image2](狗 (1)) 放进 [image1](猫) 的场景');
+suite('mediaDeclSnippet', () => {
+	test('普通文件名直接拼接', () => {
+		assert.strictEqual(mediaDeclSnippet('猫', '猫.png'), '![猫](猫.png)');
 	});
-	test('尖括号包裹的引用同样可解析', () => {
-		assert.strictEqual(buildEditPrompt('看 ![](<狗 (1).png>)', names), '看 [image2](狗 (1))');
-	});
-	test('未引用任何图片时原文返回', () => {
-		assert.strictEqual(buildEditPrompt('纯文本', names), '纯文本');
-	});
-	test('引用了编辑区不存在的图片名则报错', () => {
-		assert.throws(() => buildEditPrompt('看 ![](不存在.png)', names), /不存在\.png/);
+	test('含空格或半角括号的路径用尖括号包裹', () => {
+		assert.strictEqual(mediaDeclSnippet('猫', 'my cat (1).png'), '![猫](<my cat (1).png>)');
 	});
 });
 
 suite('buildEditFinalPrompt', () => {
-	test('按编辑模型取注入句前置，再接替换后的提示词', () => {
+	test('全部图拼成顶部声明，命名引用替换为【@图片N】，前置注入句', () => {
 		const config = { ...baseConfig, modelInjections: { 'gpt-image-2': '注入句' } };
-		assert.strictEqual(
-			buildEditFinalPrompt(config, ' 看 ![](猫.png) ', ['猫.png']),
-			'注入句\n\n看 [image1](猫)'
-		);
+		// editConfigView 默认 model = gpt-image-2，取该注入句
+		const out = buildEditFinalPrompt(config, '把[狗]放进[猫]的场景', ['猫.png', '狗.png']);
+		assert.strictEqual(out, '注入句\n\n把【@图片2】放进【@图片1】的场景');
 	});
-	test('编辑模型无注入句时只剩替换后的提示词', () => {
-		assert.strictEqual(buildEditFinalPrompt(baseConfig, '纯文本', []), '纯文本');
+	test('无注入句时只剩替换后的正文', () => {
+		const out = buildEditFinalPrompt(baseConfig, '看[猫]', ['猫.png']);
+		assert.strictEqual(out, '看【@图片1】');
+	});
+	test('编辑区有图但正文一次都没引用 → 抛错', () => {
+		assert.throws(() => buildEditFinalPrompt(baseConfig, '纯文本', ['猫.png']), /猫/);
+	});
+	test('含空格文件名的声明用尖括号包裹，引用按主名匹配', () => {
+		const out = buildEditFinalPrompt(baseConfig, '看[狗 (1)]', ['狗 (1).png']);
+		assert.strictEqual(out, '看【@图片1】');
 	});
 });
 
 suite('buildEditArchivePrompt', () => {
-	test('引用改写为 ![](input/原名)，不拼注入句', () => {
+	test('前置全部图声明 ![名](input/原名) + 命名引用正文，供右键重生成', () => {
 		const names = ['猫.png', '狗.png'];
 		const fileNames = dedupeArchiveNames(names);
-		const out = buildEditArchivePrompt(' 把 ![](狗.png) 放进 ![](猫.png) ', names, fileNames);
-		assert.strictEqual(out, '把 ![](input/狗.png) 放进 ![](input/猫.png)');
+		const out = buildEditArchivePrompt('把[狗]放进[猫]', names, fileNames);
+		assert.strictEqual(out, '![猫](input/猫.png)\n![狗](input/狗.png)\n把[狗]放进[猫]');
+	});
+	test('含空格文件名声明用尖括号包裹', () => {
+		const out = buildEditArchivePrompt('看[狗 (1)]', ['狗 (1).png'], ['狗 (1).png']);
+		assert.strictEqual(out, '![狗 (1)](<input/狗 (1).png>)\n看[狗 (1)]');
+	});
+	test('无图时仅正文', () => {
+		assert.strictEqual(buildEditArchivePrompt('纯文本', [], []), '纯文本');
 	});
 });
 
@@ -329,6 +429,13 @@ suite('EditSession', () => {
 	test('非图片 data URI 拒绝', () => {
 		const s = new EditSession();
 		assert.ok(s.addData('a.png', 'data:text/plain;base64,eA=='));
+	});
+	test('同主名异扩展拒绝（命名引用会冲突）', () => {
+		const s = new EditSession();
+		assert.strictEqual(s.addData('logo.png', png), null);
+		const err = s.addData('logo.jpg', png);
+		assert.ok(err && /logo/.test(err));
+		assert.strictEqual(s.list().length, 1);
 	});
 	test('remove 按名移除', () => {
 		const s = new EditSession();

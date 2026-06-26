@@ -1,13 +1,14 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os';
 import type { ImageFlowConfig, Task, TaskImage } from './shared';
 import { buildRequestBody, fetchWithTimeout } from './api';
 import { readConfig } from './config';
-import { isImageExt, isImageFileName, mimeOf } from './images';
+import { isImageExt, isImageFileName, mimeOf, mediaTypeOf, type MediaType } from './images';
 import { uriStem } from './paths';
 import { buildInjectedPrompt } from './inject';
 import { dedupeName } from './favorites';
-import { imageRefSnippet } from './refs';
+import { mediaDeclSnippet } from './refs';
 import { tasksRoot } from './storage';
 import { readTaskMeta } from './taskFiles';
 
@@ -38,6 +39,89 @@ export function parseImageRefs(content: string): { order: string[]; indexByPath:
 	return { order, indexByPath };
 }
 
+/** 一条媒体声明：alt（命名引用用的名字）、原始路径、媒体大类 */
+export interface MediaDecl {
+	alt: string;
+	path: string;
+	type: MediaType;
+}
+
+/** 名字表条目：命名引用 [名] 替换成 【@${标签}${index}】 时取用 */
+export interface NameEntry {
+	type: MediaType;
+	index: number;
+}
+
+/**
+ * 解析正文里所有 `![alt](路径)` 媒体声明，按出现顺序返回。
+ * alt 单独从整段匹配上提取（共享 IMAGE_REGEX 只捕获路径，不动其捕获组）。
+ */
+export function parseMediaDecls(content: string): MediaDecl[] {
+	const decls: MediaDecl[] = [];
+	for (const m of content.matchAll(IMAGE_REGEX)) {
+		const relPath = refPath(m);
+		if (!relPath) {
+			continue;
+		}
+		const alt = (m[0].match(/^!\[([^\]]*)\]/)?.[1] ?? '').trim();
+		decls.push({ alt, path: relPath, type: mediaTypeOf(path.extname(relPath)) });
+	}
+	return decls;
+}
+
+/**
+ * 由声明列表构建名字表：每类从 1 起独立编号（按出现顺序）。
+ * 任意两条声明 alt 相同即抛错——避免命名引用 [名] 歧义。
+ */
+export function buildNameTable(decls: MediaDecl[]): Map<string, NameEntry> {
+	const counters: Record<MediaType, number> = { image: 0, audio: 0, video: 0 };
+	const table = new Map<string, NameEntry>();
+	for (const d of decls) {
+		if (table.has(d.alt)) {
+			throw new Error(`提示词存在重名引用：${d.alt}`);
+		}
+		counters[d.type] += 1;
+		table.set(d.alt, { type: d.type, index: counters[d.type] });
+	}
+	return table;
+}
+
+/** 媒体大类 → 命名引用标签 */
+const MEDIA_LABEL: Record<MediaType, string> = { image: '图片', audio: '音频', video: '视频' };
+
+/** 命名引用正则：声明删除后剩下的 `[名]`，`(?!\()` 跳过 markdown 链接 `[文字](url)` */
+const NAMED_REF_REGEX = /\[([^\[\]]+)\](?!\()/g;
+
+/**
+ * 校验每条媒体声明都在正文里被 `[名]` 引用至少一次，否则抛错列出未引用名。
+ * 防止声明名与引用名不一致（如声明 `![李樱三视图]` 但正文写 `[李樱]`）导致图片被上传却无
+ * `【@图片N】` 指向、`[名]` 当字面文本残留这类静默错误。生成与编辑提交前各调一次。
+ */
+export function assertAllDeclsReferenced(content: string, decls: MediaDecl[]): void {
+	const stripped = content.replace(IMAGE_REGEX, '');
+	const referenced = new Set<string>();
+	for (const m of stripped.matchAll(NAMED_REF_REGEX)) {
+		referenced.add(m[1].trim());
+	}
+	const unused = [...new Set(decls.filter((d) => !referenced.has(d.alt)).map((d) => d.alt))];
+	if (unused.length) {
+		throw new Error(`以下声明的图片未被引用（检查 [名] 是否与声明名一致）：${unused.join('、')}`);
+	}
+}
+
+/**
+ * 生成发给模型的 prompt：先整体删除 `![...](...)` 声明（只删语法本身，前后空白保留），
+ * 再把命中名字表的 `[名]` 替换为 `【@图片N】`/`【@音频N】`/`【@视频N】`，未命中原样保留。
+ * 纯函数（不读盘），生成与编辑链路共用。
+ */
+export function replaceMediaRefs(content: string, table: Map<string, NameEntry>): string {
+	const stripped = content.replace(IMAGE_REGEX, '');
+	return stripped.replace(NAMED_REF_REGEX, (full, name: string) => {
+		const hit = table.get(name.trim());
+		return hit ? `【@${MEDIA_LABEL[hit.type]}${hit.index}】` : full;
+	});
+}
+
 /** 解析后的提示词：替换图片语法后的正文、按序参考图 base64、参考图原文件名（与 images 等长，归档用） */
 interface PromptResult {
 	prompt: string;
@@ -46,23 +130,6 @@ interface PromptResult {
 	names: string[];
 	/** 归档用正文：图片引用改写为指向任务 input/ 的 markdown，可直接右键重新生成 */
 	archivePrompt: string;
-}
-
-/**
- * 把正文里的每处图片语法替换为模型可理解的有序引用 `[imageN](文件名)`，其余正文保持不变。
- * 纯函数（不读盘），与 parseImageRefs 共用同一正则，保证「解析顺序」与「替换编号」一致。
- * 未在编号表中的引用（理论上不会出现）原样保留。
- */
-export function replaceImageRefs(content: string, indexByPath: Map<string, number>): string {
-	return content.replace(IMAGE_REGEX, (full, bracketed?: string, plain?: string) => {
-		const relPath = (bracketed ?? plain ?? '').trim();
-		const index = indexByPath.get(relPath);
-		if (index === undefined) {
-			return full;
-		}
-		const baseName = path.basename(relPath, path.extname(relPath));
-		return `[image${index}](${baseName})`;
-	});
 }
 
 /** 归档参考图文件名去重：保留原名，同名后续追加序号（a.png、a-1.png…），与 archiveInputs 落盘一致 */
@@ -76,19 +143,21 @@ export function dedupeArchiveNames(names: string[]): string[] {
 }
 
 /**
- * 把正文里的每处图片语法替换为指向任务文件夹 input/ 归档参考图的 markdown 引用 `![](input/原名)`，
- * 用于把提示词正文归档成可「直接右键生成」的 MD。序号与 replaceImageRefs 一致（共用同一编号表），
- * fileNames 是 archiveInputs 落盘的最终文件名（已去重），按序号顺序排列（fileNames[N-1] 即 imageN）。
- * 含空格/括号的名字由 imageRefSnippet 用尖括号包裹。未在编号表中的引用原样保留。
+ * 把正文里的每处图片语法替换为指向任务文件夹 input/ 归档参考图的 markdown 声明 `![alt](input/原名)`，
+ * 用于把提示词正文归档成可「直接右键生成」的 MD。序号取 indexBy（共用 parseImageRefs 编号表），
+ * fileNames 是 archiveInputs 落盘的最终文件名（已去重），按序号顺序排列（fileNames[N-1] 即第 N 张）。
+ * 保留原始 alt——命名引用 `[alt]` 依赖声明 alt 才能在重生成时替换为 `【@图片N】`。
+ * 含空格/括号的名字由 mediaDeclSnippet 用尖括号包裹。未在编号表中的引用原样保留。
  */
 export function archiveImageRefs(content: string, indexBy: Map<string, number>, fileNames: string[]): string {
-	return content.replace(IMAGE_REGEX, (full, bracketed?: string, plain?: string) => {
+	return content.replace(IMAGE_REGEX, (full: string, bracketed?: string, plain?: string) => {
 		const key = (bracketed ?? plain ?? '').trim();
 		const index = indexBy.get(key);
 		if (index === undefined) {
 			return full;
 		}
-		return imageRefSnippet(`input/${fileNames[index - 1]}`);
+		const alt = (full.match(/^!\[([^\]]*)\]/)?.[1] ?? '').trim();
+		return mediaDeclSnippet(alt, `input/${fileNames[index - 1]}`);
 	});
 }
 
@@ -100,6 +169,11 @@ export function archiveImageRefs(content: string, indexBy: Map<string, number>, 
  */
 export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<PromptResult> {
 	const { order, indexByPath } = parseImageRefs(content);
+
+	// 声明解析与校验放在读盘之前，命名不一致/同名时尽早失败，不浪费读图
+	const decls = parseMediaDecls(content);
+	const table = buildNameTable(decls);
+	assertAllDeclsReferenced(content, decls);
 
 	// 按顺序读取每张参考图，转 base64
 	const images: string[] = [];
@@ -120,8 +194,11 @@ export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<P
 		throw new Error(`以下参考图读取失败：${failed.join('、')}`);
 	}
 
-	// 第二遍：把图片语法替换为有序引用 [imageN](文件名)
-	const prompt = replaceImageRefs(content, indexByPath);
+	// 发给模型的 prompt：删声明 + 命名引用替换为【@图片N】。
+	// 已知限制：【@图片N】按媒体类型独立编号，而 images[] 由 parseImageRefs 按全局出现顺序（路径去重）
+	// 上传。纯图片、无重复路径时两套编号一致；混合媒体或同路径多 alt 时编号与上传下标会错位，
+	// 待接入音视频后端时再统一上传顺序（详见 logic.test.ts 的两条锁定测试）。
+	const prompt = replaceMediaRefs(content, table);
 	// 归档文件名：保留原名、重名去重，归档正文与 input/ 落盘共用，引用才能对上
 	const fileNames = dedupeArchiveNames(names);
 	const archivePrompt = archiveImageRefs(content, indexByPath, fileNames);
@@ -294,9 +371,24 @@ export async function openRequestPreview(
 	await openTextPreview(text);
 }
 
-/** 把文本打开成 markdown 预览文档（不落盘） */
+/** 请求预览文档统一命名 preview.md，拦截误触生成时按此名识别 */
+export const PREVIEW_DOC_NAME = 'preview.md';
+
+/** 该 Uri 是否为请求预览文档——其内容是请求参数而非正文，不能用于生成 */
+export function isPreviewDoc(uri: vscode.Uri): boolean {
+	return path.basename(uri.fsPath).toLowerCase() === PREVIEW_DOC_NAME;
+}
+
+/**
+ * 把文本写入系统临时目录的 .md 文件并打开预览。
+ * 用临时文件而非 untitled 文档：内容已落盘，关闭时不会弹「是否保存」。
+ */
 export async function openTextPreview(text: string): Promise<void> {
-	const doc = await vscode.workspace.openTextDocument({ content: text, language: 'markdown' });
+	const dir = path.join(os.tmpdir(), 'image-flow');
+	const uri = vscode.Uri.file(path.join(dir, PREVIEW_DOC_NAME));
+	await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
+	await vscode.workspace.fs.writeFile(uri, Buffer.from(text, 'utf8'));
+	const doc = await vscode.workspace.openTextDocument(uri);
 	await vscode.window.showTextDocument(doc, { preview: true });
 }
 
