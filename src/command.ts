@@ -11,6 +11,7 @@ import { dedupeName } from './favorites';
 import { mediaDeclSnippet } from './refs';
 import { tasksRoot } from './storage';
 import { readTaskMeta } from './taskFiles';
+import { errMsg } from './errors';
 
 /**
  * Markdown 图片语法的正则：匹配 `![alt](路径)`，路径可选 `<>` 包裹。
@@ -409,7 +410,6 @@ export async function previewRequestCommand(
 		const config = await readConfig(context);
 		await openRequestPreview(config, target);
 	} catch (err: unknown) {
-		const message = err instanceof Error ? err.message : String(err);
-		vscode.window.showErrorMessage(`Image Flow：${message}`);
+		vscode.window.showErrorMessage(`Image Flow：${errMsg(err)}`);
 	}
 }

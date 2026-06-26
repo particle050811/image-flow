@@ -536,6 +536,25 @@ button:disabled:active {
 	opacity: 0.85;
 }
 
+/* 编辑页「清空图片」：次要按钮样式，无图时禁用 */
+.clear-btn {
+	width: auto;
+	flex: 0 0 auto;
+	padding: 6px 16px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+.clear-btn:hover:not(:disabled) {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-secondaryBackground));
+	opacity: 0.85;
+}
+
+.clear-btn:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
 button.secondary {
 	background: var(--vscode-button-secondaryBackground);
 	color: var(--vscode-button-secondaryForeground);

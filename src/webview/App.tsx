@@ -121,6 +121,12 @@ export function App() {
 		vscode.postMessage({ type: 'saveConfig', patch: { [key]: value } });
 	};
 
+	// 多字段批量保存：一条 saveConfig 消息、扩展侧一次 globalState 写。模型切换（model/imageSize/记忆）共用
+	const saveFields = (patch: Partial<Config>) => {
+		setConfig((prev) => (prev ? { ...prev, ...patch } : prev));
+		vscode.postMessage({ type: 'saveConfig', patch });
+	};
+
 	// 注意：navigate 消息处理器（空依赖 useEffect）持有首渲染的本函数实例，
 	// 此函数只能调 setter/postMessage，不得读取 state，否则会拿到首渲染快照
 	const switchTab = (id: TabId) => {
@@ -200,6 +206,7 @@ export function App() {
 					cols={config.workbenchCols}
 					tabCols={config.workbenchTabCols}
 					onChange={saveField}
+					onChangeMany={saveFields}
 					onGenerate={generate}
 					onPreview={previewRequest}
 					onAddLibrary={addLibrary}
@@ -217,6 +224,7 @@ export function App() {
 					busy={busy}
 					status={status}
 					onChange={saveField}
+					onChangeMany={saveFields}
 					onError={(message) => setStatus({ text: message, error: true })}
 				/>
 			</Tabs.Content>

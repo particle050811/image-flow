@@ -3,10 +3,15 @@ import { isPreviewDoc, previewRequestCommand } from './command';
 import { seedModelInjections } from './config';
 import { SidebarProvider } from './sidebarProvider';
 import { TaskManager } from './tasks';
+import { initLog, log } from './log';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export async function activate(context: vscode.ExtensionContext) {
+	// 台账日志通道：尽早初始化，后续任务/错误写入供排障
+	initLog(context);
+	log('扩展已激活');
+
 	// 首次激活把内置注入种子写入配置，让默认抑噪句在侧栏输入框可见可改。
 	// 必须在注册侧栏 provider 前 await：否则 webview 可能先读到尚未种入的 config，默认句首次不显示。
 	await seedModelInjections(context);

@@ -62,6 +62,14 @@ export async function readImageDesc(imageUri: string): Promise<string> {
 	}
 }
 
+/**
+ * 从同主名 .md 描述里取「别名」：描述首个 `[别名]` 方括号片段（如 `- [九胡] 酒狐…` → `九胡`）。
+ * 没有方括号片段返回空串，调用方退化为用文件名做 alt。
+ */
+export function aliasFromDesc(desc: string): string {
+	return /\[([^\]]+)\]/.exec(desc)?.[1].trim() ?? '';
+}
+
 /** 单个素材库扫描的条目数上限——防止用户误把 C 盘等超大目录加入导致卡死 */
 const MAX_ENTRIES = 500;
 
@@ -117,6 +125,11 @@ async function scanImages(
 		counter.count++;
 		const child = vscode.Uri.joinPath(dir, name);
 		if (type === vscode.FileType.Directory) {
+			// 跳过扩展自身的工作目录：thumbs/ 是缩略图、tasks/ 是归档参考图，
+			// 混入素材库会被当原图收藏/送编辑（缩略图路径还会读取失败）
+			if (name === '.image-flow') {
+				continue;
+			}
 			images.push(...(await scanImages(child, depth + 1, counter)));
 		} else if (type === vscode.FileType.File && isImageFileName(name)) {
 			images.push({ name, uri: child.toString(), hasDesc: stems.has(imageStem(name)) });

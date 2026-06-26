@@ -10,6 +10,11 @@ export const CONFIG_OPTIONS: ConfigOptions = {
 	model: ['nano-banana-2', 'nano-banana-pro', 'gpt-image-2', 'gpt-image-2-vip'],
 	aspectRatio: ['1:1', '16:9', '9:16', '4:3', '3:4'],
 	imageSize: ['1K', '2K', '4K'],
+	// 不同模型支持的分辨率不同：gpt-image-2 仅 1K（选 2K/4K 服务端也不会出图）；
+	// 其余模型支持全集，不在表内即回退 imageSize 全集。
+	imageSizesByModel: {
+		'gpt-image-2': ['1K'],
+	},
 	namingModel: [
 		'gemini-3.5-flash',
 		'gemini-3.1-flash-lite',
@@ -22,6 +27,12 @@ export const CONFIG_OPTIONS: ConfigOptions = {
 		'gpt-5.4',
 	],
 };
+
+/** 把分辨率收敛到该模型支持的范围内：在范围内原样返回，否则取该模型的首个支持值 */
+export function clampImageSize(model: string, imageSize: string): string {
+	const allowed = CONFIG_OPTIONS.imageSizesByModel[model] ?? CONFIG_OPTIONS.imageSize;
+	return allowed.includes(imageSize) ? imageSize : allowed[0];
+}
 
 /** globalState 中存放非敏感配置的键；API Key 单独走 secrets */
 const STATE_KEY = 'image-flow.config';
@@ -45,6 +56,7 @@ const DEFAULTS: StoredConfig = {
 	model: 'nano-banana-2',
 	aspectRatio: '3:4',
 	imageSize: '4K',
+	imageSizeMemory: {},
 	concurrency: 4,
 	workbenchCols: 2,
 	tasksCols: 2,
@@ -56,6 +68,7 @@ const DEFAULTS: StoredConfig = {
 	editModel: 'nano-banana-2',
 	editAspectRatio: '3:4',
 	editImageSize: '4K',
+	editImageSizeMemory: {},
 	editConcurrency: 4,
 	namingModel: 'gemini-3.1-flash-lite',
 	autoName: true,
@@ -66,7 +79,11 @@ const DEFAULTS: StoredConfig = {
 export async function readConfig(context: vscode.ExtensionContext): Promise<ImageFlowConfig> {
 	const stored = context.globalState.get<Partial<StoredConfig>>(STATE_KEY, {});
 	const apiKey = (await context.secrets.get(SECRET_KEY)) ?? '';
-	return { ...DEFAULTS, ...stored, apiKey };
+	const merged = { ...DEFAULTS, ...stored, apiKey };
+	// 收敛历史遗留的越界分辨率（如旧版在 gpt-image-2 下存了 4K），保证下拉显示与落盘 meta 一致
+	merged.imageSize = clampImageSize(merged.model, merged.imageSize);
+	merged.editImageSize = clampImageSize(merged.editModel, merged.editImageSize);
+	return merged;
 }
 
 /** 写回配置：apiKey 存 secrets，其余存 globalState（按字段合并） */

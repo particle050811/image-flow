@@ -11,6 +11,7 @@ import { Select, Stepper, Field } from './fields';
 import { Thumb } from './Thumb';
 import { useCooldown } from './useCooldown';
 import { namedRefSnippet } from '../refs';
+import { modelSizeControl } from '../modelOptions';
 
 /** 编辑页：图片区（上传/拖入/点击插入引用）+ 模板 + 提示词 + 编辑专属参数 + 生成 */
 export function Edit({
@@ -22,6 +23,7 @@ export function Edit({
 	busy,
 	status,
 	onChange,
+	onChangeMany,
 	onError,
 }: {
 	hidden: boolean;
@@ -32,6 +34,7 @@ export function Edit({
 	busy: boolean;
 	status: StatusState;
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
+	onChangeMany: (patch: Partial<Config>) => void;
 	onError: (message: string) => void;
 }) {
 	const [prompt, setPrompt] = useState('');
@@ -111,6 +114,14 @@ export function Edit({
 		});
 	};
 
+	// 分辨率随模型变化 + 切模型按各模型独立记忆恢复档位（编辑页用 editModel 组）；与工作台共用 modelSizeControl
+	const { sizeOptions, changeModel } = modelSizeControl(
+		config,
+		options,
+		{ model: 'editModel', size: 'editImageSize', memory: 'editImageSizeMemory' },
+		onChangeMany
+	);
+
 	// 选中模板：追加到提示词末尾（不覆盖已有内容）
 	const applyTemplate = (name: string) => {
 		const t = templates.find((x) => x.name === name);
@@ -127,6 +138,12 @@ export function Edit({
 		}
 		cool();
 		vscode.postMessage({ type: 'editGenerate', prompt });
+	};
+
+	// 一键清空：编辑区图片（扩展侧持有）+ 提示词（本地 state）。提交后两者均保留以支持迭代编辑，需要时清空
+	const clearAll = () => {
+		vscode.postMessage({ type: 'editClearImages' });
+		setPrompt('');
 	};
 
 	return (
@@ -207,12 +224,12 @@ export function Edit({
 					label="模型"
 					value={config.editModel}
 					options={options.model}
-					onChange={(v) => onChange('editModel', v)}
+					onChange={changeModel}
 				/>
 				<Select
 					label="分辨率"
 					value={config.editImageSize}
-					options={options.imageSize}
+					options={sizeOptions}
 					onChange={(v) => onChange('editImageSize', v)}
 				/>
 				<Select
@@ -231,6 +248,13 @@ export function Edit({
 			</div>
 
 			<div className="gen-row">
+				<button
+					className="clear-btn"
+					disabled={!images.length && !prompt.trim()}
+					onClick={clearAll}
+				>
+					清空
+				</button>
 				<button
 					className="preview-btn"
 					onClick={() => vscode.postMessage({ type: 'editPreviewRequest', prompt })}

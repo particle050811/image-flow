@@ -93,6 +93,7 @@ export function Favorites({
 								src={img.src}
 								title={img.name}
 								uri={img.uri}
+								draggable
 								onClick={openImageClick(img.uri)}
 								collections={collections}
 								favorited={img.favorited}

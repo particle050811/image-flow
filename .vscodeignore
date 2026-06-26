@@ -3,11 +3,14 @@
 out/**
 node_modules/**
 src/**
+docs/**
+CLAUDE.md
+TECH_DEBT_*.md
 .gitignore
 .yarnrc
 esbuild.js
 vsc-extension-quickstart.md
-**/tsconfig.json
+**/tsconfig*.json
 **/eslint.config.mjs
 **/*.map
 **/*.ts

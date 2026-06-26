@@ -112,9 +112,9 @@ Adapter 接口（`src/adapters/types.ts`）要点：
   "aspectRatios": ["1:1","16:9","9:16","4:3","3:4"],
   "imageSizes": ["1K","2K","4K"],          // 见 §5 尺寸换算
   "custom": [
-    { "key":"quality",    "label":"画质",     "options":["low","medium","high","auto"], "default":"high" },
-    { "key":"moderation", "label":"审核力度", "options":[], "default":"low" }   // options 空=隐藏固定参数，见 §6
+    { "key":"quality", "label":"画质", "options":["low","medium","high","auto"], "default":"high" }
   ]
+  // 注：像 moderation 那类「不给用户出下拉、恒发固定值」的参数不进这里，由 adapter 写死，见 §6
 }
 ```
 
@@ -149,17 +149,21 @@ adapter 里 `resolveImageSize`：`imageSize` 已是 `\d+x\d+` 像素串则原样
 
 ---
 
-## 6. 隐藏的固定参数（moderation 那类）
+## 6. 固定参数（moderation 那类）—— adapter 内写死
 
-需求：某些参数不想给用户出下拉，但要以固定默认值随请求发送（如 `moderation` 恒为 `low`）。
+需求：某些参数不想给用户出下拉，但要以固定值随请求发送（如 `moderation` 恒为 `low`）。
 
-约定：自定义参数 `options` 为空 `[]` = **前端不渲染下拉**，但其 `default` 仍随请求发送。
+约定：**这类参数不进 ParamSet JSON**，由对应 adapter 在拼请求体时直接写死。例如 `openai-images`
+adapter 固定带上 `moderation: 'low'`。ParamSet.custom 里只放真正要给用户出下拉的可见参数。
+
+好处：JSON 不必再表达「隐藏」语义，前端无需过滤，固定值也不依赖「播种进 config.params」这条链路，
+少一类容易漏发的状态。
 
 实现要点：
-- `paramDefaults(paramSet)` 收集所有自定义参数默认值（含隐藏的）。
-- 切 Provider（`providerSelectPatch`）/切模型（Workbench/Edit 的 onModel/onEditModel）时把 `params`/`editParams` **播种为默认值**——否则隐藏参数进不了 config.params，发不出去；可见参数也能默认即生效（之前只显示不发）。
-- 前端渲染 `ps.custom.filter(c => c.options.length > 0)`。
-- 请求体过滤用 `if (v !== undefined && v !== '')`（**不能用 `if (v)`**，否则会吞掉 `'0'`/`'false'` 这类 falsy 但合法的固定值）。
+- 固定值写在 adapter 拼 body 的代码里，跟随该协议走（换 baseUrl/调可见参数仍靠 JSON，不影响）。
+- ParamSet.custom 全是可见项，前端直接全渲染，无需 `filter(c => c.options.length > 0)`。
+- 可见参数默认值仍要在切 Provider/切模型时**播种为默认值**（否则只显示不发）。
+- 请求体过滤用 `if (v !== undefined && v !== '')`（**不能用 `if (v)`**，否则会吞掉 `'0'`/`'false'` 这类 falsy 但合法的值）。
 
 ---
 
@@ -202,8 +206,9 @@ adapter 里 `resolveImageSize`：`imageSize` 已是 `\d+x\d+` 像素串则原样
 
 4. **尺寸直发丢比例**（见 §5）。→ 重做时 openai/gemini adapter 一开始就做「比例+档位→像素」换算。
 
-5. **隐藏固定参数发不出去**（见 §6）。默认值不播种进 config.params 就不会发送；且 `if(v)` 会吞
-   falsy 值。→ 重做时把「参数默认值播种」作为切模型/切 Provider 的固定动作。
+5. **固定参数（moderation 那类）放错层**（见 §6）。最初想用「options 空=隐藏」让 JSON 表达固定参数，
+   结果默认值不播种进 config.params 就发不出去、且 `if(v)` 会吞 falsy 值，链路又长又易漏。
+   → **重做时这类固定值直接写死在 adapter 里**；ParamSet 只留可见参数，可见参数默认值仍要播种。
 
 6. **providerId 失效卡死 + 自愈过度**。删掉 custom.json 后 config.providerId 仍是 `custom`，
    前端合成「自定义」项处于选中态，受控组件选中已选项不触发 onChange → 永远发不出创建消息 →

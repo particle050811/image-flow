@@ -3,10 +3,11 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { toVipPixels, buildRequestBody, TransientError } from '../api';
-import { mdStems, imageStem, sortDescFirst, readImageDesc } from '../materials';
+import { mdStems, imageStem, sortDescFirst, readImageDesc, aliasFromDesc } from '../materials';
 import { formatStamp, parseImageRefs, archiveImageRefs, dedupeArchiveNames, parseMediaDecls, buildNameTable, replaceMediaRefs, assertAllDeclsReferenced } from '../command';
 import { isImageExt, isImageFileName, mimeOf, mediaTypeOf } from '../images';
-import { editConfigView } from '../config';
+import { editConfigView, clampImageSize, CONFIG_OPTIONS } from '../config';
+import { supportedSizes, switchModelSize, modelSizeControl } from '../modelOptions';
 import { namedRefSnippet, mediaDeclSnippet } from '../refs';
 import { buildEditFinalPrompt, buildEditArchivePrompt } from '../edit';
 import { buildPromptFileContent, dataUriBytes } from '../taskFiles';
@@ -36,6 +37,7 @@ const baseConfig: ImageFlowConfig = {
 	model: 'nano-banana-2',
 	aspectRatio: '3:4',
 	imageSize: '1K',
+	imageSizeMemory: {},
 	concurrency: 1,
 	workbenchCols: 4,
 	tasksCols: 2,
@@ -47,6 +49,7 @@ const baseConfig: ImageFlowConfig = {
 	editModel: 'gpt-image-2',
 	editAspectRatio: '16:9',
 	editImageSize: '2K',
+	editImageSizeMemory: {},
 	editConcurrency: 3,
 	namingModel: 'gemini-3.5-flash',
 	autoName: true,
@@ -98,6 +101,89 @@ suite('toVipPixels', () => {
 	test('未知比例回退 1:1，未知分辨率回退 1K', () => {
 		assert.strictEqual(toVipPixels('21:9', '2K'), '2048x2048');
 		assert.strictEqual(toVipPixels('1:1', '8K'), '1024x1024');
+	});
+});
+
+suite('clampImageSize', () => {
+	test('模型支持该分辨率时原样返回', () => {
+		assert.strictEqual(clampImageSize('nano-banana-2', '4K'), '4K');
+		assert.strictEqual(clampImageSize('gpt-image-2', '1K'), '1K');
+	});
+	test('gpt-image-2 仅 1K，越界回退首个支持档位', () => {
+		assert.strictEqual(clampImageSize('gpt-image-2', '4K'), '1K');
+		assert.strictEqual(clampImageSize('gpt-image-2', '2K'), '1K');
+	});
+	test('模型不在表内回退全集，未知分辨率回退首档', () => {
+		assert.strictEqual(clampImageSize('nano-banana-pro', '2K'), '2K');
+		assert.strictEqual(clampImageSize('nano-banana-2', '8K'), '1K');
+	});
+});
+
+suite('supportedSizes', () => {
+	test('受限模型只列支持档位，其余回退全集', () => {
+		assert.deepStrictEqual(supportedSizes(CONFIG_OPTIONS, 'gpt-image-2'), ['1K']);
+		assert.deepStrictEqual(supportedSizes(CONFIG_OPTIONS, 'nano-banana-2'), ['1K', '2K', '4K']);
+	});
+});
+
+suite('switchModelSize', () => {
+	test('切到受限模型回退首档，旧模型分辨率记入记忆', () => {
+		const r = switchModelSize(CONFIG_OPTIONS, {}, 'nano-banana-2', '4K', 'gpt-image-2');
+		assert.strictEqual(r.size, '1K');
+		assert.strictEqual(r.memory['nano-banana-2'], '4K');
+	});
+	test('切回原模型恢复其独立分辨率（4K 不丢）', () => {
+		const r = switchModelSize(
+			CONFIG_OPTIONS,
+			{ 'nano-banana-2': '4K' },
+			'gpt-image-2',
+			'1K',
+			'nano-banana-2'
+		);
+		assert.strictEqual(r.size, '4K');
+		assert.strictEqual(r.memory['gpt-image-2'], '1K');
+	});
+	test('切到未访问且兼容的模型沿用当前分辨率', () => {
+		const r = switchModelSize(CONFIG_OPTIONS, {}, 'nano-banana-2', '2K', 'nano-banana-pro');
+		assert.strictEqual(r.size, '2K');
+	});
+});
+
+suite('modelSizeControl', () => {
+	test('工作台组：切模型一次性写回三键（单条 patch）', () => {
+		const patches: Partial<ImageFlowConfig>[] = [];
+		const { sizeOptions, changeModel } = modelSizeControl(
+			baseConfig,
+			CONFIG_OPTIONS,
+			{ model: 'model', size: 'imageSize', memory: 'imageSizeMemory' },
+			(p) => patches.push(p)
+		);
+		assert.deepStrictEqual(sizeOptions, ['1K', '2K', '4K']);
+		changeModel('gpt-image-2');
+		// 只发一条 patch（F059：原 3 次 onChange 收敛为 1 次），且三键齐全、值正确
+		assert.strictEqual(patches.length, 1);
+		assert.deepStrictEqual(patches[0], {
+			model: 'gpt-image-2',
+			imageSize: '1K',
+			imageSizeMemory: { 'nano-banana-2': '1K' },
+		});
+	});
+	test('编辑组：用 editModel/editImageSize/editImageSizeMemory 三键', () => {
+		const patches: Partial<ImageFlowConfig>[] = [];
+		const { sizeOptions, changeModel } = modelSizeControl(
+			baseConfig,
+			CONFIG_OPTIONS,
+			{ model: 'editModel', size: 'editImageSize', memory: 'editImageSizeMemory' },
+			(p) => patches.push(p)
+		);
+		assert.deepStrictEqual(sizeOptions, ['1K']); // editModel=gpt-image-2 仅 1K
+		changeModel('nano-banana-2');
+		assert.strictEqual(patches.length, 1);
+		assert.deepStrictEqual(patches[0], {
+			editModel: 'nano-banana-2',
+			editImageSize: '2K',
+			editImageSizeMemory: { 'gpt-image-2': '2K' },
+		});
 	});
 });
 
@@ -514,6 +600,12 @@ suite('materials 同名 MD 描述', () => {
 			sorted.map((i) => i.name),
 			['b.png', 'd.png', 'a.png', 'c.png']
 		);
+	});
+	test('aliasFromDesc 取首个方括号别名，无方括号返回空串', () => {
+		assert.strictEqual(aliasFromDesc('- [九胡] 酒狐女仆，狐耳少女。'), '九胡');
+		assert.strictEqual(aliasFromDesc('[李樱] 一手持[传送石]'), '李樱');
+		assert.strictEqual(aliasFromDesc('一张没有别名的描述'), '');
+		assert.strictEqual(aliasFromDesc(''), '');
 	});
 	test('readImageDesc 大小写不匹配也能读到，缺失返回空串', async () => {
 		const tmp = vscode.Uri.file(

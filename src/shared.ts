@@ -9,6 +9,8 @@ export interface ImageFlowConfig {
 	model: string;
 	aspectRatio: string;
 	imageSize: string;
+	/** 每个生成模型上次选用的分辨率，切模型时据此恢复（imageSize 是当前模型的生效值） */
+	imageSizeMemory: Record<string, string>;
 	concurrency: number;
 	/** 工作台素材库图片每行显示几张 */
 	workbenchCols: number;
@@ -30,6 +32,8 @@ export interface ImageFlowConfig {
 	editAspectRatio: string;
 	/** 编辑页专属分辨率 */
 	editImageSize: string;
+	/** 每个编辑模型上次选用的分辨率，切模型时据此恢复 */
+	editImageSizeMemory: Record<string, string>;
 	/** 编辑页专属并发数 */
 	editConcurrency: number;
 	/** AI 给任务命名所用的对话模型 */
@@ -72,6 +76,8 @@ export interface ConfigOptions {
 	model: readonly string[];
 	aspectRatio: readonly string[];
 	imageSize: readonly string[];
+	/** 模型 → 该模型支持的分辨率子集；模型不在表内时回退 imageSize 全集 */
+	imageSizesByModel: Record<string, readonly string[]>;
 	/** AI 命名可选的对话模型 */
 	namingModel: readonly string[];
 }
@@ -280,6 +286,7 @@ export type OutboundMessage =
 	| { type: 'editAddImages'; uris: string[] }
 	| { type: 'editAddImagesData'; items: { name: string; data: string }[] }
 	| { type: 'editRemoveImage'; name: string }
+	| { type: 'editClearImages' }
 	| { type: 'editOpenImage'; name: string }
 	| { type: 'editGenerate'; prompt: string }
 	| { type: 'editPreviewRequest'; prompt: string }

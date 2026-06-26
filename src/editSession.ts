@@ -62,6 +62,11 @@ export class EditSession {
 		this.images = this.images.filter((i) => i.name !== name);
 	}
 
+	/** 清空编辑区全部图片（提交后保留图片以支持迭代编辑，需手动清空时调用） */
+	clear(): void {
+		this.images = [];
+	}
+
 	/** 是否需要 webview 生成压缩展示图：尚无展示图、原图够大、且非 gif（降采样丢动画） */
 	needsDisplay(img: EditImage): boolean {
 		return (

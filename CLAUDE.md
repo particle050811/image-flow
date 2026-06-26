@@ -43,6 +43,8 @@ npm test               # 运行扩展测试（vscode-test，会下载并启动 V
 
 侧栏前端（`src/webview/`，React）与扩展主进程通过 `postMessage` 通信，消息协议与共享类型集中在 `src/shared.ts`（唯一定义处，前后端都从这里取，避免漂移）。`SidebarProvider`（`src/sidebarProvider.ts`）持有 Webview、转发消息、把文件 Uri 经 `asWebviewUri` 转成前端可加载的 `src`。Webview 静态资源（`media/sidebar.js`、`media/sidebar.css`）走 `asWebviewUri` + CSP nonce 加载。
 
+**单根工作区是明确的产品决策**：`.image-flow` 存储目录（`src/storage.ts`）与注入用的 `IMAGES.md`（`src/inject.ts`）都取 `workspaceFolders[0]`，不支持多根工作区下按 md 归属分别落盘。多根场景不在支持范围内，无需为此加按 md 取根的逻辑。（自动素材库 `listAutoLibraries` 用 `getWorkspaceFolder(mdUri)` 是为定位 md 所属层级，与此不冲突。）
+
 生成与编辑共用**异步任务机制**（`src/tasks.ts` 的 `TaskManager`，公共提交流程 `start()`）：点生成 → 在工作区根 `.image-flow/tasks/<毫秒时间戳>/` 建任务文件夹并归档提示词 `.md` 与 `input/` 参考图（`src/storage.ts` 定根、`src/taskFiles.ts` 写文件）→ 按并发数（同一任务要几张图）用 `replyType:'async'` **逐个串行错开提交**拿 job id（提交用专属 120s 超时；并发会让多份大图 base64 抢同一上行带宽、超时计时同时起跑而整批 abort，故串行让每份独占带宽、超时窗口只覆盖自身——服务端生成仍并行）→ 任务记录持久化进 `globalState` → 单个定时器（4s）轮询 `GET /v1/api/result`，某 job 成功就把图下载进任务文件夹 → 全部 job 终结后从持久化移除（无成图则连空文件夹一并删除）。重启时 `resume()` 续拉未完成任务。「任务」标签页把进行中卡片与历史按文件夹名（毫秒时间戳）倒序合并展示，`listHistory` 用 `activeFolders()` 排除进行中文件夹避免与待办重复。
 
 API 调用封装在 `src/api.ts`（`submitGeneration` / `queryResult`），Markdown 正文解析与参考图处理在 `src/command.ts`（`buildPrompt` 把 `![](路径)` 解析为有序参考图 base64 + 替换为 `[imageN]` 引用），素材库扫描在 `src/materials.ts`。提示词注入在 `src/inject.ts`（`buildInjectedPrompt` 把「模型注入句 + 工作区根 IMAGES.md + 正文」拼成最终 prompt，模型注入句按模型内置兜底、可在侧栏覆盖），提交（`tasks.ts`）与预览（`command.ts`）两处都在 `buildPrompt` 之后各调一次。新增 webview 前端代码无需改 `esbuild.js`（webview 入口已是 `src/webview/index.tsx` 单 bundle，新组件 import 进去即可）。

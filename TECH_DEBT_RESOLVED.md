@@ -4,11 +4,24 @@
 
 ## 轮次记录
 
+- **2026-06-26 第五轮（聚焦：round-4 后增量）**：复审 30+ 提交。新增并当场修复 F058/F059/F060（模型切换接线去重 + saveConfig 批量化 + 错误消息提取收口）；按维护者决策落地 F034（单根工作区结案）、F035（台账日志 OutputChannel）、编辑区「清空」按钮。`compile` 全绿、`npm test` 113→115 项全绿（新增 2 项 `modelSizeControl` 测试）。
 - **2026-06-19 第四轮（聚焦：前端重复造轮子 + 大文件拆分）**：新增 F052–F057。F052/F053/F054/F055/F057 当轮重构去重（commit 35eecc5）——抽出 `src/webview/Thumb.tsx`、`usePicker.ts`、`useCooldown.ts` 与 `src/toWebview.ts`，重复块全部收敛为单一来源。F056（god 文件）下沉图转换簇令 `sidebarProvider.ts` 726→663，收藏夹 CRUD 簇评估后有意保留，663 行经维护者决策接受、结案。`compile` + 收藏单测全绿，过代码审核（ready to merge）。
 - **2026-06-11 F051/F042② 实装**：真缩略图上线（新增 `src/thumbs.ts` 与 `src/webview/thumbs.ts`），顺路完成 F042 第②步，整项 F042 终结。`npm test`（55 项）全绿。
 - **2026-06-11 第三轮**：复核 F001–F031 全部成立；F032 因毫秒时间戳自然解决；新增 F039–F049，其中 F039–F041/F043–F047/F049 当轮修复（commit fc21dcd），F042 完成第①步。`compile`/`npm test`（52 项）全绿，已过代码审核（ready to merge）。
 - **2026-06-09 第二轮**：新增 F023–F038；F023–F028/F030/F031 当轮修复，F029 部分修复（npm audit fix 修掉 glob 高危）。抽出纯函数 isTaskActive/aggregateProgress/replaceImageRefs/isImageFileName，logic.test.ts 25→35 项。
 - **2026-06-08 首轮**：F001–F022 全部修复。新增 `src/images.ts`、`src/paths.ts`、`src/test/logic.test.ts`，删除一次性迁移代码 `migrateLegacySettings`，补测试时抓出并修掉尖括号正则截断 bug（F009）。
+
+## 第五轮已修（2026-06-26）
+
+| ID | Status | Category | File:Line | Sev | Effort | Description | 修复 |
+|----|--------|----------|-----------|-----|--------|-------------|------|
+| F034 | ✅可接受 | Architecture | src/inject.ts / src/storage.ts | Low | — | 单根工作区假设扩散到 `storage.ts`/`inject.ts`（取 `workspaceFolders[0]`），多根下 `.image-flow` 落点与素材库口径不一致。连续三轮开放问题。 | 维护者拍板：**单根工作区是明确产品决策**，不支持多根。已写进 `CLAUDE.md`「前后端通信与异步任务」段（`listAutoLibraries` 用 `getWorkspaceFolder(mdUri)` 仅为定位 md 层级，不冲突）。结案。 |
+| F035 | ✅RESOLVED | Observability | src/log.ts（新增） | Low | S | 无 OutputChannel，失败信息只在弹窗/状态行一闪，排障靠用户复述。连续三轮开放问题。 | 新增 `src/log.ts`：「Image Flow」OutputChannel，`extension.ts` 激活时 `initLog`。`tasks.ts` 记任务提交/下载/轮询失败/全失败/终结，`SidebarProvider.post` 的 error 分支记所有 surfaced error。 |
+| F058 | ✅RESOLVED | Architecture (duplication) | Workbench.tsx / Edit.tsx | Low | S | 模型切换接线 `sizeOptions = supportedSizes(...)` + `changeModel`（记旧档→算新档→3 个 onChange）在工作台/编辑页近乎逐字重复，仅差 config 键前缀。 | 抽 `modelOptions.ts` 的 `modelSizeControl(config, options, keys, onChangeMany)` 返回 `{ sizeOptions, changeModel }`，两页各传一组键（model 组 / editModel 组）复用。放在已测的 DOM-free 模块，新增 2 项测试。 |
+| F059 | ✅RESOLVED | Performance (minor) | App.tsx / Workbench.tsx / Edit.tsx | Low | S | `changeModel` 连发 3 个 `onChange` → 3 条 `saveConfig` → 扩展侧 3 次 globalState read-modify-write，非原子。 | `modelSizeControl` 内把三键合成单 patch；`App.tsx` 新增 `saveFields(patch)` 批量保存，一次切模型 = 1 条消息 / 1 次写。测试锁定「只发一条 patch」。 |
+| F060 | ✅RESOLVED | Consistency (duplication) | 多处（command/tasks/sidebarProvider） | Low | S | `err instanceof Error ? err.message : String(err)` 在 9 处复写；错误弹窗 + 消息提取 + 日志总捆绑在一起。 | 抽 `src/errors.ts` 的 `errMsg(err)`，9 处复用；`SidebarProvider.postError(err)` 把「消息提取 + post 弹窗 + 台账日志」一处收口，4 个 catch 分支收敛为 `this.postError(err)`。 |
+
+> 配套交付（非债，按维护者要求的功能）：编辑区「清空」按钮——一键清空编辑区图片（`EditSession.clear()` + `editClearImages` 消息）与提示词本地 state，无图且无提示词时禁用；提交后保留图片/提示词以支持迭代编辑的语义不变。
 
 ## 第四轮已修（2026-06-19，commit 35eecc5）
 

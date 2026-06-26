@@ -6,6 +6,8 @@ import { buildEditFinalPrompt, buildEditArchivePrompt } from './edit';
 import { buildInjectedPrompt } from './inject';
 import type { EditImage } from './editSession';
 import { archiveInputs, buildPromptFileContent, writePromptFile, writeTaskMeta } from './taskFiles';
+import { log } from './log';
+import { errMsg } from './errors';
 import type { ImageFlowConfig, PendingTask, PendingJob, TaskMeta } from './shared';
 
 /** TaskManager.start 的参数：与任务来源（生成/编辑）无关的公共提交要素 */
@@ -294,6 +296,7 @@ export class TaskManager {
 		await this.persist();
 		this.emit();
 
+		log(`提交任务 ${folder}（${opts.kind}，${count} 张，模型 ${opts.config.model}）`);
 		void this.submitJobs(opts.config, task, opts.prompt, opts.images);
 		return task;
 	}
@@ -318,7 +321,7 @@ export class TaskManager {
 				job.status = 'running';
 			} catch (err) {
 				job.status = 'failed';
-				job.error = err instanceof Error ? err.message : String(err);
+				job.error = errMsg(err);
 			}
 		}
 
@@ -331,6 +334,7 @@ export class TaskManager {
 			// 任务文件夹与 meta.json 保留，失败任务进入历史并以 0/N 留痕，不再静默删除。
 			const errors = [...new Set(task.jobs.map((j) => j.error).filter((e): e is string => !!e))];
 			this.tasks = this.tasks.filter((t) => t !== task);
+			log(`任务 ${task.folder} 全部 ${task.jobs.length} 次提交失败：${errors.join('；')}`);
 			void vscode.window.showErrorMessage(
 				`Image Flow：${task.folder} 全部 ${task.jobs.length} 次提交失败：${errors.join('；')}`
 			);
@@ -409,7 +413,8 @@ export class TaskManager {
 					}
 					// 其他错误（响应格式异常、写盘失败等）非瞬时，标记失败并记录原因，避免无限重试到超时
 					job.status = 'failed';
-					job.error = err instanceof Error ? err.message : String(err);
+					job.error = errMsg(err);
+					log(`任务 ${task.folder} 轮询失败：${job.error}`);
 					changed = true;
 				}
 			}
@@ -443,6 +448,7 @@ export class TaskManager {
 		}
 		const errors = [...new Set(failed.map((j) => j.error).filter((e): e is string => !!e))];
 		const detail = errors.length ? `：${errors.join('；')}` : '';
+		log(`任务 ${task.folder} 终结：成功 ${task.images.length}/${task.jobs.length}，失败 ${failed.length}${detail}`);
 		if (task.images.length) {
 			void vscode.window.showWarningMessage(
 				`Image Flow：${task.folder} 有 ${failed.length} 张生成失败${detail}`
@@ -476,6 +482,7 @@ export class TaskManager {
 		// 成功数随下载累加并回写 meta.json，供任务终结后历史展示成功率
 		task.meta.succeeded = task.images.length;
 		await this.writeMeta(task);
+		log(`任务 ${task.folder} 下载 ${saved.length} 张（job ${job.id}）`);
 		return true;
 	}
 

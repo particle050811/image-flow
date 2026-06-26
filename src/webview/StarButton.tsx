@@ -42,7 +42,7 @@ export function StarButton({
 									setMenu(null);
 								}}
 							>
-								移动到「{c.name}」
+								{favorited ? '移动到' : '收藏到'}「{c.name}」
 							</li>
 						))}
 					</ul>

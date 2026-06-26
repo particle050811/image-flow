@@ -8,25 +8,20 @@ import { listHistory, openRequestPreview, buildPreviewText, openTextPreview, isP
 import { TaskManager } from './tasks';
 import { EditSession } from './editSession';
 import { listPromptTemplates } from './prompts';
-import { tasksRoot, workspaceRoot } from './storage';
+import { tasksRoot } from './storage';
 import { saveThumb } from './thumbs';
+import { log } from './log';
+import { errMsg } from './errors';
 import { buildEditFinalPrompt } from './edit';
 import {
 	readFavorites,
 	mutateFavorites,
 	pruneMissing,
 	favoriteUriSet,
-	toggleFavorite,
-	moveFavorite,
 	renameFavoriteUri,
-	createCollection,
-	renameCollection,
-	deleteCollection,
-	mergeTargetId,
-	setActiveCollection,
-	dedupeName,
 	collectionNameError,
 } from './favorites';
+import { FavoritesController } from './favoritesController';
 import {
 	getLibraryFolders,
 	addLibraryFolder,
@@ -34,6 +29,7 @@ import {
 	listLibraries,
 	listAutoLibraries,
 	readImageDesc,
+	aliasFromDesc,
 } from './materials';
 import type {
 	Task,
@@ -57,6 +53,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private currentMd?: vscode.Uri;
 	/** 编辑区图片列表：扩展侧持有，webview 重建不丢 */
 	private readonly edit = new EditSession();
+	/** 收藏夹相关消息处理（CRUD/导出/切换），视图推送经回调回到本类 */
+	private readonly favorites = new FavoritesController({
+		post: (msg) => this.post(msg),
+		pushFavorites: () => this.pushFavorites(),
+		pushAfterChange: () => this.pushAfterFavoritesChange(),
+	});
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
@@ -101,9 +103,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		// 顶层兜底：onMessage 内多数分支自带 try/catch，但 saveConfig/openImage 等少数分支
 		// 失败会成为静默的 unhandled rejection——统一转为前端可见的错误提示
 		view.webview.onDidReceiveMessage((msg) =>
-			this.onMessage(msg).catch((err: unknown) =>
-				this.post({ type: 'error', message: err instanceof Error ? err.message : String(err) })
-			)
+			this.onMessage(msg).catch((err: unknown) => this.postError(err))
 		);
 		view.onDidDispose(() => {
 			this.view = undefined;
@@ -128,13 +128,42 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** 当前活动编辑器若是 .md 则返回其 Uri，否则 undefined（非 Markdown 标签不改变生效 MD）。
-	 *  请求预览文档虽是 .md 但内容是请求参数，排除掉避免它成为生效 MD 被误触生成 */
+	 *  请求预览文档虽是 .md 但内容是请求参数，排除掉避免它顶替生效 MD 改变上方渲染——
+	 *  误触拦截改到预览/生成时按「主标签页 != 生效 MD」统一处理 */
 	private activeMd(): vscode.Uri | undefined {
 		const uri = vscode.window.activeTextEditor?.document.uri;
 		if (uri && uri.path.toLowerCase().endsWith('.md') && !isPreviewDoc(uri)) {
 			return uri;
 		}
 		return undefined;
+	}
+
+	/** 主编辑区当前激活标签打开的文件是否正是生效 MD（currentMd）。
+	 *  切到 preview.md、图片等其它标签后 currentMd 不变，此时返回 false，用于在预览/生成时拦截 */
+	private activeTabIsCurrentMd(): boolean {
+		if (!this.currentMd) {
+			return false;
+		}
+		const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+		const uri =
+			input instanceof vscode.TabInputText || input instanceof vscode.TabInputCustom
+				? input.uri
+				: undefined;
+		return uri?.toString() === this.currentMd.toString();
+	}
+
+	/** 预览/生成前的统一校验：有生效 MD 且正是主标签页打开的文件才返回它，否则弹错并返回 undefined。
+	 *  action 用于错误文案（“生成”/“预览请求”） */
+	private requireActiveMd(action: string): vscode.Uri | undefined {
+		if (!this.currentMd) {
+			this.post({ type: 'error', message: '请先在编辑器中打开一个 Markdown 文件。' });
+			return undefined;
+		}
+		if (!this.activeTabIsCurrentMd()) {
+			this.post({ type: 'error', message: `主标签页当前打开的不是加载文件「${this.baseName(this.currentMd)}」，无法${action}。请切回该文件再操作。` });
+			return undefined;
+		}
+		return this.currentMd;
 	}
 
 	private baseName(uri: vscode.Uri): string {
@@ -159,13 +188,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			case 'saveConfig':
 				await writeConfig(this.context, msg.patch);
 				break;
-			case 'generate':
-				if (this.currentMd) {
-					await this.doGenerate(this.currentMd);
-				} else {
-					this.post({ type: 'error', message: '请先在编辑器中打开一个 Markdown 文件。' });
+			case 'generate': {
+				const md = this.requireActiveMd('生成');
+				if (md) {
+					await this.doGenerate(md);
 				}
 				break;
+			}
 			case 'previewRequest':
 				await this.doPreviewRequest();
 				break;
@@ -210,6 +239,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				this.edit.remove(msg.name);
 				this.pushEditImages();
 				break;
+			case 'editClearImages':
+				this.edit.clear();
+				this.pushEditImages();
+				break;
 			case 'editOpenImage':
 				await this.openEditImage(msg.name);
 				break;
@@ -232,82 +265,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				this.edit.setDisplay(msg.name, msg.srcLength, msg.data);
 				break;
 			case 'toggleFavorite':
-				await mutateFavorites((d) => toggleFavorite(d, msg.uri, Date.now()));
-				await this.pushAfterFavoritesChange();
+				await this.favorites.toggle(msg.uri);
 				break;
 			case 'moveFavoriteTo':
-				await mutateFavorites((d) => moveFavorite(d, msg.uri, msg.collectionId, Date.now()));
-				await this.pushAfterFavoritesChange();
+				await this.favorites.move(msg.uri, msg.collectionId);
 				break;
 			case 'renameImage':
 				await this.renameImage(msg.uri);
 				break;
 			case 'setActiveCollection':
-				await mutateFavorites((d) => setActiveCollection(d, msg.collectionId));
-				await this.pushFavorites();
+				await this.favorites.setActive(msg.collectionId);
 				break;
-			case 'createCollection': {
-				// webview 禁用 window.prompt，统一用扩展宿主原生输入框取名
-				const name = await vscode.window.showInputBox({
-					prompt: '新收藏夹名称',
-					placeHolder: '例如：产品主图',
-					validateInput: collectionNameError,
-				});
-				if (name?.trim()) {
-					await mutateFavorites((d) => createCollection(d, name, Date.now()));
-					await this.pushFavorites();
-				}
+			case 'createCollection':
+				await this.favorites.create();
 				break;
-			}
-			case 'renameCollection': {
-				const col = (await readFavorites()).collections.find((c) => c.id === msg.id);
-				if (!col) {
-					break;
-				}
-				const name = await vscode.window.showInputBox({
-					prompt: '重命名收藏夹',
-					value: col.name,
-					validateInput: collectionNameError,
-				});
-				if (name?.trim() && name.trim() !== col.name) {
-					await mutateFavorites((d) => renameCollection(d, msg.id, name));
-					await this.pushFavorites();
-				}
+			case 'renameCollection':
+				await this.favorites.rename(msg.id);
 				break;
-			}
-			case 'deleteCollection': {
-				const all = (await readFavorites()).collections;
-				const col = all.find((c) => c.id === msg.id);
-				if (!col) {
-					break;
-				}
-				if (all.length <= 1) {
-					this.post({ type: 'error', message: '至少保留一个收藏夹，无法删除最后一个。' });
-					break;
-				}
-				let moveToDefault = false;
-				if (col.items.length > 0) {
-					// 归并目标：删后剩余夹中优先默认夹，否则第一个夹——与 deleteCollection 共用 mergeTargetId 保证一致
-					const targetId = mergeTargetId(all, msg.id);
-					const target = all.find((c) => c.id === targetId)!;
-					const moveLabel = `移到「${target.name}」并删除`;
-					const pick = await vscode.window.showWarningMessage(
-						`删除收藏夹「${col.name}」？内含 ${col.items.length} 张图。`,
-						{ modal: true },
-						moveLabel,
-						'直接删除'
-					);
-					if (!pick) {
-						break; // 用户取消
-					}
-					moveToDefault = pick === moveLabel;
-				}
-				await mutateFavorites((d) => deleteCollection(d, msg.id, moveToDefault));
-				await this.pushAfterFavoritesChange();
+			case 'deleteCollection':
+				await this.favorites.delete(msg.id);
 				break;
-			}
 			case 'exportCollection':
-				await this.exportCollection(msg.collectionId);
+				await this.favorites.export(msg.collectionId);
 				break;
 		}
 	}
@@ -326,53 +305,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		await addLibraryFolder(this.context, picked[0].toString());
 		this.refreshResourceRoots();
 		await this.pushLibraries();
-	}
-
-	/** 导出某收藏夹的全部图片到用户选定文件夹（只导图、重名去重） */
-	private async exportCollection(collectionId: string): Promise<void> {
-		const data = await readFavorites();
-		const col = data.collections.find((c) => c.id === collectionId);
-		if (!col || col.items.length === 0) {
-			this.post({ type: 'error', message: '该收藏夹没有图片可导出。' });
-			return;
-		}
-		const picked = await vscode.window.showOpenDialog({
-			canSelectFiles: false,
-			canSelectFolders: true,
-			canSelectMany: false,
-			// 该夹上次导出的父目录，没有则回落工作区根
-			defaultUri: col.lastExportDir ? vscode.Uri.parse(col.lastExportDir) : workspaceRoot(),
-			openLabel: '在此处新建收藏夹文件夹',
-		});
-		if (!picked?.length) {
-			return;
-		}
-		// 记住本次选定的父目录，下次该夹导出默认回到这里（落 favorites.json，按夹各记一个）
-		await mutateFavorites((d) => ({
-			...d,
-			collections: d.collections.map((c) =>
-				c.id === collectionId ? { ...c, lastExportDir: picked[0].toString() } : c
-			),
-		}));
-		// 在所选目录下新建以收藏夹命名的子文件夹（清洗 Windows 非法字符），图片导出其中
-		const safeName = col.name.replace(/[\\/:*?"<>|]/g, '_').trim() || '收藏夹';
-		const dest = vscode.Uri.joinPath(picked[0], safeName);
-		await vscode.workspace.fs.createDirectory(dest);
-		const used = new Set<string>();
-		let ok = 0;
-		let skipped = 0;
-		for (const item of col.items) {
-			const src = vscode.Uri.parse(item.uri);
-			const name = dedupeName(used, uriBaseName(src));
-			used.add(name);
-			try {
-				await vscode.workspace.fs.copy(src, vscode.Uri.joinPath(dest, name), { overwrite: false });
-				ok++;
-			} catch {
-				skipped++; // 源缺失/复制失败
-			}
-		}
-		void vscode.window.showInformationMessage(`已导出 ${ok} 张${skipped ? `，跳过 ${skipped} 张` : ''}。`);
 	}
 
 	/**
@@ -397,8 +329,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		try {
 			await vscode.workspace.fs.rename(src, dest, { overwrite: false });
 		} catch (err: unknown) {
-			const reason = err instanceof Error ? err.message : String(err);
-			this.post({ type: 'error', message: `重命名为「${next + ext}」失败：${reason}` });
+			this.post({ type: 'error', message: `重命名为「${next + ext}」失败：${errMsg(err)}` });
 			return;
 		}
 		await mutateFavorites((d) => renameFavoriteUri(d, uri, dest.toString()));
@@ -480,8 +411,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			await this.tasks.submitEdit(prompt, this.edit.list());
 			this.post({ type: 'navigate', tab: 'tasks' });
 		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
-			this.post({ type: 'error', message });
+			this.postError(err);
 		} finally {
 			this.post({ type: 'busy', busy: false });
 		}
@@ -495,8 +425,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			const finalPrompt = buildEditFinalPrompt(base, prompt, refs.map((r) => r.name));
 			await openTextPreview(buildPreviewText(editConfigView(base), finalPrompt, refs.map((r) => r.data)));
 		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
-			this.post({ type: 'error', message });
+			this.postError(err);
 		}
 	}
 
@@ -610,14 +539,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		if (!rel.startsWith('.')) {
 			rel = './' + rel;
 		}
-		const alt = path.basename(imgPath, path.extname(imgPath));
+		// 图片旁有同主名 .md 描述文件时，描述在前、图片引用紧随其后一并写进正文
+		// （buildPrompt 拼提示词时自然包含），如：- [某角色] 描述文字。![alt](路径)
+		const desc = await readImageDesc(imageUri);
+		// alt 优先用描述里的别名（如 `[九胡]` → 九胡），与正文命名引用对齐；无别名退回文件主名。
+		const alt = aliasFromDesc(desc) || path.basename(imgPath, path.extname(imgPath));
 		// 路径含空格或半角括号时用尖括号包裹，否则 Markdown 会在空格处截断或被 ) 提前闭合。
 		// 中文/全角括号对 CommonMark 是普通字符，无需处理，保持可读。
 		const dest = /[ ()]/.test(rel) ? `<${rel}>` : rel;
 		let snippet = `![${alt}](${dest})`;
-		// 图片旁有同主名 .md 描述文件时，描述在前、图片引用紧随其后一并写进正文
-		// （buildPrompt 拼提示词时自然包含），如：- [某角色] 描述文字。![alt](路径)
-		const desc = await readImageDesc(imageUri);
 		if (desc) {
 			snippet = desc + snippet;
 		}
@@ -626,16 +556,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
 	/** 预览请求：对当前关联的 MD 解析提示词 + 拼请求参数，打开成预览文档（不调 API） */
 	private async doPreviewRequest(): Promise<void> {
-		if (!this.currentMd) {
-			this.post({ type: 'error', message: '请先在编辑器中打开一个 Markdown 文件。' });
+		const md = this.requireActiveMd('预览请求');
+		if (!md) {
 			return;
 		}
 		try {
 			const config = await readConfig(this.context);
-			await openRequestPreview(config, this.currentMd);
+			await openRequestPreview(config, md);
 		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
-			this.post({ type: 'error', message });
+			this.postError(err);
 		}
 	}
 
@@ -643,7 +572,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private async doGenerate(mdUri: vscode.Uri): Promise<void> {
 		const config = await readConfig(this.context);
 		if (!config.apiKey) {
-			this.post({ type: 'error', message: '尚未配置 API Key，请在上方填写并保存。' });
+			this.post({ type: 'error', message: '尚未配置 API Key，请在设置页填写。' });
 			return;
 		}
 		this.post({ type: 'busy', busy: true });
@@ -651,8 +580,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			await this.tasks.submit(mdUri);
 			this.post({ type: 'navigate', tab: 'tasks' });
 		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
-			this.post({ type: 'error', message });
+			this.postError(err);
 		} finally {
 			this.post({ type: 'busy', busy: false });
 		}
@@ -678,7 +606,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private post(msg: InboundMessage): void {
+		// 报错统一走 VS Code 通知弹窗，不在 webview 内联展示；同时写入台账日志供排障
+		if (msg.type === 'error') {
+			log(`错误：${msg.message}`);
+			vscode.window.showErrorMessage(`Image Flow：${msg.message}`);
+			return;
+		}
 		void this.view?.webview.postMessage(msg);
+	}
+
+	/** 把异常收敛成错误消息，经 post 统一弹窗 + 记台账日志。catch 分支共用，避免到处复写消息提取 */
+	private postError(err: unknown): void {
+		this.post({ type: 'error', message: errMsg(err) });
 	}
 
 	private html(webview: vscode.Webview): string {

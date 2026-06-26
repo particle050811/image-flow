@@ -1,6 +1,7 @@
 import type { Config, ConfigOptions, WebviewLibrary, WebviewCollection, StatusState } from './vscode';
 import { Select, Stepper } from './fields';
 import { Materials } from './Materials';
+import { modelSizeControl } from '../modelOptions';
 
 export function Workbench({
 	hidden,
@@ -15,6 +16,7 @@ export function Workbench({
 	cols,
 	tabCols,
 	onChange,
+	onChangeMany,
 	onGenerate,
 	onPreview,
 	onAddLibrary,
@@ -33,12 +35,20 @@ export function Workbench({
 	cols: number;
 	tabCols: number;
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
+	onChangeMany: (patch: Partial<Config>) => void;
 	onGenerate: () => void;
 	onPreview: () => void;
 	onAddLibrary: () => void;
 	onRemoveLibrary: (folder: string) => void;
 	onSendToEdit: (uri: string) => void;
 }) {
+	// 分辨率随模型变化 + 切模型按各模型独立记忆恢复档位（工作台用 model 组）；与编辑页共用 modelSizeControl
+	const { sizeOptions, changeModel } = modelSizeControl(
+		config,
+		options,
+		{ model: 'model', size: 'imageSize', memory: 'imageSizeMemory' },
+		onChangeMany
+	);
 	return (
 		<div className="page" data-page="workbench" hidden={hidden}>
 			<div className="gallery">
@@ -60,12 +70,12 @@ export function Workbench({
 						label="模型"
 						value={config.model}
 						options={options.model}
-						onChange={(v) => onChange('model', v)}
+						onChange={changeModel}
 					/>
 					<Select
 						label="分辨率"
 						value={config.imageSize}
-						options={options.imageSize}
+						options={sizeOptions}
 						onChange={(v) => onChange('imageSize', v)}
 					/>
 					<Select
@@ -90,7 +100,7 @@ export function Workbench({
 						aria-label="跟随当前活动的 Markdown 编辑器；切到非 Markdown 标签时保持不变"
 					>
 						<span className="active-md">
-							{activeMd ? `当前文件：${activeMd}` : '未打开 Markdown 文件'}
+							{activeMd ? `加载文件：${activeMd}` : '未打开 Markdown 文件'}
 						</span>
 					</span>
 					<button className="preview-btn" onClick={onPreview}>
