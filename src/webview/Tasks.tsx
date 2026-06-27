@@ -67,6 +67,38 @@ function formatElapsed(ms: number): string {
 	return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
+/**
+ * 任务创建时间：解析文件夹名 yyMMddHHmmssSSS（formatStamp 的格式）为本地时间。
+ * 同年省略年份、跨年带年（例：6月27日 19:15 / 2025年12月27日 19:15）。
+ * 旧项目等非该格式的文件夹解析不出有效时间，返回 null —— 上层据此不显示。
+ */
+function formatCreated(folder: string): string | null {
+	if (!/^\d{15}$/.test(folder)) {
+		return null;
+	}
+	const num = (a: number, b: number) => Number(folder.slice(a, b));
+	const year = 2000 + num(0, 2);
+	const month = num(2, 4);
+	const day = num(4, 6);
+	const d = new Date(year, month - 1, day, num(6, 8), num(8, 10));
+	// 回环校验：拒绝月/日越界（如 13 月）的伪时间戳
+	if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
+		return null;
+	}
+	const pad = (n: number) => String(n).padStart(2, '0');
+	const md = `${month}月${day}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+	return year === new Date().getFullYear() ? md : `${year}年${md}`;
+}
+
+/** 平均单图生成时间：对成功图片的 durations 求均（只统计成功的）；无数据返回 null —— 上层据此不显示 */
+function averageDuration(durations?: number[]): string | null {
+	if (!durations || durations.length === 0) {
+		return null;
+	}
+	const avg = durations.reduce((sum, d) => sum + d, 0) / durations.length;
+	return formatElapsed(avg);
+}
+
 /** 已进行时间：每秒自增，从任务首次提交时间（startedAt，真实墙钟、不随重启重置）起算 */
 function useElapsed(startedAt: number): string {
 	const [now, setNow] = useState(() => Date.now());
@@ -88,10 +120,12 @@ function PendingDetail({
 	onSendToEdit: (uri: string) => void;
 }) {
 	const elapsed = useElapsed(task.startedAt);
-	// 阶段：还有 job 没拿到 id 即「提交中」，进度条按已提交占比走；全部提交完转「生成中」用聚合进度
+	// 阶段：还有 job 没拿到 id 即「提交中」，进度条按已提交占比走；全部提交完转「生成中」用聚合进度。
+	// sync adapter 的提交就是整图生成（无独立 job id、无远端进度），故这一阶段直接叫「生成中」。
 	const submitted = task.total - task.submitting;
 	const inSubmit = task.submitting > 0;
 	const barPct = inSubmit ? Math.round((submitted / task.total) * 100) : task.progress;
+	const submitLabel = task.sync ? '生成中' : '提交中';
 	return (
 		<div className="task-detail">
 			{/* 头部与历史详情一致：提示词链接 + 模型 + 分辨率 + 比例 + 进度（已存/总数） */}
@@ -117,7 +151,7 @@ function PendingDetail({
 					<div className="progress-fill" style={{ width: `${barPct}%` }} />
 				</div>
 				<span className="progress-pct">
-					{inSubmit ? `提交中 ${submitted}/${task.total}` : `生成中 ${task.progress}%`}
+					{inSubmit ? `${submitLabel} ${submitted}/${task.total}` : `生成中 ${task.progress}%`}
 				</span>
 			</div>
 			{task.images.length > 0 && (
@@ -139,6 +173,8 @@ function HistoryDetail({
 	onSendToEdit: (uri: string) => void;
 }) {
 	const { meta } = task;
+	const avg = averageDuration(meta?.durations);
+	const created = formatCreated(task.folder);
 	return (
 		<div className="task-detail">
 			<div className="task-detail-head">
@@ -160,6 +196,21 @@ function HistoryDetail({
 				) : (
 					<span>{task.images.length} 张</span>
 				)}
+				{/* 平均耗时与创建时间成组靠右、创建时间最右；任一为空则各自不显示 */}
+				{(avg || created) && (
+					<span className="task-times">
+						{avg && (
+							<span className="task-avg" title="平均单图生成时间（只统计成功的）">
+								平均耗时 {avg}
+							</span>
+						)}
+						{created && (
+							<span className="task-created" title="任务创建时间">
+								{created}
+							</span>
+						)}
+					</span>
+				)}
 			</div>
 			<Thumbs images={task.images} collections={collections} onSendToEdit={onSendToEdit} />
 		</div>
@@ -177,6 +228,7 @@ export function Tasks({
 	viewedTasks,
 	onViewed,
 	onSendToEdit,
+	reveal,
 }: {
 	hidden: boolean;
 	tasks: WebviewTask[];
@@ -189,6 +241,8 @@ export function Tasks({
 	/** 点开完成任务卡片时回调，标记为已看过 */
 	onViewed: (folder: string) => void;
 	onSendToEdit: (uri: string) => void;
+	/** 完成通知点「查看」要定位的任务：folder + nonce（同任务可重复触发） */
+	reveal?: { folder: string; nonce: number } | null;
 }) {
 	// 进行中与历史按文件夹名（毫秒时间戳）倒序合并，新任务在前
 	const items = [
@@ -198,6 +252,21 @@ export function Tasks({
 
 	// 选中失效（任务完成转历史 / 列表刷新）回落到第一个
 	const { current, setSelected } = usePicker(items, (i) => i.key);
+
+	// 收到 reveal（点完成通知「查看」）：按 folder 选中对应条目；已完成的顺带标记已看过
+	useEffect(() => {
+		if (!reveal) {
+			return;
+		}
+		const item = items.find((i) => i.folder === reveal.folder);
+		if (item) {
+			setSelected(item.key);
+			if (item.kind === 'history') {
+				onViewed(item.folder);
+			}
+		}
+		// 仅在 nonce 变化时触发定位，不随列表刷新反复抢占用户的手动选择
+	}, [reveal?.nonce]);
 
 	return (
 		<div

@@ -3,8 +3,10 @@ import { isPreviewDoc, previewRequestCommand } from './task/preview';
 import { seedModelInjections } from './ui/config';
 import { reloadCustomProvider } from './backend/providerRuntime';
 import { SidebarProvider } from './ui/sidebarProvider';
+import { registerCliBridge } from './ui/cliBridge';
 import { TaskManager } from './task/tasks';
 import { initLog, log } from './util/log';
+import { showTransientWarning } from './util/notify';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -33,18 +35,20 @@ export async function activate(context: vscode.ExtensionContext) {
 			// 菜单传入 uri；从命令面板触发时回退到当前活动编辑器
 			const target = uri ?? vscode.window.activeTextEditor?.document.uri;
 			if (!target) {
-				vscode.window.showErrorMessage('Image Flow：请在 Markdown 文件上右键，或先打开一个文件。');
+				showTransientWarning('Image Flow：请在 Markdown 文件上右键，或先打开一个文件。');
 				return;
 			}
 			if (isPreviewDoc(target)) {
-				vscode.window.showErrorMessage('Image Flow：这是请求预览文档，仅供调试查看，不能用于生成。请对源 Markdown 触发生成。');
+				showTransientWarning('Image Flow：这是请求预览文档，仅供调试查看，不能用于生成。请对源 Markdown 触发生成。');
 				return;
 			}
 			await sidebar.generateFor(target);
 		}),
 		vscode.commands.registerCommand('image-flow.previewRequest', (uri?: vscode.Uri) =>
 			previewRequestCommand(context, uri)
-		)
+		),
+		// 给 AI 自动调用的文件请求桥：监听 .image-flow/requests/ 下的 list|fix 请求
+		registerCliBridge(context)
 	);
 
 	taskManager.resume();

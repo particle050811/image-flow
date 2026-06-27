@@ -1,7 +1,12 @@
 import type { Config, ConfigOptions, WebviewLibrary, WebviewCollection, PromptTemplate, StatusState } from './vscode';
 import { Select, Stepper } from './fields';
+import { NativeSelect } from './primitives';
 import { Materials } from './Materials';
 import { modelSizeControl } from '../modelOptions';
+
+/** Radix Select 不允许空串 Item 值，用哨兵代表「不使用预设」（落盘仍存空串）。
+ *  取 NUL 字符——模板名来自 .md 文件名，不可能含 NUL，故绝不会与真实模板撞值 */
+const TPL_NONE = "\u0000";
 
 export function Workbench({
 	hidden,
@@ -88,6 +93,16 @@ export function Workbench({
 						options={options.aspectRatiosByModel[config.model] ?? options.aspectRatio}
 						onChange={(v) => onChange('aspectRatio', v)}
 					/>
+					{customParams.map((p) => (
+						<Select
+							key={p.key}
+							className="field-custom"
+							label={p.label}
+							value={config.params[p.key] ?? p.default}
+							options={p.options}
+							onChange={(v) => onChange('params', { ...config.params, [p.key]: v })}
+						/>
+					))}
 					<Stepper
 						label="并发数"
 						value={config.concurrency}
@@ -97,35 +112,20 @@ export function Workbench({
 					/>
 				</div>
 
-				{customParams.length > 0 && (
-					<div className="row">
-						{customParams.map((p) => (
-							<Select
-								key={p.key}
-								label={p.label}
-								value={config.params[p.key] ?? p.default}
-								options={p.options}
-								onChange={(v) => onChange('params', { ...config.params, [p.key]: v })}
-							/>
-						))}
-					</div>
-				)}
-
 				<div className="tpl-row">
 					<label className="tpl-label">预设模板</label>
-					<select
-						className="tpl-select"
-						title="选中的预设模板会在生成/预览时插到提示词最前面"
-						value={config.workbenchTemplate}
-						onChange={(e) => onChange('workbenchTemplate', e.target.value)}
-					>
-						<option value="">不使用预设</option>
-						{templates.map((t) => (
-							<option key={t.name} value={t.name}>
-								{t.name}
-							</option>
-						))}
-					</select>
+					<div className="tpl-select-wrap">
+						<NativeSelect
+							ariaLabel="预设模板"
+							title="选中的预设模板会在生成/预览时插到提示词最前面"
+							value={config.workbenchTemplate || TPL_NONE}
+							options={[
+								{ value: TPL_NONE, label: '不使用预设' },
+								...templates.map((t) => ({ value: t.name, label: t.name })),
+							]}
+							onChange={(v) => onChange('workbenchTemplate', v === TPL_NONE ? '' : v)}
+						/>
+					</div>
 					<span
 						className="tip"
 						data-tip="跟随当前活动的 Markdown 编辑器；切到非 Markdown 标签时保持不变"

@@ -244,6 +244,16 @@ export function Edit({
 					options={options.aspectRatiosByModel[config.editModel] ?? options.aspectRatio}
 					onChange={(v) => onChange('editAspectRatio', v)}
 				/>
+				{customParams.map((p) => (
+					<Select
+						key={p.key}
+						className="field-custom"
+						label={p.label}
+						value={config.editParams[p.key] ?? p.default}
+						options={p.options}
+						onChange={(v) => onChange('editParams', { ...config.editParams, [p.key]: v })}
+					/>
+				))}
 				<Stepper
 					label="并发数"
 					value={config.editConcurrency}
@@ -252,20 +262,6 @@ export function Edit({
 					onChange={(v) => onChange('editConcurrency', v)}
 				/>
 			</div>
-
-			{customParams.length > 0 && (
-				<div className="row">
-					{customParams.map((p) => (
-						<Select
-							key={p.key}
-							label={p.label}
-							value={config.editParams[p.key] ?? p.default}
-							options={p.options}
-							onChange={(v) => onChange('editParams', { ...config.editParams, [p.key]: v })}
-						/>
-					))}
-				</div>
-			)}
 
 			<div className="gen-row">
 				<button

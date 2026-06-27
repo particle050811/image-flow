@@ -10,10 +10,10 @@ import { mediaDeclSnippet } from '../refs';
  * 普通形式取非 `)`。「右键插入引用」对含空格/半角括号的路径用尖括号包裹，
  * 解析端必须能完整读回，否则这类参考图会被判读取失败而中断生成。
  */
-const IMAGE_REGEX = /!\[[^\]]*\]\(\s*(?:<([^>]*)>|([^)]+?))\s*\)/g;
+export const IMAGE_REGEX = /!\[[^\]]*\]\(\s*(?:<([^>]*)>|([^)]+?))\s*\)/g;
 
 /** 从一次匹配中取出路径（尖括号组优先，否则普通组） */
-function refPath(m: RegExpMatchArray): string {
+export function refPath(m: RegExpMatchArray): string {
 	return (m[1] ?? m[2] ?? '').trim();
 }
 

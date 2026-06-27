@@ -6,6 +6,7 @@ import { readConfig } from '../ui/config';
 import { buildInjectedPrompt } from '../prompt/inject';
 import { buildPrompt } from '../prompt/buildPrompt';
 import { errMsg } from '../util/errors';
+import { showTransientWarning } from '../util/notify';
 
 /**
  * 解析指定 Markdown 并把「替换后的最终提示词正文」打开成预览文档。供右键命令与侧栏按钮共用。
@@ -56,7 +57,7 @@ export async function previewRequestCommand(
 ): Promise<void> {
 	const target = uri ?? vscode.window.activeTextEditor?.document.uri;
 	if (!target) {
-		vscode.window.showErrorMessage('Image Flow：请在 Markdown 文件上右键，或先打开一个文件。');
+		showTransientWarning('Image Flow：请在 Markdown 文件上右键，或先打开一个文件。');
 		return;
 	}
 	try {

@@ -1,19 +1,5 @@
 import * as vscode from 'vscode';
 import type { ImageFlowConfig } from '../shared';
-import { BUILTIN_GRSAI } from '../backend/providers';
-
-/**
- * 把分辨率收敛到该（内置 grsai）模型支持的范围内：在范围内原样返回，否则取首个支持值。
- * 自定义 Provider 的模型不在内置表内 → 原样返回（其档位由 settings.json 决定，前端按其 imageSizes 渲染）。
- */
-export function clampImageSize(model: string, imageSize: string): string {
-	const m = BUILTIN_GRSAI.image.find((x) => x.model === model);
-	if (!m) {
-		return imageSize;
-	}
-	return m.imageSizes.includes(imageSize) ? imageSize : m.imageSizes[0];
-}
-
 /** globalState 中存放非敏感配置的键；API Key 单独走 secrets */
 const STATE_KEY = 'image-flow.config';
 const SECRET_KEY = 'image-flow.apiKey';
@@ -64,11 +50,7 @@ const DEFAULTS: StoredConfig = {
 export async function readConfig(context: vscode.ExtensionContext): Promise<ImageFlowConfig> {
 	const stored = context.globalState.get<Partial<StoredConfig>>(STATE_KEY, {});
 	const apiKey = (await context.secrets.get(SECRET_KEY)) ?? '';
-	const merged = { ...DEFAULTS, ...stored, apiKey };
-	// 收敛历史遗留的越界分辨率（如旧版在 gpt-image-2 下存了 4K），保证下拉显示与落盘 meta 一致
-	merged.imageSize = clampImageSize(merged.model, merged.imageSize);
-	merged.editImageSize = clampImageSize(merged.editModel, merged.editImageSize);
-	return merged;
+	return { ...DEFAULTS, ...stored, apiKey };
 }
 
 /** 写回配置：apiKey 存 secrets，其余存 globalState（按字段合并） */

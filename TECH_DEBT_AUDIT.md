@@ -1,7 +1,16 @@
 # Tech Debt Audit — image-flow
-首轮：2026-06-08 · 第二轮：2026-06-09 · 第三轮：2026-06-11 · 第四轮：2026-06-19（聚焦：前端重复造轮子 + 大文件拆分）· 第五轮：2026-06-26（聚焦：round-4 后增量——分辨率档位/收藏控制器/媒体引用重构）· **第六轮：2026-06-27（聚焦：15 个未推送提交的「多 API 兼容」重大改造——adapter 抽象 / Provider 数据模型 / settings.json 加载）** · 范围：全仓（src/ ~7,400 LOC，含 webview）
+首轮：2026-06-08 · 第二轮：2026-06-09 · 第三轮：2026-06-11 · 第四轮：2026-06-19（聚焦：前端重复造轮子 + 大文件拆分）· 第五轮：2026-06-26（聚焦：round-4 后增量——分辨率档位/收藏控制器/媒体引用重构）· 第六轮：2026-06-27（聚焦：15 个未推送提交的「多 API 兼容」重大改造）· **第七轮：2026-06-28（聚焦：round-6 后增量——src 按域重组 + 大文件拆分 + 新增 CLI 文件桥 cliBridge + sync 任务通知/轻提示）** · 范围：全仓（src/ ~8,280 LOC，含 webview）
 
-本文件只保留**未终结**的发现（OPEN / PARTIAL / 开放问题）。已修复与已判定可接受的项（F001–F032、F036–F041、F043–F047、F049、F051–F060，共 60+ 项）归档在 [`TECH_DEBT_RESOLVED.md`](TECH_DEBT_RESOLVED.md)，含各轮修复记录。复审时：新发现追加进下表并标 `NEW`，修完移入归档文件。
+本文件只保留**未终结**的发现（OPEN / PARTIAL / 开放问题）。已修复与已判定可接受的项（F001–F032、F036–F041、F043–F047、F049、F051–F066，共 60+ 项）归档在 [`TECH_DEBT_RESOLVED.md`](TECH_DEBT_RESOLVED.md)，含各轮修复记录。复审时：新发现追加进下表并标 `NEW`，修完移入归档文件。
+
+## 第七轮小结（2026-06-28）— 结构重组 + CLI 文件桥
+
+复审 round-6（`dd846e4`）之后的约 25 个提交。两类：**(1) 纯结构**——`src` 按域重组进 `backend/ prompt/ task/ ui/ storage/ favorites/ util/ webview/` 八个目录（`ac1ebbb`）、`command.ts`/`sidebarProvider.ts` 两个大文件再拆分（`2db5c67`，析出 `prompt/buildPrompt.ts`、`task/history.ts`、`ui/materialsController.ts`、`prompt/editController.ts`、`task/preview.ts`）、1000 行测试文件按域拆成 8 个；**(2) 新功能**——给 AI 零点击调用的 **CLI 文件桥**（`ui/cliBridge.ts` + `scripts/imgflow.mjs`，`aab6a86`，340 LOC 全新）、sync 任务显示「生成中」+ 完成弹可点击跳转通知（`ffe4ae4`）、可自动消失的轻警告 `util/notify.ts`（`b2d4ad7`）、删除后端档位收敛（`85243c2`，见 [[backend-no-capability-clamp]]）、下拉统一向上展开。结论——
+
+- **结构重组方向正确、零行为变更。** 八目录分层（backend 调用层 / prompt 提示词 / task 任务 / ui 宿主 / storage 落盘 / favorites 收藏 / util 工具 / webview 前端）让依赖方向更清晰；`tasks.ts`(589) 是最大文件但职责单一（状态机），`sidebarProvider.ts` 由 663→457（拆出 materialsController/editController 后）。`check-types`/`lint` 全绿、`npm test` **134 项全绿**、源码仍无 `as any`/`@ts-ignore`/`TODO`。
+- **CLI 文件桥设计巧、但留下三处债。** 用「写请求 json → FileSystemWatcher → rename 认领（防双窗口双跑）→ 原子写 out」桥接外部进程与扩展主进程，刻意绕开 vscode:// URI 的安全确认以实现零点击——设计本身合理（详见「看着像问题」）。但：① `scanDirImages` 在 cliBridge 里重新实现了一份且去掉了 MAX_ENTRIES 上限（F067）；② 340 行非平凡纯逻辑（路径改写/多候选判定/报告生成）零测试（F068）；③ 请求 json 的 `md`/`out` 路径与字段类型未校验、`fix` 会回写任意 .md（F069）。
+- **本轮新增 4 项 NEW（2 Medium + 2 Low）+ 顺手了结 F033，均当场全部修复（移入归档）：** F067（cliBridge scanDirImages 重复且无上限 → 导出复用 materials 版、删重复）、F068（cliBridge 零测试 → 抽 `cliBridgeLogic.ts` 纯逻辑 + 14 项直测）、F069（cliBridge 请求字段/路径未校验 → 校验 op/md/out 类型 + 约束 out 落 tmpdir、md 落工作区）、F070（CLAUDE.md 架构段路径漂移 → 全量更新 + 补 6 个新模块；README 经查无源码路径引用、无漂移）、F033（scanDirImages 计数口径注释 → 与 F067 一并收口，注释改为准确的「每层独立 500」）。`check-types`/`lint` 全绿、`npm test` 134→**148 项全绿**，过代码审核（无 blocker）。
+- **此前 3 项未终结项无实质变化（文件路径随重组更新）：** F029（audit 端点 NOT_IMPLEMENTED，本轮再次复现）、F048（globalState 双窗口双轮询）、F050（上游 webview 缓存）。
 
 ## 第六轮小结（2026-06-27）— 多 API 兼容改造
 
@@ -30,12 +39,12 @@
 - **大文件：`sidebarProvider.ts` 经下沉图转换簇 726→663（F056）。** 仍略越 500 阈值：收藏夹 CRUD 簇评估后有意保留（抽出需传 3–4 个回调、耦合得不偿失），663 行对 webview 宿主属常见体量，维护者决策接受、不再拆。其余文件（`tasks.ts` 455、`command.ts` 288）职责单一、未失控。
 - F052–F057 已移入 `TECH_DEBT_RESOLVED.md`；`npm run compile` 与收藏单测全绿，过代码审核。
 
-## 当前状态（2026-06-27 第六轮收尾）
+## 当前状态（2026-06-28 第七轮收尾）
 
-- `npm run check-types`/`lint` 全绿；`npm test` **137 项全绿**（多 API 纯逻辑均配直测）。
-- 无 Critical / High 未决项。本轮新增 5 项（F061 Medium + F062/F063/F064/F066 Low）**已当场全部修复**（移入归档）。
-- 仅余此前 4 项未终结：F029/F050 跟踪上游/外部，F033/F048 等维护者决策。
-- 安全卫生维持：grsai apiKey 走 secrets、ConfigOptions 不下发 url/key、CSP script 锁 nonce、无硬编码密钥、`parseGenerateResponse` 形状校验、fetch 全程超时（提交 120s/sync 300s、查询下载 30s）。唯一新增的密钥面是 F062 的回落footgun + 自定义密钥落主目录明文（后者为方案取舍，见「看着像问题」）。
+- `npm run check-types`/`lint` 全绿；`npm test` **148 项全绿**（本轮 cliBridgeLogic 补 14 项直测）。
+- **无 Critical / High 未决项。** 本轮新增 4 项（F068/F070 Medium + F067/F069 Low）+ 顺手了结 F033，**已当场全部修复**（移入归档），过代码审核无 blocker。
+- 此前 3 项未终结：F029/F050 跟踪上游/外部，F048 待维护者决策。
+- 安全卫生维持：grsai apiKey 走 secrets、ConfigOptions 不下发 url/key、CSP script 锁 nonce、无硬编码密钥、`parseGenerateResponse` 形状校验、fetch 全程超时（async 提交 120s / sync 300s、查询下载 30s）。唯一新增的边界面是 F069：CLI 文件桥信任「能往工作区写文件的本机进程」、对请求里的 `md`/`out` 路径不校验（本机威胁模型下不构成提权，详见 Open questions）。
 
 ## 架构心智模型
 
@@ -47,15 +56,18 @@ VS Code 扩展，把 Markdown 正文（生成页）或手填提示词 + 编辑�
 
 | ID | Status | Category | File:Line | Severity | Effort | Description | Recommendation |
 |----|--------|----------|-----------|----------|--------|-------------|----------------|
-| F029 | 🟡PARTIAL | Dependency debt | package.json（传递依赖） | Medium | S | 上轮记 npm audit 4 漏洞（serialize-javascript 等），全在 `@vscode/test-cli→mocha` 开发链。本轮无法复查：本机 npm 镜像（npmmirror）的 audit 端点未实现（NOT_IMPLEMENTED），返回 404。 | 维持不动；开发期依赖不进发布产物。换官方 registry 或 `npm audit --registry=https://registry.npmjs.org` 时再复查。 |
-| F033 | 🔁OPEN | Consistency | src/materials.ts:156 | Low | S | scanDirImages 注释称「按遍历条目计数，与递归版口径一致」，但 listAutoLibraries 逐层各调一次 scanDirImages（各自 `scanned=0`），N 层路径累计上限达 N×500，与递归版共享 counter 的口径并不一致。 | 改注释（说清是每层独立 500）或让自动库各层共享一个 counter，二选一。 |
-| F048 | 🔁OPEN | Concurrency (edge) | src/tasks.ts:93-98,116-118 | Low | M | pending 任务存 globalState（跨窗口共享）：两个 VS Code 窗口并存时各自 TaskManager 都会 resume/轮询同一批任务——双倍查询、向同一 dir 重复下载、persist 后写覆盖先写。单窗口无影响。 | 开放问题：加窗口锁/按工作区隔离，或文档化为已知限制。 |
-| F050 | 🟡PARTIAL | Upstream (disk leak) | src/webview/resourceCache.ts / src/sidebarProvider.ts:150 | Medium | — | VS Code webview SW 把 asWebviewUri 资源永久缓存落盘且无淘汰（实测用户机 23.5GB）。本扩展自身 origin 已修（resourceCache.ts 启动+节流自清，commit 0c7bc16）；但 `openImage` 走 `vscode.open` → 内置 media-preview 每次渲染 `?version=Date.now()` 缓存一份全图，该 origin 扩展够不着。详见 docs/vscode-webview-cache.md。 | 跟踪上游 microsoft/vscode#310384（open，已附根因提报）；上游加淘汰后可把 resourceCache.ts 降级为仅启动清理。F051 真缩略图已上线（2026-06-11），侧栏 origin 的缓存灌水大幅缓解；media-preview origin 仍待上游。 |
+| F029 | 🟡PARTIAL | Dependency debt | package.json（传递依赖） | Medium | S | 上轮记 npm audit 4 漏洞（serialize-javascript 等），全在 `@vscode/test-cli→mocha` 开发链。本轮再次复现：本机 npm 镜像（npmmirror）的 audit 端点未实现（NOT_IMPLEMENTED），返回 404，无法复查。 | 维持不动；开发期依赖不进发布产物。换官方 registry 或 `npm audit --registry=https://registry.npmjs.org` 时再复查。 |
+| F048 | 🔁OPEN | Concurrency (edge) | src/task/tasks.ts:40,133（PENDING_KEY/persist） | Low | M | pending 任务存 globalState（跨窗口共享）：两个 VS Code 窗口并存时各自 TaskManager 都会 resume/轮询同一批任务——双倍查询、向同一 dir 重复下载、persist 后写覆盖先写。单窗口无影响。（注：cliBridge 的请求处理已用 rename 认领解决了双窗口双跑，可作此问题的局部范本，但任务轮询仍未隔离。） | 开放问题：加窗口锁/按工作区隔离，或文档化为已知限制。 |
+| F050 | 🟡PARTIAL | Upstream (disk leak) | src/webview/resourceCache.ts / src/ui/sidebarProvider.ts | Medium | — | VS Code webview SW 把 asWebviewUri 资源永久缓存落盘且无淘汰（实测用户机 23.5GB）。本扩展自身 origin 已修（resourceCache.ts 启动+节流自清，commit 0c7bc16）；但 `openImage` 走 `vscode.open` → 内置 media-preview 每次渲染 `?version=Date.now()` 缓存一份全图，该 origin 扩展够不着。详见 docs/vscode-webview-cache.md。 | 跟踪上游 microsoft/vscode#310384（open，已附根因提报）；上游加淘汰后可把 resourceCache.ts 降级为仅启动清理。 |
 
-> 第四轮 F052–F057、第五轮 F034/F035/F058/F059/F060、**第六轮 F061/F062/F063/F064/F066**（多 API 改造发现并当场修复）均已结案，详见 [`TECH_DEBT_RESOLVED.md`](TECH_DEBT_RESOLVED.md)。
+> 第四轮 F052–F057、第五轮 F034/F035/F058/F059/F060、第六轮 F061/F062/F063/F064/F066、**第七轮 F033/F067/F068/F069/F070**（CLI 文件桥发现并当场修复）均已结案，详见 [`TECH_DEBT_RESOLVED.md`](TECH_DEBT_RESOLVED.md)。
 
 ## 看着像问题、其实没问题
 
+- **CLI 文件桥用「文件请求 + FileSystemWatcher」而非 vscode:// URI，刻意绕过安全确认——看似安全后门。** 是为「AI 零点击调用 list/fix」的必要取舍：URI 由外部进程触发会弹「是否允许扩展打开此 URI」确认，与零点击冲突；改写文件不弹确认。请求目录在工作区内，天然按工作区隔离。威胁模型是本机进程——能写 `.image-flow/requests/` 的进程本就有等同 FS 权限，文件桥不给它新增能力（无提权），不是远程/网络可达面。设计可接受；真正的债是边角的校验缺失（F069）与重复实现（F067）、零测试（F068），不是桥本身。
+- **cliBridge 用「rename req-*.json → .lock」做认领锁——看似多此一举。** 是 F048 同源问题的局部正解：同工作区双开时两个窗口都会收到 `onDidCreate`，`rename(overwrite:false)` 只有一个成功，另一个 catch 退出，避免 fix 被双跑、后写的「修正 0」报告覆盖真报告。任务轮询那侧（F048）尚未享有同等隔离，但 CLI 这侧已正确处理。
+- **sync 任务在 `submitJobs` 里就 `notifyFinished` + 移出列表（不经轮询）——看似与轮询路径重复。** sync adapter 提交即出图、无 job id 不进轮询，必须就地终结；注释明确「自串行循环结束到 isTaskActive 判定之间不得有 await」护住了与 4s 轮询的竞态。async 仍走轮询终结。两条终结路径是协议差异的必然，非重复。
+- **`util/notify.ts` 借 `withProgress` 实现自动消失的 toast——看似 hack。** VS Code 的 `showWarningMessage` 是常驻的，对「触发位置不对、其实啥没干」这类轻提示太吵；借 withProgress + setTimeout 实现 timeout 自关，并加 ⚠️ 前缀补回图标语义。注释已划清「真错误仍走 showErrorMessage 常驻」。Promise 正常 resolve，无泄漏。合理。
 - **自定义密钥落 `~/.image-flow/settings.json` 明文，而 grsai 密钥走加密 secrets——看似安全回退。** 是单文件 JSON 方案的明确取舍：文件在**用户主目录**（非工作区，不随仓库提交），等同 `~/.aws/credentials`/`~/.config` 量级的本机明文凭据。每模型自带 key 是多 Provider 的必要形态，强塞进 VS Code secrets 会丢掉「一份 JSON 描述全部」的可移植性。可接受，勿改为 secrets。
 - **`submitJobs` 对 async（grsai）仍串行提交——看似没用上并发，别改成并行。** 这是关键护栏：串行让每份大图 base64 独占上行、120s 超时窗口只覆盖自身，服务端生成本就并行。F061 已把 **sync** 路径改成并行（`Promise.allSettled` + 按序落盘），但 **async 路径必须保持串行**——并行会重新触发大图编辑任务多份上传抢带宽、超时同瞬起跑而整批 abort 的老问题。
 - **自定义参数 `CustomParam`/`mergeCustomParams` 只发字符串（params: Record<string,string>）。** 是下拉枚举模型的自然形态——UI 是 Select、值恒为字符串。openai `n` 这类数值参以 `"2"` 发出，多数渠道会强转。真要发数值/布尔需另设类型，当前 enum 取舍合理，非漏洞。
@@ -78,10 +90,18 @@ VS Code 扩展，把 Markdown 正文（生成页）或手填提示词 + 编辑�
 
 > 第六轮的 F061/F062/F063 原拟列为开放问题，复审时已直接结案（sync 并行 + 缺 key 拦截 + gemini 鉴权按协议收口/原生谷歌定为已知限制），不再悬而未决。仅余：
 
-1. **F048**：双窗口同时打开时 globalState pending 任务会被两个 TaskManager 同时轮询/下载。单窗口假设是否成立？值得加隔离吗？
-2. **F033**：`scanDirImages` 注释口径——改注释说清「每层独立 500」即可，还是要让自动库各层共享 counter？纯文字 vs 行为，二选一。
+1. **F048**：双窗口同时打开时 globalState pending 任务会被两个 TaskManager 同时轮询/下载。单窗口假设是否成立？值得加隔离吗？（cliBridge 的 rename 认领锁已是这类问题的局部范本，可借鉴。）
 
-> 本轮已拍板/落地：F034 确认单根工作区为产品决策（写进 CLAUDE.md）；F035 台账日志已加（`src/log.ts`）；编辑区「清空」按钮已上线（图片+提示词一并清，提交后保留语义不变）。
+> 第七轮已结案（不再悬而未决）：F069（CLI 请求字段类型校验 + out 锁 tmpdir/md 锁工作区，本机信任改为白名单约束）、F070（CLAUDE.md 路径全量更新，README 经查无源码路径引用、无漂移）、F033（scanDirImages 注释改为准确口径，与 F067 一并收口）。
+> 此前已拍板/落地：F034 确认单根工作区为产品决策（写进 CLAUDE.md）；F035 台账日志已加（`src/util/log.ts`）；编辑区「清空」按钮已上线。
+
+## Assessment（第七轮 · 2026-06-28）
+
+复审 round-6 后约 25 个提交，两条线：**结构重组**（src 按域分八目录 + 拆 command/sidebarProvider 两个大文件 + 拆 1000 行测试）与**新功能**（给 AI 零点击调用的 CLI 文件桥、sync 任务通知、可自动消失轻提示、删后端档位收敛）。重组质量高——分层方向正确、零行为变更、`sidebarProvider.ts` 由 663→457、`check-types`/`lint` 全绿、`npm test` 134 项全绿、源码仍无 `as any`/`TODO`。**不存在 Critical/High 债。**
+
+本轮 4 项 NEW 全部落在新增的 `cliBridge.ts`（340 LOC、全新、未审过）与文档同步上，**已当场全部修复**（顺手了结 F033）：F067（`scanDirImages` 第三份重复且去掉上限 → 把 materials 版导出复用、删重复，cliBridge 减约 50 行）、F068（340 行非平凡纯逻辑零测试 → 抽出 vscode-free 的 `src/ui/cliBridgeLogic.ts`，含 `toRelDest`/`decideRef`/`buildFixReport`，配 14 项直测）、F069（请求字段/路径未校验的特权写原语 → 校验 op/md/out 为非空字符串 + 把 `out` 锁进 os.tmpdir()、`md` 锁进工作区，越界即拒、在任何写盘前完成）、F070（CLAUDE.md 路径全量更新 + 补 6 个新模块导览；README 经查无源码路径引用、无漂移）、F033（注释改为准确的「每层独立 500」，与 F067 一并收口）。文件桥的*设计*（rename 认领锁、原子写、绕 URI 确认换零点击）始终合理，债集中在其周边「校验/测试/去重/文档」四块工程卫生。修复经独立代码审核确认**行为等价、无 blocker**，`check-types`/`lint` 全绿、`npm test` 134→148 项全绿。
+
+---
 
 ## Assessment（第六轮 · 2026-06-27）
 

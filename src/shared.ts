@@ -73,6 +73,8 @@ export interface TaskMeta {
 	requested: number;
 	/** 成功产出的图片数，随 job 完成累加 */
 	succeeded: number;
+	/** 每张成功图片各自的生成耗时（ms，按完成顺序）。源数据：平均生成时间由它派生，失败图片不入列 */
+	durations?: number[];
 }
 
 /** 模型可调的一个自定义参数（settings.json 的 custom[] 一项；发请求时塞进 body 的 key=value） */
@@ -197,6 +199,8 @@ export interface PendingJob {
 	error?: string;
 	/** 远端返回的生成进度 0~100，仅 running 态有意义 */
 	progress?: number;
+	/** 本 job 开始提交的时刻（ms）：成功落盘时据此算单图生成耗时；持久化以跨重启续算 */
+	startedAt?: number;
 }
 
 /**
@@ -219,6 +223,8 @@ export interface PendingTask {
 	 *  不受用户事后切换模型/Provider 影响。旧持久化任务无此字段，回退当前配置。 */
 	providerId?: string;
 	model: string;
+	/** 是否 sync adapter（提交即整图生成、无独立 job id）。sync 时前端把「提交中」显示为「生成中」 */
+	sync?: boolean;
 	/** AI 命名的可读短名（编辑任务），命名返回后写入；未命名前为 undefined */
 	title?: string;
 	/** 任务元数据（落盘 meta.json），succeeded/title 随进度更新后回写 */
@@ -250,6 +256,8 @@ export interface WebviewPendingTask {
 	failed: number;
 	/** 仍在提交（尚未拿到 job id）的 job 数，>0 表示任务处于「提交中」阶段，前端据此区分提交/生成 */
 	submitting: number;
+	/** 是否 sync adapter：sync 的提交即整图生成，前端把「提交中」阶段显示为「生成中」 */
+	sync?: boolean;
 	/** 整任务聚合进度 0~100：已完成 job 记满分，running job 取远端进度均摊 */
 	progress: number;
 	/** 任务首次提交时间（ms），前端据此显示已进行时间（真实墙钟，不随重启重置） */
@@ -301,6 +309,7 @@ export type InboundMessage =
 	| { type: 'libraries'; libraries: WebviewLibrary[] }
 	| { type: 'autoLibraries'; libraries: WebviewLibrary[] }
 	| { type: 'promptTemplates'; templates: PromptTemplate[] }
+	| { type: 'revealTask'; folder: string }
 	| { type: 'editImages'; images: WebviewEditImage[] }
 	| { type: 'favorites'; collections: WebviewCollection[]; activeCollectionId: string };
 

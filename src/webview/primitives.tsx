@@ -7,22 +7,24 @@ export function NativeSelect({
 	options,
 	onChange,
 	ariaLabel,
+	title,
 }: {
 	value: string;
 	options: readonly (string | { value: string; label: string })[];
 	onChange: (value: string) => void;
 	ariaLabel?: string;
+	title?: string;
 }) {
 	return (
 		<RadixSelect.Root value={value} onValueChange={onChange}>
-			<RadixSelect.Trigger className="rx-select-trigger" aria-label={ariaLabel}>
+			<RadixSelect.Trigger className="rx-select-trigger" aria-label={ariaLabel} title={title}>
 				<RadixSelect.Value />
-				<RadixSelect.Icon className="rx-select-icon">▾</RadixSelect.Icon>
 			</RadixSelect.Trigger>
 			<RadixSelect.Portal>
 				<RadixSelect.Content
 					className="rx-select-content"
 					position="popper"
+					side="top"
 					sideOffset={4}
 				>
 					<RadixSelect.Viewport className="rx-select-viewport">

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { readFavorites, favoriteUriSet } from '../favorites/favorites';
+import { showTransientWarning } from '../util/notify';
 import {
 	getLibraryFolders,
 	addLibraryFolder,
@@ -105,7 +106,7 @@ export class MaterialsController {
 		const md = this.deps.currentMd();
 		const editor = vscode.window.activeTextEditor;
 		if (!md || !editor || editor.document.uri.toString() !== md.toString()) {
-			vscode.window.showWarningMessage('Image Flow：未插入——当前活动编辑器不是生效页面');
+			showTransientWarning('Image Flow：未插入——当前活动编辑器不是生效页面');
 			return;
 		}
 		const mdDir = path.dirname(md.fsPath);
@@ -113,7 +114,7 @@ export class MaterialsController {
 		let rel = path.relative(mdDir, imgPath).split(path.sep).join('/');
 		// 跨盘符时 path.relative 退回绝对路径（如 E:/foo.png），无法用相对引用表示。
 		if (path.isAbsolute(rel)) {
-			vscode.window.showWarningMessage('Image Flow：未插入——图片与文档不在同一磁盘，无法相对引用');
+			showTransientWarning('Image Flow：未插入——图片与文档不在同一磁盘，无法相对引用');
 			return;
 		}
 		if (!rel.startsWith('.')) {

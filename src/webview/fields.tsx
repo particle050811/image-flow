@@ -1,10 +1,18 @@
 import { type ReactNode } from 'react';
 import { NativeSelect } from './primitives';
 
-/** 带标签的字段容器 */
-export function Field({ label, children }: { label: string; children: ReactNode }) {
+/** 带标签的字段容器；className 可叠加（如参数行里给自定义参数列单独配宽度） */
+export function Field({
+	label,
+	children,
+	className,
+}: {
+	label: string;
+	children: ReactNode;
+	className?: string;
+}) {
 	return (
-		<div className="field">
+		<div className={className ? `field ${className}` : 'field'}>
 			<label>{label}</label>
 			{children}
 		</div>
@@ -17,14 +25,16 @@ export function Select({
 	value,
 	options,
 	onChange,
+	className,
 }: {
 	label: string;
 	value: string;
 	options: readonly (string | { value: string; label: string })[];
 	onChange: (value: string) => void;
+	className?: string;
 }) {
 	return (
-		<Field label={label}>
+		<Field label={label} className={className}>
 			<NativeSelect value={value} options={options} onChange={onChange} ariaLabel={label} />
 		</Field>
 	);

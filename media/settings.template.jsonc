@@ -15,7 +15,7 @@
       //   gemini-generate = Gemini 原生 generateContent（Bearer 鉴权；OpenAI 兼容渠道请用 openai-images）
       "adapter": "grsai-async",
       "baseUrl": "https://grsai.dakka.com.cn",
-      "apiKey": "在此填写你的 API Key",
+      "apiKey": "在此填写你的_API_Key",
       "aspectRatios": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4"],
       "imageSizes": ["1K", "2K", "4K"],
       "custom": []                        // 该模型额外可调参数，无则空数组
@@ -45,7 +45,7 @@
       "label": "Gemini 3.1 Flash Lite",
       "adapter": "openai-chat",
       "baseUrl": "https://grsai.dakka.com.cn",
-      "apiKey": "在此填写你的 API Key"
+      "apiKey": "在此填写你的_API_Key"
     }
   ]
 }

@@ -104,6 +104,8 @@ export class TaskManager {
 	private polling = false;
 	/** meta.json 写入串行链：pollJob（轮询锁内）写 succeeded 与 nameTask（锁外）写 title 共享此链，避免两处 writeFile 时序重叠写出半截 JSON */
 	private metaWrites: Promise<void> = Promise.resolve();
+	/** 点完成通知「查看」时的跳转回调，由 SidebarProvider 注入（聚焦侧栏 + 切任务栏定位） */
+	private revealHandler?: (folder: string) => void;
 
 	constructor(private readonly context: vscode.ExtensionContext) {
 		// 旧版（任务建在 md 同级）持久化记录无 kind/dir 字段，目录定位已失效，直接丢弃不续拉
@@ -277,8 +279,18 @@ export class TaskManager {
 			imageSize: opts.config.imageSize,
 			requested: count,
 			succeeded: 0,
+			durations: [],
 		};
 		await writeTaskMeta(dir, meta);
+
+		// sync adapter 的提交即整图生成（无独立 job id），据此让前端把「提交中」显示为「生成中」。
+		// 解析失败（如缺密钥）留 false，submitJobs 会照常逐 job 失败处理，不影响这里。
+		let sync = false;
+		try {
+			sync = resolveImageCall(opts.config).adapter.kind === 'sync';
+		} catch {
+			/* 留 false */
+		}
 
 		const task: PendingTask = {
 			id: folder,
@@ -289,6 +301,7 @@ export class TaskManager {
 			mdUri: opts.mdUri,
 			providerId: opts.config.providerId,
 			model: opts.config.model,
+			sync,
 			title: meta.title,
 			meta,
 			jobs: Array.from({ length: count }, () => ({ status: 'submitting' as const })),
@@ -323,6 +336,7 @@ export class TaskManager {
 			// abort——大图编辑任务因此全军覆没。逐个提交让每份上传独占带宽、超时窗口只覆盖自身。
 			for (const job of submitting) {
 				try {
+					job.startedAt = Date.now();
 					await this.applySubmitResult(task, job, await adapter.submit(ctx, prompt, images, 1));
 				} catch (err) {
 					this.failJob(task, job, err);
@@ -334,7 +348,10 @@ export class TaskManager {
 			// 各请求自带独立的 300s 超时（gen 占大头、upload 占小头，并发上传争抢仍远在窗口内），
 			// 落盘共享 task.images.length 计数，故先并发收齐结果、再按序 storeJobResults 避免重名竞态。
 			const settled = await Promise.allSettled(
-				submitting.map((job) => adapter.submit(ctx, prompt, images, 1))
+				submitting.map((job) => {
+					job.startedAt = Date.now();
+					return adapter.submit(ctx, prompt, images, 1);
+				})
 			);
 			for (let i = 0; i < submitting.length; i++) {
 				const r = settled[i];
@@ -388,6 +405,9 @@ export class TaskManager {
 		job.status = 'succeeded';
 		// 成功数随落盘累加并回写 meta.json，供任务终结后历史展示成功率
 		task.meta.succeeded = task.images.length;
+		// 记本 job 单图生成耗时（startedAt 缺失的旧续拉任务回退到任务起算）；一张图一条，供历史展示平均
+		const duration = Date.now() - (job.startedAt ?? task.startedAt);
+		(task.meta.durations ??= []).push(...saved.map(() => duration));
 		await this.writeMeta(task);
 		log(`任务 ${task.folder} 落盘 ${saved.length} 张（job ${job.id ?? 'sync'}）`);
 	}
@@ -488,22 +508,42 @@ export class TaskManager {
 		this.ensureTimer();
 	}
 
-	/** 任务终结时：若有图成功则不打扰；若全失败/部分失败，弹通知呈现错误 */
+	/** 任务终结时弹通知：全成功报喜、部分/全失败呈现错误。通知带「查看」按钮，点击跳到任务栏看该任务 */
 	private notifyFinished(task: PendingTask): void {
 		const failed = task.jobs.filter((j) => j.status === 'failed' || j.status === 'violation');
-		if (!failed.length) {
-			return;
-		}
+		// 通知名：generate 的 title 建卡即为 md 名；edit 在 AI 命名返回前终结时 title 缺失，
+		// 回退「编辑任务」而非裸时间戳文件夹名，文案更可读
+		const name = task.title || (task.kind === 'edit' ? '编辑任务' : task.folder);
 		const errors = [...new Set(failed.map((j) => j.error).filter((e): e is string => !!e))];
 		const detail = errors.length ? `：${errors.join('；')}` : '';
 		log(`任务 ${task.folder} 终结：成功 ${task.images.length}/${task.jobs.length}，失败 ${failed.length}${detail}`);
-		if (task.images.length) {
-			void vscode.window.showWarningMessage(
-				`Image Flow：${task.folder} 有 ${failed.length} 张生成失败${detail}`
-			);
+		if (!failed.length) {
+			this.notify(task.folder, `✅ Image Flow：${name} 生成完成（${task.images.length} 张）`, 'info');
+		} else if (task.images.length) {
+			this.notify(task.folder, `Image Flow：${name} 有 ${failed.length} 张生成失败${detail}`, 'warn');
 		} else {
-			void vscode.window.showErrorMessage(`Image Flow：${task.folder} 生成失败${detail}`);
+			this.notify(task.folder, `Image Flow：${name} 生成失败${detail}`, 'error');
 		}
+	}
+
+	/** 弹一条带「查看」按钮的通知；点击「查看」经 revealHandler 跳到任务栏定位该任务 */
+	private notify(folder: string, message: string, kind: 'info' | 'warn' | 'error'): void {
+		const shown =
+			kind === 'info'
+				? vscode.window.showInformationMessage(message, '查看')
+				: kind === 'warn'
+					? vscode.window.showWarningMessage(message, '查看')
+					: vscode.window.showErrorMessage(message, '查看');
+		void shown.then((picked) => {
+			if (picked === '查看') {
+				this.revealHandler?.(folder);
+			}
+		});
+	}
+
+	/** 由 SidebarProvider 注入：点通知「查看」时聚焦侧栏并切到任务栏定位该任务 */
+	setRevealHandler(fn: (folder: string) => void): void {
+		this.revealHandler = fn;
 	}
 
 	/** 查询并处理单个 job：成功则下载落盘。返回是否有状态变更 */

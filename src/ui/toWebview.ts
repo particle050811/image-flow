@@ -77,6 +77,7 @@ export async function toWebviewPendingTask(
 		done,
 		failed,
 		submitting,
+		sync: task.sync,
 		progress: aggregateProgress(task.jobs),
 		startedAt: task.startedAt,
 		errors,

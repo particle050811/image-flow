@@ -153,8 +153,13 @@ export async function listLibraries(
 	return libs;
 }
 
-/** 只扫描单层目录里直接的图片（不递归），同样受 MAX_ENTRIES 保护（按遍历条目计数，与递归版口径一致） */
-async function scanDirImages(dir: vscode.Uri): Promise<TaskImage[]> {
+/**
+ * 只扫描单层目录里直接的图片（不递归），受 MAX_ENTRIES 保护。
+ * 计数每次调用独立从 0 起（非递归版那种跨层共享 counter）：listAutoLibraries 逐层各调一次，
+ * 故是「每层独立 500」上限，N 层路径累计上限 N×500——与递归版的「整库共享 500」口径不同，按需如此。
+ * 导出供 CLI 文件桥（cliBridge）复用，避免各处重抄一份扫描逻辑而漂移。
+ */
+export async function scanDirImages(dir: vscode.Uri): Promise<TaskImage[]> {
 	let entries: [string, vscode.FileType][];
 	try {
 		entries = await vscode.workspace.fs.readDirectory(dir);

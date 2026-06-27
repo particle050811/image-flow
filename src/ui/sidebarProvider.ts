@@ -79,6 +79,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				await this.pushPendingTasks();
 			})
 		);
+		// 点任务完成通知的「查看」：聚焦侧栏 + 切到任务栏并定位该任务
+		this.tasks.setRevealHandler((folder) => void this.revealTask(folder));
+	}
+
+	/** 聚焦侧栏并让前端切到「任务」标签、选中指定任务（完成通知点「查看」时触发） */
+	private async revealTask(folder: string): Promise<void> {
+		await vscode.commands.executeCommand('image-flow.sidebar.focus');
+		this.post({ type: 'revealTask', folder });
 	}
 
 	/** 供右键命令调用：聚焦侧栏并对指定 MD 触发生成 */

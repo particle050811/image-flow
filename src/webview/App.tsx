@@ -46,6 +46,8 @@ export function App() {
 	const [editImages, setEditImages] = useState<WebviewEditImage[]>([]);
 	const [templates, setTemplates] = useState<PromptTemplate[]>([]);
 	const [busy, setBusy] = useState(false);
+	// 完成通知点「查看」后要定位的任务：folder + nonce（同一任务可重复触发跳转）
+	const [reveal, setReveal] = useState<{ folder: string; nonce: number } | null>(null);
 	const [genCooling, genCool] = useCooldown(500);
 	const [status, setStatus] = useState<StatusState>({ text: '', error: false });
 	// 已点开看过的「已完成任务」文件夹集合：任务页据此给未读任务加特效，任务标签角标计数同一集合。
@@ -131,6 +133,11 @@ export function App() {
 					break;
 				case 'promptTemplates':
 					setTemplates(msg.templates);
+					break;
+				case 'revealTask':
+					// 切到任务栏并标记要定位的任务，Tasks 据 nonce 选中对应条目
+					setTab('tasks');
+					setReveal({ folder: msg.folder, nonce: Date.now() });
 					break;
 				case 'status':
 					setStatus({ text: msg.message, error: false });
@@ -279,6 +286,7 @@ export function App() {
 					viewedTasks={viewedTasks}
 					onViewed={markTaskViewed}
 					onSendToEdit={sendToEdit}
+					reveal={reveal}
 				/>
 			</Tabs.Content>
 			<Tabs.Content value="favorites" forceMount className="tabpanel">

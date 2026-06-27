@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { editConfigView, clampImageSize } from '../ui/config';
+import { editConfigView } from '../ui/config';
 import { supportedSizes, switchModelSize, modelSizeControl } from '../modelOptions';
 import { buildOptions, BUILTIN_GRSAI } from '../backend/providers';
 import type { ImageFlowConfig } from '../shared';
@@ -7,21 +7,6 @@ import { baseConfig } from './fixtures';
 
 // 内置 grsai 派生的 ConfigOptions，供 supportedSizes/switchModelSize/modelSizeControl 测试复用
 const CONFIG_OPTIONS = buildOptions(BUILTIN_GRSAI);
-
-suite('clampImageSize', () => {
-	test('模型支持该分辨率时原样返回', () => {
-		assert.strictEqual(clampImageSize('nano-banana-2', '4K'), '4K');
-		assert.strictEqual(clampImageSize('gpt-image-2', '1K'), '1K');
-	});
-	test('gpt-image-2 仅 1K，越界回退首个支持档位', () => {
-		assert.strictEqual(clampImageSize('gpt-image-2', '4K'), '1K');
-		assert.strictEqual(clampImageSize('gpt-image-2', '2K'), '1K');
-	});
-	test('模型不在表内回退全集，未知分辨率回退首档', () => {
-		assert.strictEqual(clampImageSize('nano-banana-pro', '2K'), '2K');
-		assert.strictEqual(clampImageSize('nano-banana-2', '8K'), '1K');
-	});
-});
 
 suite('supportedSizes', () => {
 	test('受限模型只列支持档位，其余回退全集', () => {

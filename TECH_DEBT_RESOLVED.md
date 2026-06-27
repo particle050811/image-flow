@@ -4,6 +4,8 @@
 
 ## 轮次记录
 
+- **2026-06-28 第七轮（聚焦：round-6 后增量——src 按域重组 + 大文件拆分 + 新增 CLI 文件桥）**：复审约 25 个提交。无 Critical/High。新增 4 项 + 顺手了结 F033，**当场全部修复**：F067（cliBridge 重复实现 scanDirImages 且无上限 → 导出 materials 版复用）、F068（cliBridge 340 行纯逻辑零测试 → 抽 `cliBridgeLogic.ts` + 14 项直测）、F069（CLI 请求字段/路径未校验 → 类型校验 + out 锁 tmpdir/md 锁工作区）、F070（CLAUDE.md 路径漂移 → 全量更新 + 补新模块；README 无漂移）、F033（scanDirImages 计数口径注释 → 改准确）。过独立代码审核（行为等价、无 blocker），`check-types`/`lint` 全绿、`npm test` 134→148 项全绿。
+
 - **2026-06-27 第六轮（聚焦：未推送的「多 API 兼容」重大改造）**：复审 15 个未推送提交（adapter 抽象 + Provider 数据模型 + settings.json 加载）。无 Critical/High。新增 5 项并**当场全部修复**：F061（sync adapter 并行提交）、F062（自定义模型缺 key 不回落 grsai 密钥）、F063（gemini 鉴权定性为已知限制——OpenAI 兼容渠道用 openai adapter、原生谷歌端点暂不支持）、F064（CLAUDE.md 文档漂移）、F066（settings.json 解析失败显式提示）。`check-types`/`lint` 全绿、`npm test` 仍 137 项全绿。
 - **2026-06-26 第五轮（聚焦：round-4 后增量）**：复审 30+ 提交。新增并当场修复 F058/F059/F060（模型切换接线去重 + saveConfig 批量化 + 错误消息提取收口）；按维护者决策落地 F034（单根工作区结案）、F035（台账日志 OutputChannel）、编辑区「清空」按钮。`compile` 全绿、`npm test` 113→115 项全绿（新增 2 项 `modelSizeControl` 测试）。
 - **2026-06-19 第四轮（聚焦：前端重复造轮子 + 大文件拆分）**：新增 F052–F057。F052/F053/F054/F055/F057 当轮重构去重（commit 35eecc5）——抽出 `src/webview/Thumb.tsx`、`usePicker.ts`、`useCooldown.ts` 与 `src/toWebview.ts`，重复块全部收敛为单一来源。F056（god 文件）下沉图转换簇令 `sidebarProvider.ts` 726→663，收藏夹 CRUD 簇评估后有意保留，663 行经维护者决策接受、结案。`compile` + 收藏单测全绿，过代码审核（ready to merge）。
@@ -11,6 +13,16 @@
 - **2026-06-11 第三轮**：复核 F001–F031 全部成立；F032 因毫秒时间戳自然解决；新增 F039–F049，其中 F039–F041/F043–F047/F049 当轮修复（commit fc21dcd），F042 完成第①步。`compile`/`npm test`（52 项）全绿，已过代码审核（ready to merge）。
 - **2026-06-09 第二轮**：新增 F023–F038；F023–F028/F030/F031 当轮修复，F029 部分修复（npm audit fix 修掉 glob 高危）。抽出纯函数 isTaskActive/aggregateProgress/replaceImageRefs/isImageFileName，logic.test.ts 25→35 项。
 - **2026-06-08 首轮**：F001–F022 全部修复。新增 `src/images.ts`、`src/paths.ts`、`src/test/logic.test.ts`，删除一次性迁移代码 `migrateLegacySettings`，补测试时抓出并修掉尖括号正则截断 bug（F009）。
+
+## 第七轮已修（2026-06-28）— 结构重组 + CLI 文件桥
+
+| ID | Status | Category | File:Line | Sev | Effort | Description | 修复 |
+|----|--------|----------|-----------|-----|--------|-------------|------|
+| F067 | ✅RESOLVED | Consistency (dup) | src/ui/cliBridge.ts vs src/storage/materials.ts | Low | S | `scanDirImages` 在 cliBridge 里又抄了一份（`Img` 与 `TaskImage` 同形），且去掉了 materials 版的 `MAX_ENTRIES`(500) 上限与排序——并行重新实现已漂移。 | 把 materials.ts 的 `scanDirImages` 改 `export`（带 MAX_ENTRIES + 排序），cliBridge 导入复用、删本地副本与 `Img` 类型（改用 `TaskImage`）。cliBridge 净减约 50 行；`collectMdImages` 后续按 uri 去重，排序差异无影响。 |
+| F068 | ✅RESOLVED | Test debt | src/ui/cliBridge.ts | Medium | M | 340 行新模块含非平凡纯逻辑（`toRelDest` 跨盘符/尖括号、`buildFixReport` 报告、keep/rewrite/notfound/multi/crossdrive 决策矩阵），全 module-private 且与 fs 纠缠，零测试；`fix` 会回写用户 .md。 | 抽 vscode-free 的 `src/ui/cliBridgeLogic.ts`（`toRelDest`/`decideRef`/`buildFixReport` + `Decision` 类型，候选改用 fsPath 字符串表达）；`runFix` 编排保留 IO、调纯逻辑。新增 `src/test/cliBridge.test.ts` 14 项直测覆盖五种决策 + 报告格式 + 跨盘符（win32 条件）。代码审核确认 runFix 输出与改前逐字节等价。 |
+| F069 | ✅RESOLVED | Security hygiene | src/ui/cliBridge.ts:handleRequest | Low | S | 请求 json 裸 cast 成 `CliRequest`，只判 falsy 不校验类型；`out` 以 `overwrite:true` 写任意绝对路径、`fix` 回写任意 `md`，是「投递文件即触发扩展特权写」的无校验原语（本机威胁模型、不提权）。 | 加 `isNonEmptyString` 守卫校验 op/md/out；`isInside(parent,child)`（path.relative + 小写）把 `out` 锁进 os.tmpdir()、`md` 锁进工作区，**在任何写盘（含错误回写）前**完成；out 非法只记日志不回写。抽 `deleteQuietly` 收口认领文件清理。壳（imgflow.mjs）正常用法全部通过白名单。 |
+| F070 | ✅RESOLVED | Documentation | CLAUDE.md | Medium | S | `ac1ebbb` 按域重组后 CLAUDE.md 仍通篇引用重组前扁平路径（~17 处）、未提 6 个新模块，照文档找文件全落空。 | 架构段补「src 按域分目录」总览；前后端/任务/后端/编辑/收藏各段路径改成域目录；新增 CLI 文件桥段（watcher/白名单/cliBridgeLogic 拆分）；删除已不存在的 `buildEditPrompt` 提法。README 经查无源码路径引用、无漂移。 |
+| F033 | ✅RESOLVED | Consistency | src/storage/materials.ts:156 | Low | S | scanDirImages 注释称「与递归版口径一致」，实为每层独立 `scanned=0`，N 层累计上限 N×500，与递归版共享 counter 不一致。 | 随 F067 导出时改注释：明确「每层独立从 0 起、每层上限 500、N 层累计 N×500，与递归版整库共享 500 不同，按需如此」。注释与行为一致。 |
 
 ## 第六轮已修（2026-06-27）— 多 API 兼容改造
 
