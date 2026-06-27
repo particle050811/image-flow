@@ -262,6 +262,16 @@ h2 {
 	gap: var(--sp-4);
 }
 
+/* API 行：标题 + 内联下拉 + 配置文件链接同行，下拉占满中间空间 */
+.field-head-inline {
+	align-items: center;
+}
+
+.field-head-grow {
+	flex: 1;
+	min-width: 0;
+}
+
 /* 内联链接：与字段标签同字号，去掉独立链接的上边距 */
 .link-inline {
 	margin-top: 0;

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import type { MaterialLibrary, TaskImage } from './shared';
-import { isImageFileName } from './images';
+import type { MaterialLibrary, TaskImage } from '../shared';
+import { isImageFileName } from '../util/images';
 import { uriBaseName } from './paths';
 
 /** 素材库文件夹列表（file Uri 字符串）存于 workspaceState——按工作区隔离，不同项目互不混用 */

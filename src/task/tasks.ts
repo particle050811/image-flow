@@ -1,14 +1,17 @@
 import * as vscode from 'vscode';
-import { submitGeneration, queryResult, requestTaskName, TransientError } from './api';
-import { buildPrompt, createTaskFolder, dedupeArchiveNames, downloadImages, mdBaseName } from './command';
-import { readConfig, editConfigView } from './config';
-import { buildEditFinalPrompt, buildEditArchivePrompt } from './edit';
-import { buildInjectedPrompt } from './inject';
-import type { EditImage } from './editSession';
+import { TransientError } from '../backend/api';
+import { resolveImageCall, requestTaskName } from '../backend/providerRuntime';
+import { buildPrompt, dedupeArchiveNames } from '../prompt/buildPrompt';
+import { createTaskFolder, saveResults, mdBaseName } from './history';
+import { readConfig, editConfigView } from '../ui/config';
+import { buildEditFinalPrompt, buildEditArchivePrompt } from '../prompt/edit';
+import { buildInjectedPrompt } from '../prompt/inject';
+import type { EditImage } from '../prompt/editSession';
 import { archiveInputs, buildPromptFileContent, writePromptFile, writeTaskMeta } from './taskFiles';
-import { log } from './log';
-import { errMsg } from './errors';
-import type { ImageFlowConfig, PendingTask, PendingJob, TaskMeta } from './shared';
+import { log } from '../util/log';
+import { errMsg } from '../util/errors';
+import type { ImageFlowConfig, PendingTask, PendingJob, TaskMeta } from '../shared';
+import type { ResultItem } from '../backend/adapters';
 
 /** TaskManager.start 的参数：与任务来源（生成/编辑）无关的公共提交要素 */
 interface StartOptions {
@@ -46,7 +49,7 @@ const TASK_TIMEOUT = 30 * 60 * 1000;
 
 /**
  * 是否为可重试的网络瞬时错误。
- * - TransientError：queryResult 显式标记的上游 5xx/429；
+ * - TransientError：adapter 轮询（grsai poll）显式标记的上游 5xx/429；
  * - 超时经 AbortController 抛 AbortError；
  * - fetch 网络层失败抛 TypeError('fetch failed')，按 message 收窄，避免把真正的编程 TypeError 也当瞬时错误吞掉拖到超时。
  * 其余（响应格式校验失败、写盘失败等）不在此列，应直接标记失败。
@@ -284,6 +287,7 @@ export class TaskManager {
 			dir: dir.toString(),
 			prefix: opts.prefix,
 			mdUri: opts.mdUri,
+			providerId: opts.config.providerId,
 			model: opts.config.model,
 			title: meta.title,
 			meta,
@@ -312,36 +316,80 @@ export class TaskManager {
 		images: string[]
 	): Promise<void> {
 		const submitting = task.jobs.filter((j) => j.status === 'submitting');
-		// 串行（错开）提交而非并发：并发时多份大图 base64 抢同一条上行带宽，且各请求的超时计时
-		// 在同一瞬间一起起跑，整体上传一旦超过单请求窗口就会被一起 abort——大图编辑任务因此全军覆没。
-		// 逐个提交让每份上传独占带宽、超时窗口只需覆盖自身这一份；服务端生成仍并行，不影响出图速度。
-		for (const job of submitting) {
-			try {
-				job.id = await submitGeneration(config, prompt, images);
-				job.status = 'running';
-			} catch (err) {
-				job.status = 'failed';
-				job.error = errMsg(err);
+		const { adapter, ctx } = resolveImageCall(config);
+		if (adapter.kind === 'async') {
+			// async（grsai）串行（错开）提交：submit 只上传 base64、秒回 job id，生成在服务端并行。
+			// 并发提交时多份大图抢同一条上行带宽、各请求 120s 超时计时同瞬起跑，整体上传一旦超窗就被一起
+			// abort——大图编辑任务因此全军覆没。逐个提交让每份上传独占带宽、超时窗口只覆盖自身。
+			for (const job of submitting) {
+				try {
+					await this.applySubmitResult(task, job, await adapter.submit(ctx, prompt, images, 1));
+				} catch (err) {
+					this.failJob(task, job, err);
+				}
+			}
+		} else {
+			// sync（openai-images / gemini）并行提交：submit 阻塞到整张图生成完才返回（300s 窗口）。
+			// 串行会让「并发数」退化为串行生成（墙钟 ≈ 张数 × 单图生成时长）。并行让各图同时生成；
+			// 各请求自带独立的 300s 超时（gen 占大头、upload 占小头，并发上传争抢仍远在窗口内），
+			// 落盘共享 task.images.length 计数，故先并发收齐结果、再按序 storeJobResults 避免重名竞态。
+			const settled = await Promise.allSettled(
+				submitting.map((job) => adapter.submit(ctx, prompt, images, 1))
+			);
+			for (let i = 0; i < submitting.length; i++) {
+				const r = settled[i];
+				if (r.status === 'fulfilled') {
+					await this.applySubmitResult(task, submitting[i], r.value);
+				} else {
+					this.failJob(task, submitting[i], r.reason);
+				}
 			}
 		}
 
-		// 不变量：自上面的串行循环结束（最后一个 job 终结提交）到下面的 filter 之间不得有 await。
-		// 串行期间未轮到的 job 仍为 submitting，isTaskActive 为真，轮询不会误移除；但全部提交完后
-		// 若插入 await，4s 轮询可能观察到「全 failed 但仍在列表」的任务，既 notifyFinished 又移除它，
-		// 与此处的弹窗 + 移除重复（双弹窗/双移除）。
-		if (task.jobs.every((j) => j.status === 'failed')) {
-			// 全部提交失败：无产出，从进行中列表移除（无 running job，轮询不会接管它）并弹错误。
-			// 任务文件夹与 meta.json 保留，失败任务进入历史并以 0/N 留痕，不再静默删除。
-			const errors = [...new Set(task.jobs.map((j) => j.error).filter((e): e is string => !!e))];
+		// 不变量：自上面的串行循环结束到下面的 isTaskActive 判定之间不得有 await（保持同步）。
+		// 否则 4s 轮询可能观察到「已终结但仍在列表」的任务而重复 notifyFinished + 移除。
+		if (!isTaskActive(task)) {
+			// 提交后已无活跃 job：sync 任务全部就地出图/失败，或 async 全部提交失败。
+			// 就地终结（轮询不会接管无 running job 的它），文件夹与 meta.json 保留进入历史留痕。
+			this.notifyFinished(task);
 			this.tasks = this.tasks.filter((t) => t !== task);
-			log(`任务 ${task.folder} 全部 ${task.jobs.length} 次提交失败：${errors.join('；')}`);
-			void vscode.window.showErrorMessage(
-				`Image Flow：${task.folder} 全部 ${task.jobs.length} 次提交失败：${errors.join('；')}`
-			);
 		}
 		await this.persist();
 		this.ensureTimer();
 		this.emit();
+	}
+
+	/** 处理一次提交返回：async 拿到 job id 转 running；sync 提交即出图，就地落盘标记成功 */
+	private async applySubmitResult(
+		task: PendingTask,
+		job: PendingJob,
+		res: { jobId: string } | { results: ResultItem[] }
+	): Promise<void> {
+		if ('jobId' in res) {
+			job.id = res.jobId;
+			job.status = 'running';
+		} else {
+			await this.storeJobResults(task, job, res.results);
+		}
+	}
+
+	/** 标记某 job 提交失败并记台账（sync 协议的提交即生成，超时/网络失败在此终结，留痕便于排障） */
+	private failJob(task: PendingTask, job: PendingJob, err: unknown): void {
+		job.status = 'failed';
+		job.error = errMsg(err);
+		log(`任务 ${task.folder} 提交失败：${job.error}`);
+	}
+
+	/** 把一个 job 的产出结果落盘并更新任务进度（async 轮询成功 / sync 提交即出图共用） */
+	private async storeJobResults(task: PendingTask, job: PendingJob, results: ResultItem[]): Promise<void> {
+		// 接续已有图片编号避免重名；任务串行处理（提交循环 / 轮询锁）保证 length 计数不竞态
+		const saved = await saveResults(vscode.Uri.parse(task.dir), task.prefix, results, task.images.length);
+		task.images.push(...saved);
+		job.status = 'succeeded';
+		// 成功数随落盘累加并回写 meta.json，供任务终结后历史展示成功率
+		task.meta.succeeded = task.images.length;
+		await this.writeMeta(task);
+		log(`任务 ${task.folder} 落盘 ${saved.length} 张（job ${job.id ?? 'sync'}）`);
 	}
 
 	/** 扩展启动时调用：若有持久化的未完成任务，立即拉一次并启动定时轮询 */
@@ -460,8 +508,18 @@ export class TaskManager {
 
 	/** 查询并处理单个 job：成功则下载落盘。返回是否有状态变更 */
 	private async pollJob(config: ImageFlowConfig, task: PendingTask, job: PendingJob): Promise<boolean> {
+		// 按任务自身的 provider+model 解析协议，不受用户事后切换模型/Provider 影响。
+		// baseUrl/apiKey 对内置 grsai 仍回落 config（secrets），对自定义按 model 取自 settings.json。
+		const { adapter, ctx } = resolveImageCall({
+			...config,
+			providerId: task.providerId ?? config.providerId,
+			model: task.model,
+		});
+		if (!adapter.poll) {
+			throw new Error('当前协议不支持异步轮询');
+		}
 		// 仅 running job 进入这里，id 必已回填；断言收窄可选类型
-		const result = await queryResult(config, job.id!);
+		const result = await adapter.poll(ctx, job.id!);
 		if (result.status === 'running') {
 			// 进度有变化才算「变更」，驱动侧栏刷新；无变化则不触发整轮 emit，避免空刷
 			if (typeof result.progress === 'number' && result.progress !== job.progress) {
@@ -475,14 +533,8 @@ export class TaskManager {
 			job.error = result.error;
 			return true;
 		}
-		// succeeded：下载到任务文件夹（用创建时记下的绝对 Uri，与当前窗口工作区无关），接续已有图片编号避免重名
-		const saved = await downloadImages(vscode.Uri.parse(task.dir), task.prefix, result.urls, task.images.length);
-		task.images.push(...saved);
-		job.status = 'succeeded';
-		// 成功数随下载累加并回写 meta.json，供任务终结后历史展示成功率
-		task.meta.succeeded = task.images.length;
-		await this.writeMeta(task);
-		log(`任务 ${task.folder} 下载 ${saved.length} 张（job ${job.id}）`);
+		// succeeded：落盘到任务文件夹（用创建时记下的绝对 Uri，与当前窗口工作区无关）
+		await this.storeJobResults(task, job, result.results);
 		return true;
 	}
 

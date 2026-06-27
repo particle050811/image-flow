@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { joinPrompt, modelInjection } from '../inject';
-import { seedModelInjections } from '../config';
+import { joinPrompt, modelInjection } from '../prompt/inject';
+import { seedModelInjections } from '../ui/config';
 import type { ImageFlowConfig } from '../shared';
 
 const baseConfig = { modelInjections: {} } as ImageFlowConfig;

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import { uriBaseName } from './paths';
-import { workspaceRoot } from './storage';
+import * as path from 'path';
+import { uriBaseName } from '../storage/paths';
+import { workspaceRoot } from '../storage/storage';
 import {
 	readFavorites,
 	mutateFavorites,
@@ -13,8 +14,10 @@ import {
 	setActiveCollection,
 	dedupeName,
 	collectionNameError,
+	renameFavoriteUri,
 } from './favorites';
-import type { InboundMessage } from './shared';
+import { errMsg } from '../util/errors';
+import type { InboundMessage } from '../shared';
 
 /** 收藏夹控制器依赖：错误提示与视图推送仍由 SidebarProvider 持有，经回调回去 */
 export interface FavoritesDeps {
@@ -105,6 +108,35 @@ export class FavoritesController {
 			moveToDefault = pick === moveLabel;
 		}
 		await mutateFavorites((d) => deleteCollection(d, id, moveToDefault));
+		await this.deps.pushAfterChange();
+	}
+
+	/**
+	 * 重命名收藏图片的磁盘文件名（仅改文件名，扩展名保留），并同步 favorites.json 中的引用。
+	 * 入参 uri 即 favorites.json 中存的字符串，故改写收藏项时直接拿它匹配。
+	 */
+	async renameImage(uri: string): Promise<void> {
+		const src = vscode.Uri.parse(uri);
+		const base = uriBaseName(src);
+		const ext = path.extname(base);
+		const stem = path.basename(base, ext);
+		const input = await vscode.window.showInputBox({
+			prompt: '重命名图片文件（不含扩展名）',
+			value: stem,
+			validateInput: collectionNameError,
+		});
+		const next = input?.trim();
+		if (!next || next === stem) {
+			return;
+		}
+		const dest = vscode.Uri.joinPath(src, '..', next + ext);
+		try {
+			await vscode.workspace.fs.rename(src, dest, { overwrite: false });
+		} catch (err: unknown) {
+			this.deps.post({ type: 'error', message: `重命名为「${next + ext}」失败：${errMsg(err)}` });
+			return;
+		}
+		await mutateFavorites((d) => renameFavoriteUri(d, uri, dest.toString()));
 		await this.deps.pushAfterChange();
 	}
 

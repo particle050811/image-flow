@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { aggregateProgress } from './tasks';
-import { resolveThumb } from './thumbs';
+import { aggregateProgress } from '../task/tasks';
+import { resolveThumb } from '../storage/thumbs';
 import type {
 	Task,
 	TaskImage,
@@ -10,7 +10,7 @@ import type {
 	WebviewPendingTask,
 	MaterialLibrary,
 	WebviewLibrary,
-} from './shared';
+} from '../shared';
 
 /** 把文件图转成 webview 可加载的图：有缩略图用缩略图作 src（F051），
  *  没有则用原图并下发 thumbKey 请 webview 生成；uri 字段始终保留原图（点开/拖拽用）。

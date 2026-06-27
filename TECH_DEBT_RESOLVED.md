@@ -4,12 +4,23 @@
 
 ## 轮次记录
 
+- **2026-06-27 第六轮（聚焦：未推送的「多 API 兼容」重大改造）**：复审 15 个未推送提交（adapter 抽象 + Provider 数据模型 + settings.json 加载）。无 Critical/High。新增 5 项并**当场全部修复**：F061（sync adapter 并行提交）、F062（自定义模型缺 key 不回落 grsai 密钥）、F063（gemini 鉴权定性为已知限制——OpenAI 兼容渠道用 openai adapter、原生谷歌端点暂不支持）、F064（CLAUDE.md 文档漂移）、F066（settings.json 解析失败显式提示）。`check-types`/`lint` 全绿、`npm test` 仍 137 项全绿。
 - **2026-06-26 第五轮（聚焦：round-4 后增量）**：复审 30+ 提交。新增并当场修复 F058/F059/F060（模型切换接线去重 + saveConfig 批量化 + 错误消息提取收口）；按维护者决策落地 F034（单根工作区结案）、F035（台账日志 OutputChannel）、编辑区「清空」按钮。`compile` 全绿、`npm test` 113→115 项全绿（新增 2 项 `modelSizeControl` 测试）。
 - **2026-06-19 第四轮（聚焦：前端重复造轮子 + 大文件拆分）**：新增 F052–F057。F052/F053/F054/F055/F057 当轮重构去重（commit 35eecc5）——抽出 `src/webview/Thumb.tsx`、`usePicker.ts`、`useCooldown.ts` 与 `src/toWebview.ts`，重复块全部收敛为单一来源。F056（god 文件）下沉图转换簇令 `sidebarProvider.ts` 726→663，收藏夹 CRUD 簇评估后有意保留，663 行经维护者决策接受、结案。`compile` + 收藏单测全绿，过代码审核（ready to merge）。
 - **2026-06-11 F051/F042② 实装**：真缩略图上线（新增 `src/thumbs.ts` 与 `src/webview/thumbs.ts`），顺路完成 F042 第②步，整项 F042 终结。`npm test`（55 项）全绿。
 - **2026-06-11 第三轮**：复核 F001–F031 全部成立；F032 因毫秒时间戳自然解决；新增 F039–F049，其中 F039–F041/F043–F047/F049 当轮修复（commit fc21dcd），F042 完成第①步。`compile`/`npm test`（52 项）全绿，已过代码审核（ready to merge）。
 - **2026-06-09 第二轮**：新增 F023–F038；F023–F028/F030/F031 当轮修复，F029 部分修复（npm audit fix 修掉 glob 高危）。抽出纯函数 isTaskActive/aggregateProgress/replaceImageRefs/isImageFileName，logic.test.ts 25→35 项。
 - **2026-06-08 首轮**：F001–F022 全部修复。新增 `src/images.ts`、`src/paths.ts`、`src/test/logic.test.ts`，删除一次性迁移代码 `migrateLegacySettings`，补测试时抓出并修掉尖括号正则截断 bug（F009）。
+
+## 第六轮已修（2026-06-27）— 多 API 兼容改造
+
+| ID | Status | Category | File:Line | Sev | Effort | Description | 修复 |
+|----|--------|----------|-----------|-----|--------|-------------|------|
+| F061 | ✅RESOLVED | Performance | src/tasks.ts:submitJobs | Medium | M | sync adapter（openai-images/gemini）submit 阻塞到整图生成完（300s），原 `for...of await` 串行让「并发数」退化为串行生成（墙钟 ≈ 张数 × 单图时长）。串行注释「服务端仍并行」仅对 async 成立。 | `submitJobs` 按 `adapter.kind` 分支：async（grsai）保持串行错开（上传带宽 + 120s 窗口约束不变）；sync 改 `Promise.allSettled` 并行提交、再按序 `storeJobResults`（共享 `task.images.length` 计数故落盘必须串行，避免重名）。抽 `applySubmitResult`/`failJob` 两个 helper 消除两分支重复。「不得有 await 的不变量」与重入锁不变。CLAUDE.md 同步更新。 |
+| F062 | ✅RESOLVED | Security (footgun) | src/providerRuntime.ts | Low | S | `resolveImageCall`/`resolveChatCall` 的 `m.apiKey ?? config.apiKey` 回落，对自定义模型缺 key 时会把 grsai 的 secret 密钥静默发往第三方 baseUrl。 | 仅 `provider.id === GRSAI_PROVIDER_ID` 时保留回落（grsai 模型本就不带 key）；自定义图片模型缺 apiKey → 抛明确错误（提示在 settings.json 填写）；自定义 chat 模型缺 key → 返回 undefined 静默跳过命名（命名是锦上添花）。 |
+| F063 | ✅可接受 | Compatibility | src/adapters/geminiGenerate.ts | Low | — | gemini 鉴权写死 `Authorization: Bearer`，纯 Google 端点（`?key=`/`x-goog-api-key`）连不上。 | 维护者拍板按「adapter = wire 协议」收口：OpenAI 兼容的 gemini 代理（说 /v1/images、/v1/chat 那套）本就该用 `openai-images`/`openai-chat`，不碰 gemini-generate；`gemini-generate` 只面向说原生 `:generateContent` 协议的渠道、用 Bearer。谷歌原生端点的 `?key=`/`x-goog-api-key` 定性为**已知限制、暂不支持**（本项目无原生协议消费者，grsai 走 grsai-async/openai-chat）。曾短暂加过 `authStyle` 配置实现三种鉴权，复审认定是给无人用的 adapter 加未要求的灵活性，已撤回、回到写死 Bearer + 诚实注释。 |
+| F064 | ✅RESOLVED | Documentation | CLAUDE.md | Low | S | 多 API 改造后 CLAUDE.md 仍称后端为 grsai、点名已删函数 `submitGeneration`/`queryResult`。 | 更新项目目标段（后端解耦 + 自定义 Provider）、架构段（adapter/Provider 三层 + 密钥边界）、任务机制段（async 串行 / sync 并行）。 |
+| F066 | ✅RESOLVED | Error handling | src/providerRuntime.ts:reloadCustomProvider | Low | S | settings.json 写坏（非法 JSONC）时静默回落 grsai，UI 仍标「自定义」却显示 grsai 模型 + Key 框，配置被吞掉无感知。 | `reloadCustomProvider` 区分「文件缺失（静默）」与「解析失败（`showErrorMessage` 显式提示已临时回落 grsai、请修正后重载）」。 |
 
 ## 第五轮已修（2026-06-26）
 

@@ -35,12 +35,13 @@ export function switchModelSize(
 /** ImageFlowConfig 中值类型恰为 V 的字段名 */
 type ConfigKeyOf<V> = { [K in keyof ImageFlowConfig]: ImageFlowConfig[K] extends V ? K : never }[keyof ImageFlowConfig];
 
-/** 模型切换涉及的三个 config 键：工作台用 model 组，编辑页用 editModel 组。
- *  按值类型收窄——model/size 必为字符串字段、memory 必为记忆表字段，传错组别即编译期报错，无需运行时强转 */
+/** 模型切换涉及的四个 config 键：工作台用 model 组，编辑页用 editModel 组。
+ *  按值类型收窄——model/size 必为字符串字段、memory/params 必为记录字段，传错组别即编译期报错，无需运行时强转 */
 export interface ModelSizeKeys {
 	model: ConfigKeyOf<string>;
 	size: ConfigKeyOf<string>;
 	memory: ConfigKeyOf<Record<string, string>>;
+	params: ConfigKeyOf<Record<string, string>>;
 }
 
 /**
@@ -64,11 +65,15 @@ export function modelSizeControl(
 			config[keys.size],
 			model
 		);
+		// 切模型同时播种新模型可见参数的默认值（自定义参数），写进对应 params 字段，否则只显示不发
+		const custom = options.customByModel[model] ?? [];
+		const params = Object.fromEntries(custom.map((c) => [c.key, c.default]));
 		// 计算键的对象 TS 推不出具体字段，仅此一处保留 Partial 断言（写入侧，非取值侧）
 		onChangeMany({
 			[keys.model]: model,
 			[keys.size]: size,
 			[keys.memory]: memory,
+			[keys.params]: params,
 		} as Partial<ImageFlowConfig>);
 	};
 	return { sizeOptions, changeModel };

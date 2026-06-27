@@ -114,13 +114,15 @@ export function Edit({
 		});
 	};
 
-	// 分辨率随模型变化 + 切模型按各模型独立记忆恢复档位（编辑页用 editModel 组）；与工作台共用 modelSizeControl
+	// 分辨率随模型变化 + 切模型按各模型独立记忆恢复档位、播种参数默认值（编辑页用 editModel 组）；与工作台共用 modelSizeControl
 	const { sizeOptions, changeModel } = modelSizeControl(
 		config,
 		options,
-		{ model: 'editModel', size: 'editImageSize', memory: 'editImageSizeMemory' },
+		{ model: 'editModel', size: 'editImageSize', memory: 'editImageSizeMemory', params: 'editParams' },
 		onChangeMany
 	);
+	// 编辑模型可调的自定义参数（自定义 Provider 的 custom[]；内置 grsai 恒空）
+	const customParams = options.customByModel[config.editModel] ?? [];
 
 	// 选中模板：追加到提示词末尾（不覆盖已有内容）
 	const applyTemplate = (name: string) => {
@@ -227,7 +229,7 @@ export function Edit({
 				<Select
 					label="模型"
 					value={config.editModel}
-					options={options.model}
+					options={options.model.map((m) => ({ value: m, label: options.modelLabels[m] ?? m }))}
 					onChange={changeModel}
 				/>
 				<Select
@@ -239,7 +241,7 @@ export function Edit({
 				<Select
 					label="比例"
 					value={config.editAspectRatio}
-					options={options.aspectRatio}
+					options={options.aspectRatiosByModel[config.editModel] ?? options.aspectRatio}
 					onChange={(v) => onChange('editAspectRatio', v)}
 				/>
 				<Stepper
@@ -250,6 +252,20 @@ export function Edit({
 					onChange={(v) => onChange('editConcurrency', v)}
 				/>
 			</div>
+
+			{customParams.length > 0 && (
+				<div className="row">
+					{customParams.map((p) => (
+						<Select
+							key={p.key}
+							label={p.label}
+							value={config.editParams[p.key] ?? p.default}
+							options={p.options}
+							onChange={(v) => onChange('editParams', { ...config.editParams, [p.key]: v })}
+						/>
+					))}
+				</div>
+			)}
 
 			<div className="gen-row">
 				<button

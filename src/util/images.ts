@@ -61,3 +61,16 @@ export function mimeOf(ext: string): string {
 	const e = ext.toLowerCase();
 	return MIME_BY_EXT[e] ?? AUDIO_BY_EXT[e] ?? VIDEO_BY_EXT[e] ?? 'image/png';
 }
+
+/** 图片 MIME → 落盘扩展名（无点），用于 base64 结果落盘命名，未知回退 png */
+const EXT_BY_IMAGE_MIME: Record<string, string> = {
+	'image/png': 'png',
+	'image/jpeg': 'jpg',
+	'image/webp': 'webp',
+	'image/gif': 'gif',
+};
+
+/** 取图片 MIME 对应的落盘扩展名（无点，大小写不敏感），未知回退 png */
+export function extFromMime(mime: string): string {
+	return EXT_BY_IMAGE_MIME[mime.toLowerCase()] ?? 'png';
+}

@@ -28,8 +28,7 @@ export function NativeSelect({
 					<RadixSelect.Viewport className="rx-select-viewport">
 						{options.map((opt) => {
 							const v = typeof opt === 'string' ? opt : opt.value;
-							const text =
-								typeof opt === 'string' ? opt : `${opt.label}（${opt.value}）`;
+							const text = typeof opt === 'string' ? opt : opt.label;
 							return (
 								<RadixSelect.Item key={v} value={v} className="rx-select-item">
 									<RadixSelect.ItemText>{text}</RadixSelect.ItemText>

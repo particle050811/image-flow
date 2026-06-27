@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { promptsRoot } from './storage';
-import type { PromptTemplate } from './shared';
+import { promptsRoot } from '../storage/storage';
+import type { PromptTemplate } from '../shared';
 
 /**
  * 扫描 .image-flow/prompts/ 下的 .md 模板：文件名（去扩展名）为模板名，全文为内容。

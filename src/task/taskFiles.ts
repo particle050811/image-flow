@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { TaskMeta } from './shared';
+import type { TaskMeta } from '../shared';
 
 /** 提示词文件内容：纯正文归档（来源等元信息已迁出到 meta.json，不再写 frontmatter） */
 export function buildPromptFileContent(prompt: string): string {

@@ -1,4 +1,4 @@
-import type { ImageFlowConfig } from './shared';
+import type { ImageFlowConfig } from '../shared';
 import { readTemplateContent } from './prompts';
 
 /** 取某模型的注入句：直接读配置（内置默认已在首次激活时种入），无则空串 */

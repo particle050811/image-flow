@@ -1,48 +1,37 @@
 import * as vscode from 'vscode';
-import { randomBytes } from 'crypto';
-import * as os from 'os';
-import * as path from 'path';
-import { uriBaseName } from './paths';
-import { readConfig, writeConfig, CONFIG_OPTIONS } from './config';
-import { listHistory, openRequestPreview, openTextPreview, isPreviewDoc } from './command';
-import { TaskManager } from './tasks';
-import { EditSession } from './editSession';
-import { listPromptTemplates } from './prompts';
-import { tasksRoot } from './storage';
-import { saveThumb } from './thumbs';
-import { log } from './log';
-import { errMsg } from './errors';
-import { buildEditFinalPrompt } from './edit';
+import { uriBaseName } from '../storage/paths';
+import { readConfig, writeConfig } from './config';
+import { configOptions, currentProvider, ensureSettingsFile, reloadCustomProvider } from '../backend/providerRuntime';
+import { providerSwitchPatch, CUSTOM_PROVIDER_ID } from '../backend/providers';
+import { listHistory } from '../task/history';
+import { openRequestPreview, isPreviewDoc } from '../task/preview';
+import { TaskManager } from '../task/tasks';
+import { EditController } from '../prompt/editController';
+import { listPromptTemplates } from '../prompt/prompts';
+import { tasksRoot } from '../storage/storage';
+import { saveThumb } from '../storage/thumbs';
+import { log } from '../util/log';
+import { errMsg } from '../util/errors';
 import {
 	readFavorites,
-	mutateFavorites,
 	pruneMissing,
 	favoriteUriSet,
-	renameFavoriteUri,
-	collectionNameError,
-} from './favorites';
-import { FavoritesController } from './favoritesController';
-import {
-	getLibraryFolders,
-	addLibraryFolder,
-	removeLibraryFolder,
-	listLibraries,
-	listAutoLibraries,
-	readImageDesc,
-	aliasFromDesc,
-} from './materials';
+} from '../favorites/favorites';
+import { FavoritesController } from '../favorites/favoritesController';
 import type {
 	Task,
 	WebviewCollection,
 	InboundMessage,
 	OutboundMessage,
-} from './shared';
+	ImageFlowConfig,
+} from '../shared';
 import {
 	toWebviewImages,
 	toWebviewTask,
 	toWebviewPendingTask,
-	toWebviewLibrary,
 } from './toWebview';
+import { sidebarHtml } from './sidebarHtml';
+import { MaterialsController } from './materialsController';
 
 /** 侧栏 Webview：承载配置表单、生成入口与结果/历史缩略图 */
 export class SidebarProvider implements vscode.WebviewViewProvider {
@@ -51,8 +40,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	/** 当前侧栏关联的 Markdown（跟随当前活动编辑器；切到非 .md 标签时保留上一个，不清空） */
 	private currentMd?: vscode.Uri;
-	/** 编辑区图片列表：扩展侧持有，webview 重建不丢 */
-	private readonly edit = new EditSession();
+	/** 编辑页相关消息处理（上传/生成/预览/缩略图），自持 EditSession，视图推送经回调回到本类 */
+	private readonly editCtrl: EditController;
+	/** 素材库相关消息处理（库增删/资源根/自动库/插入引用），view 与 currentMd 经 getter 回调取 */
+	private readonly materials: MaterialsController;
 	/** 收藏夹相关消息处理（CRUD/导出/切换），视图推送经回调回到本类 */
 	private readonly favorites = new FavoritesController({
 		post: (msg) => this.post(msg),
@@ -64,6 +55,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		private readonly context: vscode.ExtensionContext,
 		private readonly tasks: TaskManager
 	) {
+		this.editCtrl = new EditController(context, tasks, { post: (msg) => this.post(msg) });
+		this.materials = new MaterialsController(context, {
+			post: (msg) => this.post(msg),
+			view: () => this.view,
+			currentMd: () => this.currentMd,
+		});
 		// 跟随当前活动编辑器：切到某个 .md 即生效；切到预览/代码/图片详情等非 Markdown 标签时
 		// 保留上一个生效 MD 不变——否则点开任务图片详情会清空右侧任务/历史视图。
 		// 只注册一次，避免侧栏反复 resolve 导致监听器泄漏。
@@ -96,9 +93,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		view.webview.options = {
 			enableScripts: true,
 			// media 放扩展资源；工作区目录 + 素材库目录用于按 asWebviewUri 加载缩略图
-			localResourceRoots: this.buildResourceRoots(),
+			localResourceRoots: this.materials.buildResourceRoots(),
 		};
-		view.webview.html = this.html(view.webview);
+		view.webview.html = sidebarHtml(view.webview, this.context.extensionUri);
 
 		// 顶层兜底：onMessage 内多数分支自带 try/catch，但 saveConfig/openImage 等少数分支
 		// 失败会成为静默的 unhandled rejection——统一转为前端可见的错误提示
@@ -123,7 +120,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		this.currentMd = uri;
 		this.post({ type: 'activeMd', name: this.baseName(this.currentMd) });
 		if (changed) {
-			void this.pushAutoLibraries();
+			void this.materials.pushAutoLibraries();
 		}
 	}
 
@@ -173,20 +170,31 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private async onMessage(msg: OutboundMessage): Promise<void> {
 		switch (msg.type) {
 			case 'init': {
-				const config = await readConfig(this.context);
-				this.post({ type: 'config', config, options: CONFIG_OPTIONS });
+				// 自愈：providerId=custom 但缺 settings.json → 重建脚手架并重读，避免「选中自定义却无模型」的卡死
+				const initConfig = await readConfig(this.context);
+				if (initConfig.providerId === CUSTOM_PROVIDER_ID) {
+					await ensureSettingsFile(this.context.extensionUri);
+					await reloadCustomProvider();
+				}
+				await this.pushConfig();
 				this.post({ type: 'activeMd', name: this.currentMd ? this.baseName(this.currentMd) : null });
 				await this.pushPendingTasks();
 				await this.pushHistory();
-				await this.pushLibraries();
-				await this.pushAutoLibraries();
-				this.pushEditImages();
+				await this.materials.pushLibraries();
+				await this.materials.pushAutoLibraries();
+				this.editCtrl.push();
 				await this.pushTemplates();
 				await this.pushFavorites();
 				break;
 			}
 			case 'saveConfig':
 				await writeConfig(this.context, msg.patch);
+				break;
+			case 'selectProvider':
+				await this.selectProvider(msg.providerId);
+				break;
+			case 'openProviderSettings':
+				await this.openProviderSettings();
 				break;
 			case 'generate': {
 				const md = this.requireActiveMd('生成');
@@ -202,7 +210,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				await vscode.commands.executeCommand('vscode.open', vscode.Uri.parse(msg.uri));
 				break;
 			case 'insertImage':
-				await this.insertImageRef(msg.uri);
+				await this.materials.insertImageRef(msg.uri);
 				break;
 			case 'openExternal':
 				await vscode.env.openExternal(vscode.Uri.parse(msg.url));
@@ -211,46 +219,34 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				await this.pushHistory();
 				break;
 			case 'addLibrary':
-				await this.pickAndAddLibrary();
+				await this.materials.addLibrary();
 				break;
 			case 'removeLibrary':
-				await removeLibraryFolder(this.context, msg.folder);
-				this.refreshResourceRoots();
-				await this.pushLibraries();
+				await this.materials.removeLibrary(msg.folder);
 				break;
 			case 'editUpload':
-				await this.pickEditImages();
+				await this.editCtrl.upload();
 				break;
 			case 'editAddImages':
-				await this.addEditImages(msg.uris);
+				await this.editCtrl.addImages(msg.uris);
 				break;
-			case 'editAddImagesData': {
-				// 批量收齐后一次性添加 + 单次推送：避免逐张消息 × 各全量推送的 O(N²) 序列化
-				const errors = msg.items
-					.map((item) => this.edit.addData(item.name, item.data))
-					.filter((e): e is string => !!e);
-				if (errors.length) {
-					this.post({ type: 'error', message: errors.join('；') });
-				}
-				this.pushEditImages();
+			case 'editAddImagesData':
+				this.editCtrl.addImagesData(msg.items);
 				break;
-			}
 			case 'editRemoveImage':
-				this.edit.remove(msg.name);
-				this.pushEditImages();
+				this.editCtrl.removeImage(msg.name);
 				break;
 			case 'editClearImages':
-				this.edit.clear();
-				this.pushEditImages();
+				this.editCtrl.clearImages();
 				break;
 			case 'editOpenImage':
-				await this.openEditImage(msg.name);
+				await this.editCtrl.openImage(msg.name);
 				break;
 			case 'editGenerate':
-				await this.doEditGenerate(msg.prompt);
+				await this.editCtrl.generate(msg.prompt);
 				break;
 			case 'editPreviewRequest':
-				await this.doEditPreview(msg.prompt);
+				await this.editCtrl.preview(msg.prompt);
 				break;
 			case 'openPrompt':
 				await this.openTaskPrompt(msg.folder);
@@ -262,7 +258,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				await saveThumb(msg.key, msg.data);
 				break;
 			case 'saveEditThumb':
-				this.edit.setDisplay(msg.name, msg.srcLength, msg.data);
+				this.editCtrl.saveThumb(msg.name, msg.srcLength, msg.data);
 				break;
 			case 'toggleFavorite':
 				await this.favorites.toggle(msg.uri);
@@ -271,7 +267,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				await this.favorites.move(msg.uri, msg.collectionId);
 				break;
 			case 'renameImage':
-				await this.renameImage(msg.uri);
+				await this.favorites.renameImage(msg.uri);
 				break;
 			case 'setActiveCollection':
 				await this.favorites.setActive(msg.collectionId);
@@ -291,141 +287,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	/** 弹出文件夹选择器，把选中的目录加为素材库 */
-	private async pickAndAddLibrary(): Promise<void> {
-		const picked = await vscode.window.showOpenDialog({
-			canSelectFiles: false,
-			canSelectFolders: true,
-			canSelectMany: false,
-			openLabel: '作为素材库添加',
-		});
-		if (!picked?.length) {
-			return;
-		}
-		await addLibraryFolder(this.context, picked[0].toString());
-		this.refreshResourceRoots();
-		await this.pushLibraries();
-	}
-
-	/**
-	 * 重命名收藏图片的磁盘文件名（仅改文件名，扩展名保留），并同步 favorites.json 中的引用。
-	 * 入参 uri 即 favorites.json 中存的字符串，故改写收藏项时直接拿它匹配。
-	 */
-	private async renameImage(uri: string): Promise<void> {
-		const src = vscode.Uri.parse(uri);
-		const base = uriBaseName(src);
-		const ext = path.extname(base);
-		const stem = path.basename(base, ext);
-		const input = await vscode.window.showInputBox({
-			prompt: '重命名图片文件（不含扩展名）',
-			value: stem,
-			validateInput: collectionNameError,
-		});
-		const next = input?.trim();
-		if (!next || next === stem) {
-			return;
-		}
-		const dest = vscode.Uri.joinPath(src, '..', next + ext);
-		try {
-			await vscode.workspace.fs.rename(src, dest, { overwrite: false });
-		} catch (err: unknown) {
-			this.post({ type: 'error', message: `重命名为「${next + ext}」失败：${errMsg(err)}` });
-			return;
-		}
-		await mutateFavorites((d) => renameFavoriteUri(d, uri, dest.toString()));
-		await this.pushAfterFavoritesChange();
-	}
-
-	/** 弹出文件选择器，把选中图片加入编辑区 */
-	private async pickEditImages(): Promise<void> {
-		const picked = await vscode.window.showOpenDialog({
-			canSelectFiles: true,
-			canSelectFolders: false,
-			canSelectMany: true,
-			openLabel: '加入编辑区',
-			filters: { 图片: ['png', 'jpg', 'jpeg', 'webp', 'gif'] },
-		});
-		if (!picked?.length) {
-			return;
-		}
-		await this.addEditImages(picked.map((u) => u.toString()));
-	}
-
-	/** 批量按 uri 加入编辑区：逐张收集错误（重名/非图/读取失败），一次性提示 */
-	private async addEditImages(uris: string[]): Promise<void> {
-		const errors: string[] = [];
-		for (const uri of uris) {
-			const err = await this.edit.addUri(uri);
-			if (err) {
-				errors.push(err);
-			}
-		}
-		if (errors.length) {
-			this.post({ type: 'error', message: errors.join('；') });
-		}
-		this.pushEditImages();
-	}
-
-	/** 编辑区图片只驻内存（data URI），落临时文件后用内置图片查看器打开。
-	 *  临时文件按名覆盖、不主动清理（单图 MB 级，交给 OS 临时目录回收） */
-	private async openEditImage(name: string): Promise<void> {
-		const img = this.edit.list().find((i) => i.name === name);
-		if (!img) {
-			return;
-		}
-		const base64 = img.data.slice(img.data.indexOf(',') + 1);
-		const dir = vscode.Uri.file(path.join(os.tmpdir(), 'image-flow-view'));
-		await vscode.workspace.fs.createDirectory(dir);
-		// basename 兜底：name 理应已是纯文件名，防御性阻断含路径分隔符的名字逃出临时目录
-		const file = vscode.Uri.joinPath(dir, path.basename(name));
-		await vscode.workspace.fs.writeFile(file, Buffer.from(base64, 'base64'));
-		await vscode.commands.executeCommand('vscode.open', file);
-	}
-
-	private pushEditImages(): void {
-		this.post({
-			type: 'editImages',
-			// 展示用压缩图（webview 回传后缓存于 EditSession），原图只在提交时使用；
-			// 尚无展示图的大图标记 needsThumb，webview 据此生成回传
-			images: this.edit.list().map((i) => ({
-				name: i.name,
-				src: i.display ?? i.data,
-				needsThumb: this.edit.needsDisplay(i),
-			})),
-		});
-	}
-
 	private async pushTemplates(): Promise<void> {
 		this.post({ type: 'promptTemplates', templates: await listPromptTemplates() });
-	}
-
-	/** 编辑页生成：校验 Key → submitEdit 提交异步任务 */
-	private async doEditGenerate(prompt: string): Promise<void> {
-		const config = await readConfig(this.context);
-		if (!config.apiKey) {
-			this.post({ type: 'error', message: '尚未配置 API Key，请在设置页填写。' });
-			return;
-		}
-		this.post({ type: 'busy', busy: true });
-		try {
-			await this.tasks.submitEdit(prompt, this.edit.list());
-		} catch (err: unknown) {
-			this.postError(err);
-		} finally {
-			this.post({ type: 'busy', busy: false });
-		}
-	}
-
-	/** 编辑页预览请求：与 submitEdit 共用 buildEditFinalPrompt，打开成预览文档（不调 API） */
-	private async doEditPreview(prompt: string): Promise<void> {
-		try {
-			const base = await readConfig(this.context);
-			const refs = this.edit.list();
-			const finalPrompt = buildEditFinalPrompt(base, prompt, refs.map((r) => r.name));
-			await openTextPreview(finalPrompt);
-		} catch (err: unknown) {
-			this.postError(err);
-		}
 	}
 
 	/** 打开任务文件夹内的提示词 .md 文件（文件名不固定，按扩展名找第一个） */
@@ -444,45 +307,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		} catch {
 			this.post({ type: 'error', message: '提示词文件打开失败。' });
 		}
-	}
-
-	/** 构造 webview 的资源根：扩展 media + 工作区目录 + 各素材库目录 */
-	private buildResourceRoots(): vscode.Uri[] {
-		return [
-			vscode.Uri.joinPath(this.context.extensionUri, 'media'),
-			...(vscode.workspace.workspaceFolders?.map((f) => f.uri) ?? []),
-			...getLibraryFolders(this.context).map((f) => vscode.Uri.parse(f)),
-		];
-	}
-
-	/** 素材库增删后重设 localResourceRoots，使新目录的缩略图可加载 */
-	private refreshResourceRoots(): void {
-		if (!this.view) {
-			return;
-		}
-		this.view.webview.options = {
-			enableScripts: true,
-			localResourceRoots: this.buildResourceRoots(),
-		};
-	}
-
-	private async pushLibraries(): Promise<void> {
-		const favSet = favoriteUriSet(await readFavorites());
-		const libs = await listLibraries(this.context);
-		this.post({
-			type: 'libraries',
-			libraries: await Promise.all(libs.map((l) => toWebviewLibrary(this.view?.webview, l, favSet))),
-		});
-	}
-
-	/** 推送随当前 Markdown 路径自动生成的素材库（无 MD 时清空） */
-	private async pushAutoLibraries(): Promise<void> {
-		const favSet = favoriteUriSet(await readFavorites());
-		const libs = this.currentMd ? await listAutoLibraries(this.currentMd) : [];
-		this.post({
-			type: 'autoLibraries',
-			libraries: await Promise.all(libs.map((l) => toWebviewLibrary(this.view?.webview, l, favSet))),
-		});
 	}
 
 	/** 推送收藏标签页数据：各夹图片转 webview 可加载 + 悬空过滤（仅展示） */
@@ -508,49 +332,54 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		await this.pushFavorites();
 		await this.pushHistory();
 		await this.pushPendingTasks();
-		await this.pushLibraries();
-		await this.pushAutoLibraries();
+		await this.materials.pushLibraries();
+		await this.materials.pushAutoLibraries();
+	}
+
+	/** 推送当前配置 + 由当前 Provider 派生的 options（下拉候选随 grsai/自定义切换） */
+	private async pushConfig(): Promise<void> {
+		const config = await readConfig(this.context);
+		this.post({ type: 'config', config, options: configOptions(config) });
+		this.warnIfCustomEmpty(config);
 	}
 
 	/**
-	 * 右键素材缩略图：把图片以相对引用插入「生效页面」光标处。
-	 * 生效页面 = 侧栏关联的 MD（currentMd）。仅当当前活动编辑器正是该 MD 时才插入，
-	 * 否则忽略——避免插到小说原文、预览或别的文件里。
+	 * 自定义 Provider 选中但没有可用图片模型（settings.json 的 image[] 为空或全部无效）时给明确提示。
+	 * 补「缺文件自愈」覆盖不到的一格：文件存在但内容没配模型——否则前端模型下拉空白、点生成才报错。
 	 */
-	private async insertImageRef(imageUri: string): Promise<void> {
-		const editor = vscode.window.activeTextEditor;
-		if (
-			!this.currentMd ||
-			!editor ||
-			editor.document.uri.toString() !== this.currentMd.toString()
-		) {
-			vscode.window.showWarningMessage('Image Flow：未插入——当前活动编辑器不是生效页面');
-			return;
+	private warnIfCustomEmpty(config: ImageFlowConfig): void {
+		if (config.providerId === CUSTOM_PROVIDER_ID && !currentProvider(config).image.length) {
+			this.post({
+				type: 'error',
+				message: '自定义 API 没有可用的图片模型，请在 settings.json 的 image[] 中配置（点「打开配置文件」），改后重载窗口生效。',
+			});
 		}
-		const mdDir = path.dirname(this.currentMd.fsPath);
-		const imgPath = vscode.Uri.parse(imageUri).fsPath;
-		let rel = path.relative(mdDir, imgPath).split(path.sep).join('/');
-		// 跨盘符时 path.relative 退回绝对路径（如 E:/foo.png），无法用相对引用表示。
-		if (path.isAbsolute(rel)) {
-			vscode.window.showWarningMessage('Image Flow：未插入——图片与文档不在同一磁盘，无法相对引用');
-			return;
+	}
+
+	/**
+	 * 切换 API（Provider）：存 providerId；选自定义则确保 settings.json 存在并重读；
+	 * 再把工作台/编辑模型对齐到新 Provider 的有效值并播种参数默认值，最后回推配置与候选。
+	 */
+	private async selectProvider(providerId: string): Promise<void> {
+		await writeConfig(this.context, { providerId });
+		if (providerId === CUSTOM_PROVIDER_ID) {
+			await ensureSettingsFile(this.context.extensionUri);
+			await reloadCustomProvider();
 		}
-		if (!rel.startsWith('.')) {
-			rel = './' + rel;
+		const config = await readConfig(this.context);
+		const patch = providerSwitchPatch(currentProvider(config), config);
+		if (Object.keys(patch).length) {
+			await writeConfig(this.context, patch);
 		}
-		// 图片旁有同主名 .md 描述文件时，描述在前、图片引用紧随其后一并写进正文
-		// （buildPrompt 拼提示词时自然包含），如：- [某角色] 描述文字。![alt](路径)
-		const desc = await readImageDesc(imageUri);
-		// alt 优先用描述里的别名（如 `[九胡]` → 九胡），与正文命名引用对齐；无别名退回文件主名。
-		const alt = aliasFromDesc(desc) || path.basename(imgPath, path.extname(imgPath));
-		// 路径含空格或半角括号时用尖括号包裹，否则 Markdown 会在空格处截断或被 ) 提前闭合。
-		// 中文/全角括号对 CommonMark 是普通字符，无需处理，保持可读。
-		const dest = /[ ()]/.test(rel) ? `<${rel}>` : rel;
-		let snippet = `![${alt}](${dest})`;
-		if (desc) {
-			snippet = desc + snippet;
-		}
-		await editor.edit((b) => b.insert(editor.selection.active, snippet));
+		await this.pushConfig();
+	}
+
+	/** 打开自定义配置文件：缺则先建脚手架，重读后用编辑器打开；刷新候选（刚创建时模型列表更新） */
+	private async openProviderSettings(): Promise<void> {
+		const uri = await ensureSettingsFile(this.context.extensionUri);
+		await reloadCustomProvider();
+		await vscode.commands.executeCommand('vscode.open', uri);
+		await this.pushConfig();
 	}
 
 	/** 预览请求：对当前关联的 MD 解析提示词 + 拼请求参数，打开成预览文档（不调 API） */
@@ -617,35 +446,4 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private postError(err: unknown): void {
 		this.post({ type: 'error', message: errMsg(err) });
 	}
-
-	private html(webview: vscode.Webview): string {
-		const uri = (f: string) =>
-			webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', f));
-		const nonce = nonceStr();
-		// style-src 必须含 'unsafe-inline'：Radix（Select/Collapsible 等）的浮层定位、
-		// 滚动锁、动画高度均通过元素级内联 style 属性实现，而 CSP nonce/hash 只覆盖
-		// <style>/<script> 标签、管不到内联 style 属性，故无法收紧为 nonce。脚本仍锁 nonce。
-		// img-src 须含 data:：编辑区图片统一以 data URI 推送（可能来自 localResourceRoots 之外）。
-		const csp =
-			`default-src 'none'; img-src ${webview.cspSource} data:; ` +
-			`style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';`;
-		return `<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="${csp}">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link href="${uri('sidebar.css')}" rel="stylesheet">
-</head>
-<body>
-<div id="app"></div>
-<script nonce="${nonce}" src="${uri('sidebar.js')}"></script>
-</body>
-</html>`;
-	}
-}
-
-/** 生成 CSP nonce（扩展运行在 Node 主进程，用 crypto 安全随机） */
-function nonceStr(): string {
-	return randomBytes(16).toString('hex');
 }

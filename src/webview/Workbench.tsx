@@ -44,13 +44,15 @@ export function Workbench({
 	onRemoveLibrary: (folder: string) => void;
 	onSendToEdit: (uri: string) => void;
 }) {
-	// 分辨率随模型变化 + 切模型按各模型独立记忆恢复档位（工作台用 model 组）；与编辑页共用 modelSizeControl
+	// 分辨率随模型变化 + 切模型按各模型独立记忆恢复档位、播种参数默认值（工作台用 model 组）；与编辑页共用 modelSizeControl
 	const { sizeOptions, changeModel } = modelSizeControl(
 		config,
 		options,
-		{ model: 'model', size: 'imageSize', memory: 'imageSizeMemory' },
+		{ model: 'model', size: 'imageSize', memory: 'imageSizeMemory', params: 'params' },
 		onChangeMany
 	);
+	// 当前模型可调的自定义参数（自定义 Provider 的 custom[]；内置 grsai 恒空）
+	const customParams = options.customByModel[config.model] ?? [];
 	return (
 		<div className="page" data-page="workbench" hidden={hidden}>
 			<div className="gallery">
@@ -71,7 +73,7 @@ export function Workbench({
 					<Select
 						label="模型"
 						value={config.model}
-						options={options.model}
+						options={options.model.map((m) => ({ value: m, label: options.modelLabels[m] ?? m }))}
 						onChange={changeModel}
 					/>
 					<Select
@@ -83,7 +85,7 @@ export function Workbench({
 					<Select
 						label="比例"
 						value={config.aspectRatio}
-						options={options.aspectRatio}
+						options={options.aspectRatiosByModel[config.model] ?? options.aspectRatio}
 						onChange={(v) => onChange('aspectRatio', v)}
 					/>
 					<Stepper
@@ -94,6 +96,20 @@ export function Workbench({
 						onChange={(v) => onChange('concurrency', v)}
 					/>
 				</div>
+
+				{customParams.length > 0 && (
+					<div className="row">
+						{customParams.map((p) => (
+							<Select
+								key={p.key}
+								label={p.label}
+								value={config.params[p.key] ?? p.default}
+								options={p.options}
+								onChange={(v) => onChange('params', { ...config.params, [p.key]: v })}
+							/>
+						))}
+					</div>
+				)}
 
 				<div className="tpl-row">
 					<label className="tpl-label">预设模板</label>

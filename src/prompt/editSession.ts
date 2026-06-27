@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { isImageFileName, mimeOf } from './images';
-import { uriBaseName } from './paths';
+import { isImageFileName, mimeOf } from '../util/images';
+import { uriBaseName } from '../storage/paths';
 
 /** 编辑区一张图：name 为引用名（文件名），data 为 base64 data URI（统一驻内存，提交直接用） */
 export interface EditImage {

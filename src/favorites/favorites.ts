@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { workspaceRoot } from './storage';
-import type { FavoritesData, FavoriteCollection, FavoriteItem } from './shared';
+import { workspaceRoot } from '../storage/storage';
+import type { FavoritesData, FavoriteCollection, FavoriteItem } from '../shared';
 
 /** 初始默认收藏夹的固定 id（全新用户的第一个夹、删除时的优先归并目标）。可被删除，不再是不可删锚点 */
 export const DEFAULT_COLLECTION_ID = 'c_default';

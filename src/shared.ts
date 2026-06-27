@@ -6,7 +6,11 @@
 export interface ImageFlowConfig {
 	apiKey: string;
 	baseUrl: string;
+	/** 当前选用的 API（Provider）：'grsai' = 内置；'custom' = settings.json 自定义 */
+	providerId: string;
 	model: string;
+	/** 工作台当前模型的可见自定义参数当前值（如 {quality:'high'}）；内置 grsai 恒空 */
+	params: Record<string, string>;
 	aspectRatio: string;
 	imageSize: string;
 	/** 每个生成模型上次选用的分辨率，切模型时据此恢复（imageSize 是当前模型的生效值） */
@@ -40,6 +44,8 @@ export interface ImageFlowConfig {
 	editImageSizeMemory: Record<string, string>;
 	/** 编辑页专属并发数 */
 	editConcurrency: number;
+	/** 编辑页当前模型的可见自定义参数当前值（与 params 互不影响） */
+	editParams: Record<string, string>;
 	/** AI 给任务命名所用的对话模型 */
 	namingModel: string;
 	/** 是否在提交任务时自动 AI 命名（生成与编辑通用） */
@@ -69,20 +75,42 @@ export interface TaskMeta {
 	succeeded: number;
 }
 
-export interface BaseUrlOption {
-	value: string;
+/** 模型可调的一个自定义参数（settings.json 的 custom[] 一项；发请求时塞进 body 的 key=value） */
+export interface CustomParam {
+	/** 发请求时塞进 body 的参数名 */
+	key: string;
+	/** UI 上显示的标题 */
 	label: string;
+	/** 下拉可选值 */
+	options: readonly string[];
+	/** 默认值，切到该模型时播种进 config.params */
+	default: string;
 }
 
-/** 各配置项的可选值，供侧栏下拉渲染 */
+/**
+ * 各配置项的可选值，供侧栏下拉渲染。随当前 Provider（grsai / 自定义）派生。
+ * 模型相关项按模型分表（…ByModel），前端用当前选中模型名索引；不含任何 baseUrl/apiKey。
+ */
 export interface ConfigOptions {
-	baseUrl: readonly BaseUrlOption[];
+	/** 可选的 API（Provider）列表：内置 grsai + 自定义 */
+	providers: readonly { id: string; label: string }[];
+	/** 当前 Provider 是否为自定义（前端据此隐藏内置 grsai 的 API Key 输入框） */
+	isCustom: boolean;
+	/** 当前 Provider 的图片模型 API 名列表 */
 	model: readonly string[];
-	aspectRatio: readonly string[];
-	imageSize: readonly string[];
-	/** 模型 → 该模型支持的分辨率子集；模型不在表内时回退 imageSize 全集 */
+	/** 图片模型 API 名 → 展示名 */
+	modelLabels: Record<string, string>;
+	/** 模型 → 该模型支持的比例；模型不在表内时回退 aspectRatio 全集 */
+	aspectRatiosByModel: Record<string, readonly string[]>;
+	/** 模型 → 该模型支持的分辨率档位；模型不在表内时回退 imageSize 全集 */
 	imageSizesByModel: Record<string, readonly string[]>;
-	/** AI 命名可选的对话模型 */
+	/** 模型 → 该模型可调的自定义参数（可见项），无则空数组 */
+	customByModel: Record<string, readonly CustomParam[]>;
+	/** 比例全集兜底（模型不在 aspectRatiosByModel 时用） */
+	aspectRatio: readonly string[];
+	/** 分辨率全集兜底（模型不在 imageSizesByModel 时用） */
+	imageSize: readonly string[];
+	/** 当前 Provider 的命名（对话）模型 API 名列表 */
 	namingModel: readonly string[];
 }
 
@@ -187,6 +215,9 @@ export interface PendingTask {
 	prefix: string;
 	/** 来源 md 的 Uri 字符串（仅 generate，用于追溯） */
 	mdUri?: string;
+	/** 提交时所属 Provider（grsai/custom）；轮询按任务自身的 provider+model 解析协议，
+	 *  不受用户事后切换模型/Provider 影响。旧持久化任务无此字段，回退当前配置。 */
+	providerId?: string;
 	model: string;
 	/** AI 命名的可读短名（编辑任务），命名返回后写入；未命名前为 undefined */
 	title?: string;
@@ -277,6 +308,8 @@ export type InboundMessage =
 export type OutboundMessage =
 	| { type: 'init' }
 	| { type: 'saveConfig'; patch: Partial<ImageFlowConfig> }
+	| { type: 'selectProvider'; providerId: string }
+	| { type: 'openProviderSettings' }
 	| { type: 'generate' }
 	| { type: 'previewRequest' }
 	| { type: 'openImage'; uri: string }

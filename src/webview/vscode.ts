@@ -5,7 +5,6 @@ import type { OutboundMessage } from '../shared';
 export type {
 	ImageFlowConfig as Config,
 	ConfigOptions,
-	BaseUrlOption,
 	WebviewImage,
 	WebviewCollection,
 	WebviewTask,

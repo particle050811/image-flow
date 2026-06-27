@@ -1,4 +1,13 @@
 import * as vscode from 'vscode';
+import * as os from 'os';
+
+/**
+ * 自定义 Provider 配置文件：~/.image-flow/settings.json（跨工作区全局，在用户主目录）。
+ * 注意区别于工作区内的 .image-flow/tasks|favorites（那些按工作区隔离）。
+ */
+export function settingsFile(): vscode.Uri {
+	return vscode.Uri.joinPath(vscode.Uri.file(os.homedir()), '.image-flow', 'settings.json');
+}
 
 /** 第一个工作区文件夹的 Uri；无工作区返回 undefined */
 export function workspaceRoot(): vscode.Uri | undefined {

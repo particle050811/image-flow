@@ -1,8 +1,8 @@
-import { parseMediaDecls, buildNameTable, replaceMediaRefs, assertAllDeclsReferenced } from './command';
-import { editConfigView } from './config';
+import { parseMediaDecls, buildNameTable, replaceMediaRefs, assertAllDeclsReferenced } from './buildPrompt';
+import { editConfigView } from '../ui/config';
 import { joinPrompt, modelInjection } from './inject';
-import { mediaDeclSnippet, namedRefSnippet } from './refs';
-import type { ImageFlowConfig } from './shared';
+import { mediaDeclSnippet, namedRefSnippet } from '../refs';
+import type { ImageFlowConfig } from '../shared';
 
 /**
  * 编辑任务的最终提示词：把编辑区全部图拼成顶部 `![主名](文件名)` 声明（按编辑区顺序），

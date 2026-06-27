@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
-import { isPreviewDoc, previewRequestCommand } from './command';
-import { seedModelInjections } from './config';
-import { SidebarProvider } from './sidebarProvider';
-import { TaskManager } from './tasks';
-import { initLog, log } from './log';
+import { isPreviewDoc, previewRequestCommand } from './task/preview';
+import { seedModelInjections } from './ui/config';
+import { reloadCustomProvider } from './backend/providerRuntime';
+import { SidebarProvider } from './ui/sidebarProvider';
+import { TaskManager } from './task/tasks';
+import { initLog, log } from './util/log';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -15,6 +16,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	// 首次激活把内置注入种子写入配置，让默认抑噪句在侧栏输入框可见可改。
 	// 必须在注册侧栏 provider 前 await：否则 webview 可能先读到尚未种入的 config，默认句首次不显示。
 	await seedModelInjections(context);
+
+	// 读入自定义 Provider（~/.image-flow/settings.json）缓存：侧栏首读 config 即能拿到自定义模型候选。
+	// 改 settings.json 后需重载窗口生效（无 file watch），切到自定义/打开配置时也会重读。
+	await reloadCustomProvider();
 
 	// 异步任务管理器：提交/轮询/持久化。配合 onStartupFinished 激活，开机即 resume 续拉重启前未完成的任务。
 	const taskManager = new TaskManager(context);
