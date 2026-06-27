@@ -81,6 +81,7 @@ body {
 
 .tab {
 	flex: 1;
+	position: relative;
 	padding: var(--sp-2) var(--sp-1) var(--sp-2);
 	text-align: center;
 	font-size: var(--fs-body);
@@ -88,24 +89,42 @@ body {
 	cursor: pointer;
 	border: none;
 	background: transparent;
-	color: var(--vscode-foreground);
-	opacity: 0.6;
+	/* 用文字色而非整体 opacity 做未选中变暗：opacity 会拖累子元素（角标），令角标也跟着发暗 */
+	color: color-mix(in srgb, var(--vscode-foreground) 60%, transparent);
 	border-bottom: 2px solid transparent;
 	width: auto;
 	border-radius: 0;
-	transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease),
-		border-color var(--dur) var(--ease);
+	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 
 .tab:hover {
-	opacity: 0.9;
+	color: color-mix(in srgb, var(--vscode-foreground) 90%, transparent);
 	background: transparent;
 }
 
 .tab[data-state='active'] {
-	opacity: 1;
 	color: var(--vscode-foreground);
 	border-bottom-color: var(--vscode-focusBorder, var(--vscode-button-background));
+}
+
+/* 任务标签右上角红色数字角标：进行中 + 已完成未看 的任务总数 */
+.tab-badge {
+	position: absolute;
+	top: 2px;
+	right: 4px;
+	min-width: 15px;
+	height: 15px;
+	padding: 0 4px;
+	box-sizing: border-box;
+	border-radius: 999px;
+	background: var(--vscode-notificationsErrorIcon-foreground, #f14c4c);
+	color: #fff;
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 15px;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+	pointer-events: none;
 }
 
 .tab:focus-visible {
@@ -234,6 +253,19 @@ h2 {
 	font-size: var(--fs-label);
 	opacity: 0.8;
 	font-weight: 500;
+}
+
+/* 字段标签行：标签 + 紧随其后的内联链接（如 API Key 的「获取」） */
+.field-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--sp-4);
+}
+
+/* 内联链接：与字段标签同字号，去掉独立链接的上边距 */
+.link-inline {
+	margin-top: 0;
+	font-size: var(--fs-label);
 }
 
 /* 复选框字段：标签在右、整行可点 */
@@ -503,12 +535,12 @@ button:disabled:active {
 }
 
 /* 行内的激活文件名：wrapper 承担 flex 收缩与 tooltip 定位，内层 .active-md 负责省略号 */
-.gen-row .tip {
+.tpl-row .tip {
 	flex: 0 1 auto;
 	min-width: 0;
 }
 
-.gen-row .active-md {
+.tpl-row .active-md {
 	display: block;
 	margin-bottom: 0;
 	min-width: 0;
@@ -778,6 +810,27 @@ button.secondary {
 	padding: 4px 6px;
 }
 
+/* 工作台预设模板：标签 + 自适应下拉 + 当前文件名整组居中，与下方按钮行对齐 */
+.tpl-row {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--sp-2);
+	margin-top: var(--sp-2);
+}
+
+.tpl-row .tpl-label {
+	flex: 0 0 auto;
+	font-size: var(--fs-body);
+	opacity: 0.75;
+}
+
+.tpl-row .tpl-select {
+	flex: 0 1 auto;
+	width: auto;
+	min-width: 0;
+}
+
 /* ---------- 缩略图包裹层与角标（编辑区 + 任务页共用） ---------- */
 .thumb-wrap {
 	position: relative;
@@ -920,9 +973,20 @@ button.secondary {
 	color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
 }
 
-/* 进行中任务条目：左侧高亮条 */
+/* 需要关注的任务条目：进行中（data-pending，蓝）或已完成但未点开看过（data-unseen，绿）。
+   整框染成主题色边框 + 22% 淡色填充底，静态提示，一眼可辨。 */
 .picker-chip[data-pending='true'] {
-	border-left: 2px solid var(--vscode-progressBar-background, var(--vscode-focusBorder));
+	--chip-glow: var(--vscode-progressBar-background, var(--vscode-focusBorder));
+}
+
+.picker-chip[data-unseen='true'] {
+	--chip-glow: var(--vscode-charts-green, #3fb950);
+}
+
+.picker-chip[data-pending='true'],
+.picker-chip[data-unseen='true'] {
+	border-color: var(--chip-glow);
+	background: color-mix(in srgb, var(--chip-glow) 22%, transparent);
 }
 
 .chip-name {

@@ -7,7 +7,7 @@ import type { ImageFlowConfig } from './shared';
 /**
  * 编辑任务的最终提示词：把编辑区全部图拼成顶部 `![主名](文件名)` 声明（按编辑区顺序），
  * 正文即工作台 MD 格式，复用生成链路的 replaceMediaRefs——声明被删、命名引用 `[主名]`
- * 替换为 `【@图片N】`，编号按编辑区顺序。再前置编辑模型注入句（不拼 IMAGES.md）。
+ * 替换为 `【@图片N】`，编号按编辑区顺序。再前置编辑模型注入句（不拼工作台预设模板）。
  * 提交（tasks.submitEdit）与预览（sidebarProvider.doEditPreview）共用，保证不漂移。
  */
 export function buildEditFinalPrompt(base: ImageFlowConfig, rawPrompt: string, names: string[]): string {

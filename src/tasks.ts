@@ -209,7 +209,7 @@ export class TaskManager {
 
 	/**
 	 * 提交一次编辑任务：用编辑专属配置，引用按编辑区顺序替换为 [imageN]。
-	 * 注入仅拼模型注入句（按编辑模型取），不拼工作区 IMAGES.md——编辑场景与图册说明无关。
+	 * 注入仅拼模型注入句（按编辑模型取），不拼工作台预设模板——编辑场景与图册说明无关。
 	 */
 	async submitEdit(rawPrompt: string, refs: EditImage[]): Promise<void> {
 		const base = await readConfig(this.context);

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { vscode, type Config, type ConfigOptions } from './vscode';
-import { Select, TextField, TextArea, Stepper, Checkbox } from './fields';
+import { Select, TextArea, Stepper, Checkbox } from './fields';
 
 const GET_KEY_URL = 'https://grsai.ai/zh/dashboard/api-keys';
 
@@ -20,19 +20,23 @@ export function ApiConfig({
 	const [injectModel, setInjectModel] = useState(config.model);
 	return (
 		<div className="page" data-page="api" hidden={hidden}>
-			<TextField
-				label="API Key"
-				type="password"
-				value={config.apiKey}
-				onChange={(v) => onChange('apiKey', v)}
-			/>
-			<button
-				type="button"
-				className="link"
-				onClick={() => vscode.postMessage({ type: 'openExternal', url: GET_KEY_URL })}
-			>
-				获取 API Key →
-			</button>
+			<div className="field">
+				<div className="field-head">
+					<label>API Key</label>
+					<button
+						type="button"
+						className="link link-inline"
+						onClick={() => vscode.postMessage({ type: 'openExternal', url: GET_KEY_URL })}
+					>
+						获取
+					</button>
+				</div>
+				<input
+					type="password"
+					value={config.apiKey}
+					onChange={(e) => onChange('apiKey', e.target.value)}
+				/>
+			</div>
 			<div className="row">
 				<Stepper
 					label="工作台图片每行张数"
@@ -71,12 +75,21 @@ export function ApiConfig({
 					max={8}
 					onChange={(v) => onChange('tasksTabCols', v)}
 				/>
+			</div>
+			<div className="row">
 				<Stepper
 					label="收藏夹标签每行个数"
 					value={config.favoritesTabCols}
 					min={1}
 					max={8}
 					onChange={(v) => onChange('favoritesTabCols', v)}
+				/>
+				<Stepper
+					label="模板标签每行个数"
+					value={config.templateCols}
+					min={1}
+					max={8}
+					onChange={(v) => onChange('templateCols', v)}
 				/>
 			</div>
 			<Checkbox

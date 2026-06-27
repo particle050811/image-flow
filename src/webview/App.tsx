@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import {
 	vscode,
@@ -48,6 +48,31 @@ export function App() {
 	const [busy, setBusy] = useState(false);
 	const [genCooling, genCool] = useCooldown(500);
 	const [status, setStatus] = useState<StatusState>({ text: '', error: false });
+	// 已点开看过的「已完成任务」文件夹集合：任务页据此给未读任务加特效，任务标签角标计数同一集合。
+	// 持久化进 webview state（getState/setState），跨重载/重启保留。
+	const [viewedTasks, setViewedTasks] = useState<Set<string>>(
+		() => new Set(vscode.getState()?.viewedTasks ?? [])
+	);
+	// 是否已建立基线：首次启用本功能时把当前全部历史视作「已看过」，避免旧历史一次性全亮角标。
+	// getState 已有记录（含空数组）即视为已基线，重载/重启不再重置。
+	const seededRef = useRef(vscode.getState()?.viewedTasks !== undefined);
+
+	// 写回 webview 持久化状态（合并已有字段，避免覆盖其他键）
+	const persistViewed = (set: Set<string>) => {
+		vscode.setState({ ...vscode.getState(), viewedTasks: [...set] });
+	};
+
+	// 点开已完成任务卡片：记为已看过，清掉其未读特效并让角标减一
+	const markTaskViewed = (folder: string) => {
+		setViewedTasks((prev) => {
+			if (prev.has(folder)) {
+				return prev;
+			}
+			const next = new Set(prev).add(folder);
+			persistViewed(next);
+			return next;
+		});
+	};
 
 	// 订阅扩展消息，挂载后发 init 拉取配置与历史
 	useEffect(() => {
@@ -63,6 +88,17 @@ export function App() {
 					break;
 				case 'history':
 					setTasks(msg.tasks);
+					// 同步「已看过」集合：首屏建基线（旧历史全标已看），其后仅保留仍在历史中的（防无限增长），
+					// 新出现的完成任务不在集合中 → 任务页亮未读特效、角标计数。
+					setViewedTasks((prev) => {
+						const folders = msg.tasks.map((t) => t.folder);
+						const next = seededRef.current
+							? new Set(folders.filter((f) => prev.has(f)))
+							: new Set(folders);
+						seededRef.current = true;
+						persistViewed(next);
+						return next;
+					});
 					// 缺缩略图的大图（带 thumbKey）入队生成回传，下次推送即可用缩略图
 					requestThumbs(msg.tasks.flatMap((t) => t.images));
 					// 任务完成会带来新的大图，节流清一次资源缓存，限制长会话内的磁盘增长
@@ -105,9 +141,6 @@ export function App() {
 				case 'busy':
 					setBusy(msg.busy);
 					break;
-				case 'navigate':
-					switchTab(msg.tab);
-					break;
 			}
 		};
 		window.addEventListener('message', onMessage);
@@ -127,14 +160,13 @@ export function App() {
 		vscode.postMessage({ type: 'saveConfig', patch });
 	};
 
-	// 注意：navigate 消息处理器（空依赖 useEffect）持有首渲染的本函数实例，
-	// 此函数只能调 setter/postMessage，不得读取 state，否则会拿到首渲染快照
 	const switchTab = (id: TabId) => {
 		setTab(id);
 		if (id === 'tasks') {
 			vscode.postMessage({ type: 'refreshHistory' });
 		}
-		if (id === 'edit') {
+		// 工作台与编辑页都用预设模板列表，切到任一页都刷新一遍
+		if (id === 'edit' || id === 'workbench') {
 			vscode.postMessage({ type: 'refreshTemplates' });
 		}
 	};
@@ -167,6 +199,10 @@ export function App() {
 		return <div className="page">加载中…</div>;
 	}
 
+	// 任务标签角标数：进行中任务 + 历史中未看过的任务
+	const unseenCount = tasks.reduce((n, t) => (viewedTasks.has(t.folder) ? n : n + 1), 0);
+	const taskBadge = pendingTasks.length + unseenCount;
+
 	return (
 		<Tabs.Root
 			className="tabs-root"
@@ -185,6 +221,9 @@ export function App() {
 						onDragEnter={t.id === 'edit' ? () => switchTab('edit') : undefined}
 					>
 						{t.label}
+						{t.id === 'tasks' && taskBadge > 0 && (
+							<span className="tab-badge">{taskBadge > 99 ? '99+' : taskBadge}</span>
+						)}
 					</Tabs.Trigger>
 				))}
 			</Tabs.List>
@@ -203,6 +242,7 @@ export function App() {
 					libraries={libraries}
 					autoLibraries={autoLibraries}
 					collections={collections}
+					templates={templates}
 					cols={config.workbenchCols}
 					tabCols={config.workbenchTabCols}
 					onChange={saveField}
@@ -236,6 +276,8 @@ export function App() {
 					collections={collections}
 					cols={config.tasksCols}
 					tabCols={config.tasksTabCols}
+					viewedTasks={viewedTasks}
+					onViewed={markTaskViewed}
 					onSendToEdit={sendToEdit}
 				/>
 			</Tabs.Content>

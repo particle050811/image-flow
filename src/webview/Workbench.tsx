@@ -1,4 +1,4 @@
-import type { Config, ConfigOptions, WebviewLibrary, WebviewCollection, StatusState } from './vscode';
+import type { Config, ConfigOptions, WebviewLibrary, WebviewCollection, PromptTemplate, StatusState } from './vscode';
 import { Select, Stepper } from './fields';
 import { Materials } from './Materials';
 import { modelSizeControl } from '../modelOptions';
@@ -13,6 +13,7 @@ export function Workbench({
 	libraries,
 	autoLibraries,
 	collections,
+	templates,
 	cols,
 	tabCols,
 	onChange,
@@ -32,6 +33,7 @@ export function Workbench({
 	libraries: WebviewLibrary[];
 	autoLibraries: WebviewLibrary[];
 	collections: WebviewCollection[];
+	templates: PromptTemplate[];
 	cols: number;
 	tabCols: number;
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
@@ -93,7 +95,21 @@ export function Workbench({
 					/>
 				</div>
 
-				<div className="gen-row">
+				<div className="tpl-row">
+					<label className="tpl-label">预设模板</label>
+					<select
+						className="tpl-select"
+						title="选中的预设模板会在生成/预览时插到提示词最前面"
+						value={config.workbenchTemplate}
+						onChange={(e) => onChange('workbenchTemplate', e.target.value)}
+					>
+						<option value="">不使用预设</option>
+						{templates.map((t) => (
+							<option key={t.name} value={t.name}>
+								{t.name}
+							</option>
+						))}
+					</select>
 					<span
 						className="tip"
 						data-tip="跟随当前活动的 Markdown 编辑器；切到非 Markdown 标签时保持不变"
@@ -103,6 +119,9 @@ export function Workbench({
 							{activeMd ? `加载文件：${activeMd}` : '未打开 Markdown 文件'}
 						</span>
 					</span>
+				</div>
+
+				<div className="gen-row">
 					<button className="preview-btn" onClick={onPreview}>
 						预览请求
 					</button>

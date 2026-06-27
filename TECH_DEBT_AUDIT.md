@@ -59,7 +59,7 @@ VS Code 扩展，把 Markdown 正文（生成页）或手填提示词 + 编辑�
 - **`edit.list()` 返回内部数组引用。** `start()` 在 await 前已把 data/names 拷进 opts，提交后增删编辑区不影响在途任务。
 - **编辑页与工作台共用 busy/status。** 同屏只见一页、提交即返，拆两套状态不值得。
 - **`submitEdit` 允许零参考图。** 等价于纯文本生成，不是漏校验。
-- **关键正确性护栏（勿动）**：sidebarProvider onChange 的 await/void 防闪烁顺序；tasks.ts「Promise.all 到 filter 间不得有 await」不变量；轮询串行重入锁；TransientError 仅 5xx/429；CSP style-src 'unsafe-inline'（Radix 硬约束）+ img-src data:（编辑区，注释已交代）；resume 重置 createdAt 而保留 startedAt；`pollJob` 的 `job.id!` 断言；App.tsx switchTab 不得读 state（navigate 处理器持有首渲染实例）。
+- **关键正确性护栏（勿动）**：sidebarProvider onChange 的 await/void 防闪烁顺序；tasks.ts「Promise.all 到 filter 间不得有 await」不变量；轮询串行重入锁；TransientError 仅 5xx/429；CSP style-src 'unsafe-inline'（Radix 硬约束）+ img-src data:（编辑区，注释已交代）；resume 重置 createdAt 而保留 startedAt；`pollJob` 的 `job.id!` 断言。
 
 ## Open questions（待维护者决策）
 

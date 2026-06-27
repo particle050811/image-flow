@@ -192,19 +192,23 @@ export function Edit({
 				</button>
 			</div>
 
-			<Field label="预设模板（.image-flow/prompts/ 下的 .md 文件，选中追加到提示词）">
-				<select
-					className="tpl-select"
-					value=""
-					onChange={(e) => applyTemplate(e.target.value)}
-				>
-					<option value="" disabled hidden>{templates.length ? '插入模板…' : '暂无模板'}</option>
-					{templates.map((t) => (
-						<option key={t.name} value={t.name}>
-							{t.name}
-						</option>
-					))}
-				</select>
+			<Field label="预设模板（.image-flow/prompts/ 下的 .md 文件，点击追加到提示词）">
+				{templates.length === 0 ? (
+					<div className="empty">暂无模板，可在 .image-flow/prompts/ 放置 .md 文件。</div>
+				) : (
+					<div className="picker-bar" style={{ ['--tab-cols' as string]: config.templateCols }}>
+						{templates.map((t) => (
+							<button
+								key={t.name}
+								className="picker-chip"
+								title={`追加「${t.name}」到提示词`}
+								onClick={() => applyTemplate(t.name)}
+							>
+								<span className="chip-name">{t.name}</span>
+							</button>
+						))}
+					</div>
+				)}
 			</Field>
 
 			<Field label="提示词">

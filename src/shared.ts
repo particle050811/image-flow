@@ -24,8 +24,12 @@ export interface ImageFlowConfig {
 	tasksTabCols: number;
 	/** 收藏页选择栏（标签）每行显示几个 */
 	favoritesTabCols: number;
+	/** 编辑页预设模板标签每行显示几个 */
+	templateCols: number;
 	/** 模型 → 用户自定义注入句的覆盖表；缺省回退内置默认表 */
 	modelInjections: Record<string, string>;
+	/** 工作台选中的预设模板名（.image-flow/prompts/ 下文件去扩展名）；'' = 不加载预设。生成/预览时其内容前置进 prompt */
+	workbenchTemplate: string;
 	/** 编辑页专属模型（与主生成界面互不影响） */
 	editModel: string;
 	/** 编辑页专属比例 */
@@ -263,7 +267,6 @@ export type InboundMessage =
 	| { type: 'status'; message: string }
 	| { type: 'error'; message: string }
 	| { type: 'busy'; busy: boolean }
-	| { type: 'navigate'; tab: 'workbench' | 'edit' | 'tasks' | 'favorites' | 'api' }
 	| { type: 'libraries'; libraries: WebviewLibrary[] }
 	| { type: 'autoLibraries'; libraries: WebviewLibrary[] }
 	| { type: 'promptTemplates'; templates: PromptTemplate[] }

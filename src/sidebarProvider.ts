@@ -3,8 +3,8 @@ import { randomBytes } from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 import { uriBaseName } from './paths';
-import { readConfig, writeConfig, CONFIG_OPTIONS, editConfigView } from './config';
-import { listHistory, openRequestPreview, buildPreviewText, openTextPreview, isPreviewDoc } from './command';
+import { readConfig, writeConfig, CONFIG_OPTIONS } from './config';
+import { listHistory, openRequestPreview, openTextPreview, isPreviewDoc } from './command';
 import { TaskManager } from './tasks';
 import { EditSession } from './editSession';
 import { listPromptTemplates } from './prompts';
@@ -409,7 +409,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'busy', busy: true });
 		try {
 			await this.tasks.submitEdit(prompt, this.edit.list());
-			this.post({ type: 'navigate', tab: 'tasks' });
 		} catch (err: unknown) {
 			this.postError(err);
 		} finally {
@@ -423,7 +422,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			const base = await readConfig(this.context);
 			const refs = this.edit.list();
 			const finalPrompt = buildEditFinalPrompt(base, prompt, refs.map((r) => r.name));
-			await openTextPreview(buildPreviewText(editConfigView(base), finalPrompt, refs.map((r) => r.data)));
+			await openTextPreview(finalPrompt);
 		} catch (err: unknown) {
 			this.postError(err);
 		}
@@ -578,7 +577,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'busy', busy: true });
 		try {
 			await this.tasks.submit(mdUri);
-			this.post({ type: 'navigate', tab: 'tasks' });
 		} catch (err: unknown) {
 			this.postError(err);
 		} finally {

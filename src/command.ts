@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import type { ImageFlowConfig, Task, TaskImage } from './shared';
-import { buildRequestBody, fetchWithTimeout } from './api';
+import { fetchWithTimeout } from './api';
 import { readConfig } from './config';
 import { isImageExt, isImageFileName, mimeOf, mediaTypeOf, type MediaType } from './images';
 import { uriStem } from './paths';
@@ -329,33 +329,8 @@ export async function listHistory(exclude?: Set<string>): Promise<Task[]> {
 }
 
 /**
- * 拼出「请求预览」文本：实际会发送给后端的请求参数 + 单独成段的替换后提示词 + 参考图概览。
- * prompt 含大量换行、images 含超长 base64，都从 JSON 参数块里剔除单独展示，避免转义符刷屏。
- * 请求体经 buildRequestBody 构造，与真实提交完全一致，避免预览与实际漂移。
- */
-export function buildPreviewText(
-	config: ImageFlowConfig,
-	prompt: string,
-	images: string[]
-): string {
-	const body = buildRequestBody(config, prompt, images);
-	// prompt 单独成段、images 单独概览，参数块里只留其余字段
-	const { prompt: _p, images: _i, ...rest } = body;
-	const params = JSON.stringify(rest, null, 2);
-	const summary = images.length
-		? images.map((img, i) => `image${i + 1}: ${img.slice(0, 48)}…（${img.length} 字符）`).join('\n')
-		: '（无参考图）';
-	return (
-		`===== 提示词（prompt）=====\n${prompt}\n\n` +
-		`===== 请求地址 =====\nPOST ${config.baseUrl}/v1/api/generate\n\n` +
-		`===== 请求参数 =====\n${params}\n\n` +
-		`===== 参考图（${images.length} 张，按顺序对应 image1、image2…）=====\n${summary}\n`
-	);
-}
-
-/**
- * 解析指定 Markdown 并把「替换后提示词 + 请求参数」打开成预览文档。供右键命令与侧栏按钮共用。
- * 不调用 API、不消耗额度。
+ * 解析指定 Markdown 并把「替换后的最终提示词正文」打开成预览文档。供右键命令与侧栏按钮共用。
+ * 只展示发送给后端的提示词正文，不附请求参数与参考图概览。不调用 API、不消耗额度。
  */
 export async function openRequestPreview(
 	config: ImageFlowConfig,
@@ -366,10 +341,9 @@ export async function openRequestPreview(
 	if (!content) {
 		throw new Error('Markdown 文件内容为空。');
 	}
-	const { prompt: basePrompt, images } = await buildPrompt(mdUri, content);
+	const { prompt: basePrompt } = await buildPrompt(mdUri, content);
 	const prompt = await buildInjectedPrompt(config, basePrompt);
-	const text = buildPreviewText(config, prompt, images);
-	await openTextPreview(text);
+	await openTextPreview(prompt);
 }
 
 /** 请求预览文档统一命名 preview.md，拦截误触生成时按此名识别 */
@@ -390,7 +364,7 @@ export async function openTextPreview(text: string): Promise<void> {
 	await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
 	await vscode.workspace.fs.writeFile(uri, Buffer.from(text, 'utf8'));
 	const doc = await vscode.workspace.openTextDocument(uri);
-	await vscode.window.showTextDocument(doc, { preview: true });
+	await vscode.window.showTextDocument(doc, { preview: false });
 }
 
 /**

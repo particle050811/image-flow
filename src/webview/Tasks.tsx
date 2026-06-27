@@ -174,6 +174,8 @@ export function Tasks({
 	collections,
 	cols,
 	tabCols,
+	viewedTasks,
+	onViewed,
 	onSendToEdit,
 }: {
 	hidden: boolean;
@@ -182,6 +184,10 @@ export function Tasks({
 	collections: WebviewCollection[];
 	cols: number;
 	tabCols: number;
+	/** 已点开看过的完成任务文件夹集合：不在其中的历史任务亮未读特效 */
+	viewedTasks: Set<string>;
+	/** 点开完成任务卡片时回调，标记为已看过 */
+	onViewed: (folder: string) => void;
 	onSendToEdit: (uri: string) => void;
 }) {
 	// 进行中与历史按文件夹名（毫秒时间戳）倒序合并，新任务在前
@@ -227,13 +233,22 @@ export function Tasks({
 									: item.task.meta
 										? rateClass(item.task.meta.succeeded, item.task.meta.requested)
 										: '';
+							// 已完成但未点开看过的任务亮未读特效（进行中任务恒亮 data-pending）
+							const unseen = item.kind === 'history' && !viewedTasks.has(item.folder);
 							return (
 								<button
 									key={item.key}
 									className="picker-chip"
 									data-active={current?.key === item.key}
 									data-pending={item.kind === 'pending' || undefined}
-									onClick={() => setSelected(item.key)}
+									data-unseen={unseen || undefined}
+									onClick={() => {
+										setSelected(item.key);
+										// 点开完成任务即记为已看过，清掉特效与角标计数
+										if (item.kind === 'history') {
+											onViewed(item.folder);
+										}
+									}}
 								>
 									<span className="chip-name">{title}</span>
 									{tabCols <= 1 && model && <span className="chip-sub">{model}</span>}
