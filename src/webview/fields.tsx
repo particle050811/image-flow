@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { type ReactNode, useState, useRef, useEffect } from 'react';
 import { NativeSelect } from './primitives';
 
 /** 带标签的字段容器；className 可叠加（如参数行里给自定义参数列单独配宽度） */
@@ -36,6 +36,113 @@ export function Select({
 	return (
 		<Field label={label} className={className}>
 			<NativeSelect value={value} options={options} onChange={onChange} ariaLabel={label} />
+		</Field>
+	);
+}
+
+/** 把 "W:H" 解析成在 box 见方内按比例缩放的图形尺寸；非法或非数字比例回退为正方 */
+function ratioShapeStyle(ratio: string): { width: string; height: string } {
+	const box = 22;
+	const [w, h] = ratio.split(':').map(Number);
+	if (!w || !h) {
+		return { width: `${box}px`, height: `${box}px` };
+	}
+	if (w >= h) {
+		return { width: `${box}px`, height: `${Math.round((box * h) / w)}px` };
+	}
+	return { width: `${Math.round((box * w) / h)}px`, height: `${box}px` };
+}
+
+/** 'auto' 显示为「自适应」，其余比例原样显示 */
+function ratioLabel(ratio: string): string {
+	return ratio === 'auto' ? '自适应' : ratio;
+}
+
+/** 比例下拉：触发器保持与其它字段一致的紧凑下拉外观，点开后弹出图形化网格。
+ *  每个比例渲染成按比例缩放的小图形 + 比例文字，'auto' 渲染成「自适应」虚线按钮。 */
+export function RatioSelect({
+	label,
+	value,
+	options,
+	onChange,
+	className,
+}: {
+	label: string;
+	value: string;
+	options: readonly string[];
+	onChange: (value: string) => void;
+	className?: string;
+}) {
+	const [open, setOpen] = useState(false);
+	const ref = useRef<HTMLDivElement>(null);
+	// 打开时点击外部或按 Esc 关闭
+	useEffect(() => {
+		if (!open) {
+			return;
+		}
+		const onDown = (e: MouseEvent) => {
+			if (ref.current && !ref.current.contains(e.target as Node)) {
+				setOpen(false);
+			}
+		};
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') {
+				setOpen(false);
+			}
+		};
+		document.addEventListener('mousedown', onDown);
+		document.addEventListener('keydown', onKey);
+		return () => {
+			document.removeEventListener('mousedown', onDown);
+			document.removeEventListener('keydown', onKey);
+		};
+	}, [open]);
+	return (
+		<Field label={label} className={className}>
+			<div className="ratio-select" ref={ref}>
+				<button
+					type="button"
+					className="rx-select-trigger"
+					aria-haspopup="listbox"
+					aria-expanded={open}
+					onClick={() => setOpen((o) => !o)}
+				>
+					<span>{ratioLabel(value)}</span>
+				</button>
+				{open && (
+					<div className="ratio-pop" role="listbox" aria-label={label}>
+						<div className="ratio-grid">
+							{options.map((opt) => {
+								const selected = opt === value;
+								const isAuto = opt === 'auto';
+								return (
+									<button
+										key={opt}
+										type="button"
+										role="option"
+										aria-selected={selected}
+										aria-label={ratioLabel(opt)}
+										className={`ratio-item${selected ? ' selected' : ''}`}
+										onClick={() => {
+											onChange(opt);
+											setOpen(false);
+										}}
+									>
+										<span className="ratio-shape-box">
+											{isAuto ? (
+												<span className="ratio-shape ratio-shape-auto" />
+											) : (
+												<span className="ratio-shape" style={ratioShapeStyle(opt)} />
+											)}
+										</span>
+										<span className="ratio-text">{isAuto ? '自适应' : opt}</span>
+									</button>
+								);
+							})}
+						</div>
+					</div>
+				)}
+			</div>
 		</Field>
 	);
 }

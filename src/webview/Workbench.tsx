@@ -1,5 +1,5 @@
 import type { Config, ConfigOptions, WebviewLibrary, WebviewCollection, PromptTemplate, StatusState } from './vscode';
-import { Select, Stepper } from './fields';
+import { Select, Stepper, RatioSelect } from './fields';
 import { NativeSelect } from './primitives';
 import { Materials } from './Materials';
 import { modelSizeControl } from '../modelOptions';
@@ -24,6 +24,7 @@ export function Workbench({
 	onChange,
 	onChangeMany,
 	onGenerate,
+	onBuildCopy,
 	onPreview,
 	onAddLibrary,
 	onRemoveLibrary,
@@ -44,6 +45,7 @@ export function Workbench({
 	onChange: <K extends keyof Config>(key: K, value: Config[K]) => void;
 	onChangeMany: (patch: Partial<Config>) => void;
 	onGenerate: () => void;
+	onBuildCopy: () => void;
 	onPreview: () => void;
 	onAddLibrary: () => void;
 	onRemoveLibrary: (folder: string) => void;
@@ -58,12 +60,17 @@ export function Workbench({
 	);
 	// 当前模型可调的自定义参数（自定义 Provider 的 custom[]；内置 grsai 恒空）
 	const customParams = options.customByModel[config.model] ?? [];
+	// 关闭「显示音频/视频」时，从素材库里滤掉非图片项（角标计数与网格都随之只剩图片）
+	const onlyImages = (lib: WebviewLibrary): WebviewLibrary =>
+		config.showAudioVideo
+			? lib
+			: { ...lib, images: lib.images.filter((i) => !i.media || i.media === 'image') };
 	return (
 		<div className="page" data-page="workbench" hidden={hidden}>
 			<div className="gallery">
 				<Materials
-					autoLibraries={autoLibraries}
-					libraries={libraries}
+					autoLibraries={autoLibraries.map(onlyImages)}
+					libraries={libraries.map(onlyImages)}
 					collections={collections}
 					cols={cols}
 					tabCols={tabCols}
@@ -81,17 +88,17 @@ export function Workbench({
 						options={options.model.map((m) => ({ value: m, label: options.modelLabels[m] ?? m }))}
 						onChange={changeModel}
 					/>
+					<RatioSelect
+						label="比例"
+						value={config.aspectRatio}
+						options={options.aspectRatiosByModel[config.model] ?? options.aspectRatio}
+						onChange={(v) => onChange('aspectRatio', v)}
+					/>
 					<Select
 						label="分辨率"
 						value={config.imageSize}
 						options={sizeOptions}
 						onChange={(v) => onChange('imageSize', v)}
-					/>
-					<Select
-						label="比例"
-						value={config.aspectRatio}
-						options={options.aspectRatiosByModel[config.model] ?? options.aspectRatio}
-						onChange={(v) => onChange('aspectRatio', v)}
 					/>
 					{customParams.map((p) => (
 						<Select
@@ -143,6 +150,14 @@ export function Workbench({
 					</button>
 					<button className="gen-btn" disabled={busy} onClick={onGenerate}>
 						{busy ? '生成中…' : '生成'}
+					</button>
+					<button
+						className="build-btn"
+						disabled={busy}
+						title="不调用 API：建好任务并把替换后的提示词复制到剪贴板，参考媒体按顺序导出到 input/，供外部网页/APP 视频后端上传"
+						onClick={onBuildCopy}
+					>
+						构建并复制
 					</button>
 				</div>
 

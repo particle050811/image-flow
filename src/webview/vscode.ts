@@ -7,6 +7,7 @@ export type {
 	ConfigOptions,
 	WebviewImage,
 	WebviewCollection,
+	MediaType,
 	WebviewTask,
 	WebviewPendingTask,
 	WebviewLibrary,

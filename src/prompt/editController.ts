@@ -2,16 +2,22 @@ import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
 import { EditSession } from './editSession';
-import { buildEditFinalPrompt } from './edit';
-import { readConfig } from '../ui/config';
+import { buildEditFinalPrompt, buildEditExportPrompt } from './edit';
+import { readConfig, editConfigView } from '../ui/config';
 import { openTextPreview } from '../task/preview';
+import { writeBuildAndCopyTask } from '../task/buildAndCopy';
 import { TaskManager } from '../task/tasks';
 import { errMsg } from '../util/errors';
+import { showTransientInfo } from '../util/notify';
+import { openImageInEditor } from '../util/openImage';
+import { mediaTypeOfFileName, MEDIA_EXTS } from '../util/images';
 import type { InboundMessage } from '../shared';
 
 /** 编辑控制器依赖：错误/状态/视图推送仍由 SidebarProvider 持有，经回调回去 */
 export interface EditDeps {
 	post(msg: InboundMessage): void;
+	/** 刷新历史列表（「构建并复制」建出已完成任务卡后调用） */
+	refreshHistory(): Promise<void>;
 }
 
 /**
@@ -36,7 +42,7 @@ export class EditController {
 			canSelectFolders: false,
 			canSelectMany: true,
 			openLabel: '加入编辑区',
-			filters: { 图片: ['png', 'jpg', 'jpeg', 'webp', 'gif'] },
+			filters: { 图片: MEDIA_EXTS.image, 音频: MEDIA_EXTS.audio, 视频: MEDIA_EXTS.video },
 		});
 		if (!picked?.length) {
 			return;
@@ -93,7 +99,7 @@ export class EditController {
 		// basename 兜底：name 理应已是纯文件名，防御性阻断含路径分隔符的名字逃出临时目录
 		const file = vscode.Uri.joinPath(dir, path.basename(name));
 		await vscode.workspace.fs.writeFile(file, Buffer.from(base64, 'base64'));
-		await vscode.commands.executeCommand('vscode.open', file);
+		await openImageInEditor(file);
 	}
 
 	/** webview 回传压缩展示图，缓存进 EditSession */
@@ -109,6 +115,7 @@ export class EditController {
 			images: this.edit.list().map((i) => ({
 				name: i.name,
 				src: i.display ?? i.data,
+				media: mediaTypeOfFileName(i.name),
 				needsThumb: this.edit.needsDisplay(i),
 			})),
 		});
@@ -124,6 +131,46 @@ export class EditController {
 		this.deps.post({ type: 'busy', busy: true });
 		try {
 			await this.tasks.submitEdit(prompt, this.edit.list());
+		} catch (err: unknown) {
+			this.deps.post({ type: 'error', message: errMsg(err) });
+		} finally {
+			this.deps.post({ type: 'busy', busy: false });
+		}
+	}
+
+	/**
+	 * 编辑页「构建并复制」：与工作台共用 writeBuildAndCopyTask，只是参考媒体来自编辑区（内存 data URI）、
+	 * 参数走编辑专属配置（editConfigView）。本地/云端视频 API 用不起，故只建任务不提交、不调 API。
+	 */
+	async buildAndCopy(rawPrompt: string): Promise<void> {
+		if (!rawPrompt.trim()) {
+			this.deps.post({ type: 'error', message: '提示词为空，无法构建。' });
+			return;
+		}
+		const config = editConfigView(await readConfig(this.context));
+		this.deps.post({ type: 'busy', busy: true });
+		try {
+			const refs = this.edit.list();
+			const { prompt, archivePrompt, fileNames } = buildEditExportPrompt(rawPrompt, refs.map((r) => r.name));
+			await writeBuildAndCopyTask({
+				prompt,
+				archivePrompt,
+				promptFileName: 'edit.md',
+				names: fileNames,
+				images: refs.map((r) => r.data),
+				meta: {
+					source: '（编辑任务）',
+					title: 'edit',
+					model: config.model,
+					aspectRatio: config.aspectRatio,
+					imageSize: config.imageSize,
+					requested: 0,
+					succeeded: 0,
+					durations: [],
+				},
+			});
+			await this.deps.refreshHistory();
+			showTransientInfo('已构建任务并复制提示词，参考媒体已按顺序导出到 input/。');
 		} catch (err: unknown) {
 			this.deps.post({ type: 'error', message: errMsg(err) });
 		} finally {

@@ -2,6 +2,9 @@
 // 这里统一为单一来源，避免漂移。
 
 import * as path from 'path';
+import type { MediaType } from '../shared';
+
+export type { MediaType };
 
 /** 扩展名到 MIME 类型的映射，用于拼接参考图 base64 data URI（单一来源，对外只暴露下方判断函数） */
 const MIME_BY_EXT: Record<string, string> = {
@@ -31,10 +34,15 @@ const VIDEO_BY_EXT: Record<string, string> = {
 	'.avi': 'video/x-msvideo',
 };
 
-/** 媒体大类：图片 / 音频 / 视频。扩展名区分，未知回退图片（沿用旧行为：任意 ![](路径) 当图片处理） */
-export type MediaType = 'image' | 'audio' | 'video';
+/** 文件选择器（showOpenDialog）用的扩展名（无点），按大类分组——取自上面三张 MIME 表，单一来源 */
+export const MEDIA_EXTS = {
+	image: Object.keys(MIME_BY_EXT).map((e) => e.slice(1)),
+	audio: Object.keys(AUDIO_BY_EXT).map((e) => e.slice(1)),
+	video: Object.keys(VIDEO_BY_EXT).map((e) => e.slice(1)),
+};
 
-/** 取扩展名（含点，大小写不敏感）所属的媒体大类 */
+/** 取扩展名（含点，大小写不敏感）所属的媒体大类。
+ *  未知回退图片（沿用旧行为：任意 ![](路径) 当图片处理） */
 export function mediaTypeOf(ext: string): MediaType {
 	const e = ext.toLowerCase();
 	if (e in AUDIO_BY_EXT) {
@@ -54,6 +62,22 @@ export function isImageExt(ext: string): boolean {
 /** 文件名（取其扩展名）是否为受支持的图片 */
 export function isImageFileName(name: string): boolean {
 	return isImageExt(path.extname(name));
+}
+
+/** 扩展名（含点，大小写不敏感）是否为受支持的媒体（图片 / 音频 / 视频） */
+export function isMediaExt(ext: string): boolean {
+	const e = ext.toLowerCase();
+	return e in MIME_BY_EXT || e in AUDIO_BY_EXT || e in VIDEO_BY_EXT;
+}
+
+/** 文件名（取其扩展名）是否为受支持的媒体（图片 / 音频 / 视频） */
+export function isMediaFileName(name: string): boolean {
+	return isMediaExt(path.extname(name));
+}
+
+/** 文件名所属的媒体大类（图片 / 音频 / 视频） */
+export function mediaTypeOfFileName(name: string): MediaType {
+	return mediaTypeOf(path.extname(name));
 }
 
 /** 取扩展名对应的 MIME，未知回退 image/png */

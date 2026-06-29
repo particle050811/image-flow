@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 import type { Task, TaskImage } from '../shared';
 import { fetchWithTimeout } from '../backend/api';
-import { isImageExt, isImageFileName, extFromMime } from '../util/images';
+import { isImageExt, isMediaFileName, mediaTypeOfFileName, extFromMime } from '../util/images';
 import type { ResultItem } from '../backend/adapters/types';
 import { uriStem } from '../storage/paths';
 import { tasksRoot } from '../storage/storage';
 import { readTaskMeta } from './taskFiles';
+import { PREVIEW_DOC_NAME } from './preview';
 
 /** 把 Date 格式化为 yyMMddHHmmssSSS（毫秒级，任务文件夹名唯一性依赖它） */
 export function formatStamp(d: Date): string {
@@ -116,16 +117,18 @@ export async function listHistory(exclude?: Set<string>): Promise<Task[]> {
 			if (type !== vscode.FileType.File) {
 				continue;
 			}
-			// 归档的提示词 .md 主名（来源 md 名 / edit），仅作旧任务（无 meta.json）的回退展示
-			if (!promptName && name.toLowerCase().endsWith('.md')) {
+			// 归档的提示词 .md 主名（来源 md 名 / edit），仅作旧任务（无 meta.json）的回退展示。
+			// 跳过 preview.md（构建并复制的可复制副本，非源提示词）
+			if (!promptName && name.toLowerCase().endsWith('.md') && name.toLowerCase() !== PREVIEW_DOC_NAME) {
 				promptName = name.slice(0, -3);
 				continue;
 			}
-			if (!isImageFileName(name)) {
+			// 收图片 + 音/视频：「构建并复制」的视频任务把外部下载的成片放回任务夹后，卡片也能展示
+			if (!isMediaFileName(name)) {
 				continue;
 			}
 			const fileUri = vscode.Uri.joinPath(dir, name);
-			images.push({ name, uri: fileUri.toString() });
+			images.push({ name, uri: fileUri.toString(), media: mediaTypeOfFileName(name) });
 		}
 		// 以 meta.json 为准收录：失败任务（0 成图但有 meta）也留痕进历史；
 		// 旧任务无 meta 时回退到「有图才收录」+ 按文件名推断 promptName。
@@ -135,4 +138,83 @@ export async function listHistory(exclude?: Set<string>): Promise<Task[]> {
 		}
 	}
 	return tasks;
+}
+
+/** 清理保留期：只清创建超过此时长的无产物夹，给「构建并复制」后去外部出片留足时间 */
+const CLEAN_MIN_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 解析任务文件夹名（formatStamp 的 yyMMddHHmmssSSS）为创建时刻 epoch ms；非该格式返回 null。
+ * 用于清理时按文件夹年龄判定，而非依赖各平台不一的 mtime。
+ */
+function folderCreatedAt(folder: string): number | null {
+	if (!/^\d{15}$/.test(folder)) {
+		return null;
+	}
+	const n = (a: number, b: number) => Number(folder.slice(a, b));
+	const year = 2000 + n(0, 2);
+	const month = n(2, 4);
+	const day = n(4, 6);
+	const d = new Date(year, month - 1, day, n(6, 8), n(8, 10), n(10, 12), n(12, 15));
+	// 回环校验：拒绝月/日越界的伪时间戳
+	if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
+		return null;
+	}
+	return d.getTime();
+}
+
+/**
+ * 启动时清理「无产物」任务文件夹：顶层无图/音/视频文件、且创建满 minAgeMs（默认 1 天）的整夹删除。
+ * 覆盖两类：「构建并复制」后外部视频未下载回来的空壳、以及生成失败（0 成图）的留痕夹。
+ * 非递归只看顶层——input/ 归档子目录里的参考媒体不计数，避免把还没回收成片的视频任务误判为有产物。
+ * 时间戳解析不出（非任务文件夹名）或还不够老的一律保留，宁可少清不误删。
+ * @param exclude 进行中（持久化待续拉）任务的文件夹名集合，正在下载中不能删。
+ * @param minAgeMs 文件夹至少存在多久才允许清理，默认 1 天。
+ * @returns 实际删除的文件夹数。
+ */
+export async function cleanEmptyTaskFolders(
+	exclude: Set<string>,
+	minAgeMs = CLEAN_MIN_AGE_MS
+): Promise<number> {
+	let root: vscode.Uri;
+	try {
+		root = tasksRoot();
+	} catch {
+		return 0; // 无工作区：无任务可清
+	}
+	let entries: [string, vscode.FileType][];
+	try {
+		entries = await vscode.workspace.fs.readDirectory(root);
+	} catch {
+		return 0;
+	}
+	let removed = 0;
+	for (const [folder, type] of entries) {
+		if (type !== vscode.FileType.Directory || exclude.has(folder)) {
+			continue;
+		}
+		// 只清够老的：时间戳解析不出或还不满保留期的一律保留，给外部出片留足时间
+		const createdAt = folderCreatedAt(folder);
+		if (createdAt === null || Date.now() - createdAt < minAgeMs) {
+			continue;
+		}
+		const dir = vscode.Uri.joinPath(root, folder);
+		let files: [string, vscode.FileType][];
+		try {
+			files = await vscode.workspace.fs.readDirectory(dir);
+		} catch {
+			continue;
+		}
+		const hasMedia = files.some(([name, t]) => t === vscode.FileType.File && isMediaFileName(name));
+		if (hasMedia) {
+			continue;
+		}
+		try {
+			await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
+			removed++;
+		} catch {
+			/* 删除失败（占用/权限）跳过，不阻断启动 */
+		}
+	}
+	return removed;
 }

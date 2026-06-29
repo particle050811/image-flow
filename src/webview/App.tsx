@@ -187,6 +187,15 @@ export function App() {
 		vscode.postMessage({ type: 'generate' });
 	};
 
+	// 构建并复制：与生成同享 0.5s 冷却防连点（建夹+读媒体也有耗时）
+	const buildCopy = () => {
+		if (!genCool()) {
+			return;
+		}
+		setStatus({ text: '', error: false });
+		vscode.postMessage({ type: 'buildAndCopy' });
+	};
+
 	const previewRequest = () => {
 		setStatus({ text: '', error: false });
 		vscode.postMessage({ type: 'previewRequest' });
@@ -206,8 +215,12 @@ export function App() {
 		return <div className="page">加载中…</div>;
 	}
 
-	// 任务标签角标数：进行中任务 + 历史中未看过的任务
-	const unseenCount = tasks.reduce((n, t) => (viewedTasks.has(t.folder) ? n : n + 1), 0);
+	// 任务标签角标数：进行中任务 + 历史中未看过的任务。
+	// 「构建并复制」任务（requested=0，只建不提交）是用户主动导出，不算待看，不计入角标。
+	const unseenCount = tasks.reduce(
+		(n, t) => (t.meta?.requested === 0 || viewedTasks.has(t.folder) ? n : n + 1),
+		0
+	);
 	const taskBadge = pendingTasks.length + unseenCount;
 
 	return (
@@ -255,6 +268,7 @@ export function App() {
 					onChange={saveField}
 					onChangeMany={saveFields}
 					onGenerate={generate}
+					onBuildCopy={buildCopy}
 					onPreview={previewRequest}
 					onAddLibrary={addLibrary}
 					onRemoveLibrary={removeLibrary}

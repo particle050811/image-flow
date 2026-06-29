@@ -15,8 +15,10 @@ export function sidebarHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
 	// 滚动锁、动画高度均通过元素级内联 style 属性实现，而 CSP nonce/hash 只覆盖
 	// <style>/<script> 标签、管不到内联 style 属性，故无法收紧为 nonce。脚本仍锁 nonce。
 	// img-src 须含 data:：编辑区图片统一以 data URI 推送（可能来自 localResourceRoots 之外）。
+	// media-src：素材库的音/视频经 asWebviewUri 加载，编辑区的音/视频是 data URI，两者都放行。
 	const csp =
 		`default-src 'none'; img-src ${webview.cspSource} data:; ` +
+		`media-src ${webview.cspSource} data:; ` +
 		`style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';`;
 	return `<!DOCTYPE html>
 <html lang="zh">

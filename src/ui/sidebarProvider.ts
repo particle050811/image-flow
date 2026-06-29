@@ -1,10 +1,13 @@
 import * as vscode from 'vscode';
 import { uriBaseName } from '../storage/paths';
+import { mediaTypeOfFileName } from '../util/images';
 import { readConfig, writeConfig } from './config';
 import { configOptions, currentProvider, ensureSettingsFile, reloadCustomProvider } from '../backend/providerRuntime';
 import { providerSwitchPatch, CUSTOM_PROVIDER_ID } from '../backend/providers';
-import { listHistory } from '../task/history';
-import { openRequestPreview, isPreviewDoc } from '../task/preview';
+import { listHistory, mdBaseName } from '../task/history';
+import { writeBuildAndCopyTask } from '../task/buildAndCopy';
+import { buildExportPrompt } from '../prompt/buildPrompt';
+import { openRequestPreview, isPreviewDoc, PREVIEW_DOC_NAME } from '../task/preview';
 import { TaskManager } from '../task/tasks';
 import { EditController } from '../prompt/editController';
 import { listPromptTemplates } from '../prompt/prompts';
@@ -12,6 +15,8 @@ import { tasksRoot } from '../storage/storage';
 import { saveThumb } from '../storage/thumbs';
 import { log } from '../util/log';
 import { errMsg } from '../util/errors';
+import { showTransientInfo } from '../util/notify';
+import { openImageInEditor } from '../util/openImage';
 import {
 	readFavorites,
 	pruneMissing,
@@ -55,7 +60,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		private readonly context: vscode.ExtensionContext,
 		private readonly tasks: TaskManager
 	) {
-		this.editCtrl = new EditController(context, tasks, { post: (msg) => this.post(msg) });
+		this.editCtrl = new EditController(context, tasks, {
+			post: (msg) => this.post(msg),
+			refreshHistory: () => this.pushHistory(),
+		});
 		this.materials = new MaterialsController(context, {
 			post: (msg) => this.post(msg),
 			view: () => this.view,
@@ -211,11 +219,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				}
 				break;
 			}
+			case 'buildAndCopy': {
+				const md = this.requireActiveMd('构建并复制');
+				if (md) {
+					await this.doBuildAndCopy(md);
+				}
+				break;
+			}
 			case 'previewRequest':
 				await this.doPreviewRequest();
 				break;
 			case 'openImage':
-				await vscode.commands.executeCommand('vscode.open', vscode.Uri.parse(msg.uri));
+				await openImageInEditor(vscode.Uri.parse(msg.uri));
 				break;
 			case 'insertImage':
 				await this.materials.insertImageRef(msg.uri);
@@ -252,6 +267,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'editGenerate':
 				await this.editCtrl.generate(msg.prompt);
+				break;
+			case 'editBuildAndCopy':
+				await this.editCtrl.buildAndCopy(msg.prompt);
 				break;
 			case 'editPreviewRequest':
 				await this.editCtrl.preview(msg.prompt);
@@ -304,8 +322,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		try {
 			const dir = vscode.Uri.joinPath(tasksRoot(), folder);
 			const entries = await vscode.workspace.fs.readDirectory(dir);
+			// 跳过 preview.md（构建并复制的可复制副本，非源提示词），取归档式 <md名>.md
 			const md = entries.find(
-				([name, type]) => type === vscode.FileType.File && name.toLowerCase().endsWith('.md')
+				([name, type]) =>
+					type === vscode.FileType.File &&
+					name.toLowerCase().endsWith('.md') &&
+					name.toLowerCase() !== PREVIEW_DOC_NAME
 			);
 			if (!md) {
 				this.post({ type: 'error', message: '该任务没有保存提示词文件。' });
@@ -327,7 +349,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				name: c.name,
 				images: await toWebviewImages(
 					this.view?.webview,
-					c.items.map((i) => ({ name: uriBaseName(vscode.Uri.parse(i.uri)), uri: i.uri })),
+					c.items.map((i) => {
+						const name = uriBaseName(vscode.Uri.parse(i.uri));
+						return { name, uri: i.uri, media: mediaTypeOfFileName(name) };
+					}),
 					favSet
 				),
 			}))
@@ -414,6 +439,52 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		this.post({ type: 'busy', busy: true });
 		try {
 			await this.tasks.submit(mdUri);
+		} catch (err: unknown) {
+			this.postError(err);
+		} finally {
+			this.post({ type: 'busy', busy: false });
+		}
+	}
+
+	/**
+	 * 「构建并复制」：本地/云端视频 API 用不起，故只在本地把任务建好但不提交——
+	 * 建任务夹 → 写两份提示词都保留：<md名>.md 为 ![](input/) 归档式（可渲染参考图、与其它任务一致、历史「打开提示词」指向它），
+	 * preview.md 为替换后的可复制发送正文(含【@视频N】) → 按顺序归档参考媒体（input/，文件名带类型序号前缀保上传顺序）→
+	 * 复制发送正文到剪贴板并打开 preview.md → 用系统资源管理器打开 input/ 方便拖拽上传。不调用 API、不轮询。
+	 * preview.md 命中既有「预览文档」约定（isPreviewDoc）：不会顶替工作台当前 MD、不会被误当可生成源；
+	 * listHistory/openTaskPrompt 也跳过它取源提示词，故归档版 <md名>.md 始终是历史的源提示词文件。
+	 * 任务夹若一直没放回成片，下次启动会被「无产物清理」清掉（满 1 天）。
+	 */
+	private async doBuildAndCopy(mdUri: vscode.Uri): Promise<void> {
+		const config = await readConfig(this.context);
+		this.post({ type: 'busy', busy: true });
+		try {
+			const bytes = await vscode.workspace.fs.readFile(mdUri);
+			const content = Buffer.from(bytes).toString('utf8').trim();
+			if (!content) {
+				throw new Error('Markdown 文件内容为空，无法构建。');
+			}
+			const { prompt, images, names, archivePrompt } = await buildExportPrompt(mdUri, content);
+			const prefix = mdBaseName(mdUri);
+			await writeBuildAndCopyTask({
+				prompt,
+				archivePrompt,
+				promptFileName: `${prefix}.md`,
+				names,
+				images,
+				meta: {
+					source: vscode.workspace.asRelativePath(mdUri),
+					title: prefix,
+					model: config.model,
+					aspectRatio: config.aspectRatio,
+					imageSize: config.imageSize,
+					requested: 0,
+					succeeded: 0,
+					durations: [],
+				},
+			});
+			await this.pushHistory();
+			showTransientInfo('已构建任务并复制提示词，参考媒体已按顺序导出到 input/。');
 		} catch (err: unknown) {
 			this.postError(err);
 		} finally {

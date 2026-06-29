@@ -28,4 +28,6 @@ export const baseConfig: ImageFlowConfig = {
 	namingModel: 'gemini-3.5-flash',
 	autoName: true,
 	showThumbActions: true,
+	showAudioVideo: true,
+	cleanEmptyTasksOnStartup: true,
 };

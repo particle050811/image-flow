@@ -120,7 +120,7 @@ export function ApiConfig({
 				/>
 			</div>
 			<Checkbox
-				label="缩略图常驻显示收藏/编辑按钮（关闭则仅 hover 出现）"
+				label="缩略图常驻显示收藏/编辑按钮（关闭则仅鼠标移到图上时出现）"
 				checked={config.showThumbActions}
 				onChange={(v) => onChange('showThumbActions', v)}
 			/>
@@ -128,6 +128,16 @@ export function ApiConfig({
 				label="自动为任务 AI 命名"
 				checked={config.autoName}
 				onChange={(v) => onChange('autoName', v)}
+			/>
+			<Checkbox
+				label="工作台素材库显示音频/视频（关闭则只列图片）"
+				checked={config.showAudioVideo}
+				onChange={(v) => onChange('showAudioVideo', v)}
+			/>
+			<Checkbox
+				label="启动时清理一天前的无产物任务文件夹"
+				checked={config.cleanEmptyTasksOnStartup}
+				onChange={(v) => onChange('cleanEmptyTasksOnStartup', v)}
 			/>
 			<Select
 				label="模型注入提示词 — 选择模型"

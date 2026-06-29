@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { MaterialLibrary, TaskImage } from '../shared';
-import { isImageFileName } from '../util/images';
+import { isMediaFileName, mediaTypeOfFileName } from '../util/images';
 import { uriBaseName } from './paths';
 
 /** 素材库文件夹列表（file Uri 字符串）存于 workspaceState——按工作区隔离，不同项目互不混用 */
@@ -131,8 +131,13 @@ async function scanImages(
 				continue;
 			}
 			images.push(...(await scanImages(child, depth + 1, counter)));
-		} else if (type === vscode.FileType.File && isImageFileName(name)) {
-			images.push({ name, uri: child.toString(), hasDesc: stems.has(imageStem(name)) });
+		} else if (type === vscode.FileType.File && isMediaFileName(name)) {
+			images.push({
+				name,
+				uri: child.toString(),
+				hasDesc: stems.has(imageStem(name)),
+				media: mediaTypeOfFileName(name),
+			});
 		}
 	}
 	return images;
@@ -174,11 +179,12 @@ export async function scanDirImages(dir: vscode.Uri): Promise<TaskImage[]> {
 			break;
 		}
 		scanned++;
-		if (type === vscode.FileType.File && isImageFileName(name)) {
+		if (type === vscode.FileType.File && isMediaFileName(name)) {
 			images.push({
 				name,
 				uri: vscode.Uri.joinPath(dir, name).toString(),
 				hasDesc: stems.has(imageStem(name)),
+				media: mediaTypeOfFileName(name),
 			});
 		}
 	}

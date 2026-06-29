@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { isImageExt, isImageFileName, mimeOf, mediaTypeOf } from '../util/images';
+import { isImageExt, isImageFileName, mimeOf, mediaTypeOf, isMediaExt, isMediaFileName, mediaTypeOfFileName } from '../util/images';
 import { namedRefSnippet, mediaDeclSnippet } from '../refs';
 
 suite('images', () => {
@@ -18,6 +18,26 @@ suite('images', () => {
 		assert.ok(isImageFileName('封面.JPEG'));
 		assert.ok(!isImageFileName('readme.md'));
 		assert.ok(!isImageFileName('noext'));
+	});
+	test('isMediaExt 放行图/音/视、拒非媒体', () => {
+		assert.ok(isMediaExt('.png'));
+		assert.ok(isMediaExt('.MP3'));
+		assert.ok(isMediaExt('.mp4'));
+		assert.ok(!isMediaExt('.txt'));
+		assert.ok(!isMediaExt(''));
+	});
+	test('isMediaFileName 按文件名判断（含大小写）', () => {
+		assert.ok(isMediaFileName('a.png'));
+		assert.ok(isMediaFileName('酒狐示例音声.MP3'));
+		assert.ok(isMediaFileName('clip.MP4'));
+		assert.ok(!isMediaFileName('readme.md'));
+		assert.ok(!isMediaFileName('noext'));
+	});
+	test('mediaTypeOfFileName 按文件名归类、未知回退 image', () => {
+		assert.strictEqual(mediaTypeOfFileName('a.PNG'), 'image');
+		assert.strictEqual(mediaTypeOfFileName('bgm.mp3'), 'audio');
+		assert.strictEqual(mediaTypeOfFileName('clip.MOV'), 'video');
+		assert.strictEqual(mediaTypeOfFileName('noext'), 'image');
 	});
 });
 

@@ -91,6 +91,8 @@ export function Favorites({
 							<Thumb
 								key={img.uri}
 								src={img.src}
+								name={img.name}
+								media={img.media}
 								title={img.name}
 								uri={img.uri}
 								draggable

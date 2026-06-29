@@ -124,6 +124,19 @@ interface PromptResult {
 	archivePrompt: string;
 }
 
+/**
+ * 给文件名加「类型+类型内序号-」前缀（图片1-/视频1-…），按媒体类型各自从 1 编号、入参顺序计数，
+ * 与发送提示词里的 `【@图片1】`/`【@视频1】` 一一对应，保证外部按文件名分组上传时编号不错位。
+ */
+export function orderPrefixNames(names: string[]): string[] {
+	const counters: Record<MediaType, number> = { image: 0, audio: 0, video: 0 };
+	return names.map((name) => {
+		const type = mediaTypeOf(path.extname(name));
+		counters[type] += 1;
+		return `${MEDIA_LABEL[type]}${counters[type]}-${name}`;
+	});
+}
+
 /** 归档参考图文件名去重：保留原名，同名后续追加序号（a.png、a-1.png…），与 archiveInputs 落盘一致 */
 export function dedupeArchiveNames(names: string[]): string[] {
 	const used = new Set<string>();
@@ -154,30 +167,47 @@ export function archiveImageRefs(content: string, indexBy: Map<string, number>, 
 }
 
 /**
- * 解析 Markdown 正文中的图片语法 `![alt](相对路径)`：
+ * 解析 Markdown 正文中的图片语法 `![alt](相对路径)` 的公共内核，生成与「构建并复制」共用：
  * - 按首次出现顺序去重编号（同一图片复用同一序号）；
- * - 相对 Markdown 所在目录读取图片，转成 base64 data URI 作为参考图；
- * - 将每处图片语法替换为模型可理解的有序引用 `[imageN](文件名)`，其余正文保持不变。
+ * - 相对 Markdown 所在目录读取参考媒体，转成 base64 data URI；
+ * - 删声明 + 把命名引用 `[名]` 替换为 `【@图片N】`/`【@音频N】`/`【@视频N】`。
+ * @param allowNonImage true 时不对音/视频引用报错（构建并复制导出给外部后端用）。
+ * @param orderPrefix true 时归档文件名加「类型+类型内序号」前缀（如 `图片1-`/`视频1-`），
+ *   与发送提示词里的 `【@图片1】`/`【@视频1】` 一一对应，保证外部按文件名分组上传时编号不错位。
  */
-export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<PromptResult> {
+async function buildPromptCore(
+	mdUri: vscode.Uri,
+	content: string,
+	{ allowNonImage, orderPrefix }: { allowNonImage: boolean; orderPrefix: boolean }
+): Promise<PromptResult> {
 	const { order, indexByPath } = parseImageRefs(content);
+
+	// 本地绘图后端只吃图片：正文引用里出现音/视频就尽早报错，不读盘不上传。
+	// 生成与预览共用 buildPrompt，一处守住两条路；音视频要走「构建并复制」（allowNonImage）导出给外部后端。
+	if (!allowNonImage) {
+		const nonImage = order.filter((p) => mediaTypeOf(path.extname(p)) !== 'image');
+		if (nonImage.length) {
+			throw new Error(`本地后端不支持音视频参考，请用「构建并复制」：${nonImage.join('、')}`);
+		}
+	}
 
 	// 声明解析与校验放在读盘之前，命名不一致/同名时尽早失败，不浪费读图
 	const decls = parseMediaDecls(content);
 	const table = buildNameTable(decls);
 	assertAllDeclsReferenced(content, decls);
 
-	// 按顺序读取每张参考图，转 base64
+	// 按顺序读取每张参考媒体，转 base64；orderPrefix 时文件名加「类型+类型内序号」前缀（图片1-/视频1-…），
+	// 与 replaceMediaRefs 产出的【@图片N】/【@视频N】按媒体类型各自从 1 编号的规则对齐
 	const images: string[] = [];
-	const names: string[] = [];
+	const baseNames: string[] = [];
 	const failed: string[] = [];
 	for (const relPath of order) {
+		const ext = path.extname(relPath);
 		const fileUri = vscode.Uri.joinPath(mdUri, '..', relPath);
 		try {
 			const bytes = await vscode.workspace.fs.readFile(fileUri);
-			const mime = mimeOf(path.extname(relPath));
-			images.push(`data:${mime};base64,${Buffer.from(bytes).toString('base64')}`);
-			names.push(path.basename(relPath));
+			images.push(`data:${mimeOf(ext)};base64,${Buffer.from(bytes).toString('base64')}`);
+			baseNames.push(path.basename(relPath));
 		} catch {
 			failed.push(relPath);
 		}
@@ -185,15 +215,34 @@ export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<P
 	if (failed.length) {
 		throw new Error(`以下参考图读取失败：${failed.join('、')}`);
 	}
+	const names = orderPrefix ? orderPrefixNames(baseNames) : baseNames;
 
 	// 发给模型的 prompt：删声明 + 命名引用替换为【@图片N】。
-	// 已知限制：【@图片N】按媒体类型独立编号，而 images[] 由 parseImageRefs 按全局出现顺序（路径去重）
-	// 上传。纯图片、无重复路径时两套编号一致；混合媒体或同路径多 alt 时编号与上传下标会错位，
-	// 待接入音视频后端时再统一上传顺序（详见 logic.test.ts 的两条锁定测试）。
+	// 已知限制（仅 buildPrompt 上传链路）：【@图片N】按媒体类型独立编号，而 images[] 由 parseImageRefs 按
+	// 全局出现顺序（路径去重）上传。纯图片、无重复路径时两套编号一致；同路径多 alt 时编号与上传下标会错位
+	// （详见 logic.test.ts 的两条锁定测试）。buildExportPrompt 用 orderPrefix 把文件名也按类型内序号命名，
+	// 故导出链路文件名与【@类型N】对齐（同路径多 alt 的极端情形仍可能偏差）。
 	const prompt = replaceMediaRefs(content, table);
-	// 归档文件名：保留原名、重名去重，归档正文与 input/ 落盘共用，引用才能对上
+	// 归档文件名：保留原名（含类型序号前缀）、重名去重，归档正文与 input/ 落盘共用，引用才能对上
 	const fileNames = dedupeArchiveNames(names);
 	const archivePrompt = archiveImageRefs(content, indexByPath, fileNames);
 
 	return { prompt, images, names: fileNames, archivePrompt };
+}
+
+/**
+ * 解析 Markdown 正文为发给本地后端的 prompt + 有序参考图：
+ * 将每处图片语法替换为模型可理解的有序引用 `【@图片N】`，其余正文保持不变。
+ * 参考里出现音/视频即报错（本地后端不支持，应走「构建并复制」）。
+ */
+export async function buildPrompt(mdUri: vscode.Uri, content: string): Promise<PromptResult> {
+	return buildPromptCore(mdUri, content, { allowNonImage: false, orderPrefix: false });
+}
+
+/**
+ * 「构建并复制」用：解析含音/视频引用的正文，导出发送提示词 + 按顺序命名（`N-原名`）的参考媒体，
+ * 供用户粘贴到外部网页/APP 后端并按文件名顺序上传。不调用任何 API。
+ */
+export async function buildExportPrompt(mdUri: vscode.Uri, content: string): Promise<PromptResult> {
+	return buildPromptCore(mdUri, content, { allowNonImage: true, orderPrefix: true });
 }

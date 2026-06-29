@@ -7,7 +7,7 @@ import {
 	type PromptTemplate,
 	type StatusState,
 } from './vscode';
-import { Select, Stepper, Field } from './fields';
+import { Select, Stepper, Field, RatioSelect } from './fields';
 import { Thumb } from './Thumb';
 import { useCooldown } from './useCooldown';
 import { namedRefSnippet } from '../refs';
@@ -142,6 +142,15 @@ export function Edit({
 		vscode.postMessage({ type: 'editGenerate', prompt });
 	};
 
+	// 构建并复制：与生成同享 0.5s 冷却防连点（建夹+读媒体也有耗时）
+	const buildCopy = () => {
+		if (busy || cooling) {
+			return;
+		}
+		cool();
+		vscode.postMessage({ type: 'editBuildAndCopy', prompt });
+	};
+
 	// 一键清空：编辑区图片（扩展侧持有）+ 提示词（本地 state）。提交后两者均保留以支持迭代编辑，需要时清空
 	const clearAll = () => {
 		vscode.postMessage({ type: 'editClearImages' });
@@ -169,6 +178,8 @@ export function Edit({
 								<Thumb
 									key={img.name}
 									src={img.src}
+									name={img.name}
+									media={img.media}
 									title={`${img.name}（左键打开 · 右键插入引用）`}
 									onClick={() => vscode.postMessage({ type: 'editOpenImage', name: img.name })}
 									onContextMenu={(e) => {
@@ -232,17 +243,17 @@ export function Edit({
 					options={options.model.map((m) => ({ value: m, label: options.modelLabels[m] ?? m }))}
 					onChange={changeModel}
 				/>
+				<RatioSelect
+					label="比例"
+					value={config.editAspectRatio}
+					options={options.aspectRatiosByModel[config.editModel] ?? options.aspectRatio}
+					onChange={(v) => onChange('editAspectRatio', v)}
+				/>
 				<Select
 					label="分辨率"
 					value={config.editImageSize}
 					options={sizeOptions}
 					onChange={(v) => onChange('editImageSize', v)}
-				/>
-				<Select
-					label="比例"
-					value={config.editAspectRatio}
-					options={options.aspectRatiosByModel[config.editModel] ?? options.aspectRatio}
-					onChange={(v) => onChange('editAspectRatio', v)}
 				/>
 				{customParams.map((p) => (
 					<Select
@@ -279,6 +290,14 @@ export function Edit({
 				</button>
 				<button className="gen-btn" disabled={busy || cooling} onClick={generate}>
 					{busy ? '生成中…' : '生成'}
+				</button>
+				<button
+					className="build-btn"
+					disabled={busy || cooling}
+					title="不调用 API：建好任务并把替换后的提示词复制到剪贴板，参考媒体按顺序导出到 input/，供外部网页/APP 视频后端上传"
+					onClick={buildCopy}
+				>
+					构建并复制
 				</button>
 			</div>
 

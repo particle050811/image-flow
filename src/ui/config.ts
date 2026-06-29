@@ -44,6 +44,8 @@ const DEFAULTS: StoredConfig = {
 	namingModel: 'gemini-3.1-flash-lite',
 	autoName: true,
 	showThumbActions: true,
+	showAudioVideo: true,
+	cleanEmptyTasksOnStartup: true,
 };
 
 /** 读取完整配置：非敏感项来自 globalState，apiKey 来自加密的 secrets */

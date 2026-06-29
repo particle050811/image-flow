@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { isImageFileName, mimeOf } from '../util/images';
+import { isMediaFileName, mimeOf } from '../util/images';
 import { uriBaseName } from '../storage/paths';
 
 /** 编辑区一张图：name 为引用名（文件名），data 为 base64 data URI（统一驻内存，提交直接用） */
@@ -51,8 +51,8 @@ export class EditSession {
 		if (invalid) {
 			return invalid;
 		}
-		if (!data.startsWith('data:image/')) {
-			return `图片数据异常：${name}`;
+		if (!/^data:(image|audio|video)\//.test(data)) {
+			return `媒体数据异常：${name}`;
 		}
 		this.images.push({ name, data });
 		return null;
@@ -67,9 +67,11 @@ export class EditSession {
 		this.images = [];
 	}
 
-	/** 是否需要 webview 生成压缩展示图：尚无展示图、原图够大、且非 gif（降采样丢动画） */
+	/** 是否需要 webview 生成压缩展示图：仅图片（canvas 降采样不适用音视频）、
+	 *  尚无展示图、原图够大、且非 gif（降采样丢动画） */
 	needsDisplay(img: EditImage): boolean {
 		return (
+			img.data.startsWith('data:image/') &&
 			!img.display &&
 			img.data.length > DISPLAY_MIN_DATA_LENGTH &&
 			!img.data.startsWith('data:image/gif')
@@ -86,8 +88,8 @@ export class EditSession {
 	}
 
 	private validate(name: string): string | null {
-		if (!isImageFileName(name)) {
-			return `不支持的图片格式：${name}`;
+		if (!isMediaFileName(name)) {
+			return `不支持的媒体格式：${name}`;
 		}
 		if (this.images.some((i) => i.name === name)) {
 			return `已存在同名图片，请改名后再添加：${name}`;

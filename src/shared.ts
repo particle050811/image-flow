@@ -52,6 +52,10 @@ export interface ImageFlowConfig {
 	autoName: boolean;
 	/** 缩略图上的收藏 ⭐ / 编辑 ✎ 按钮是否常驻显示（关闭则仅 hover 出现；编辑区除外） */
 	showThumbActions: boolean;
+	/** 工作台素材库是否显示音频/视频（关闭则只列图片） */
+	showAudioVideo: boolean;
+	/** 扩展启动时是否清理「无产物」任务文件夹（顶层无图/音/视频文件，含「构建并复制」未回收的视频任务与失败留痕） */
+	cleanEmptyTasksOnStartup: boolean;
 }
 
 /**
@@ -116,12 +120,17 @@ export interface ConfigOptions {
 	namingModel: readonly string[];
 }
 
+/** 媒体大类：图片 / 音频 / 视频。前后端共享单一来源（util/images 的判定函数复用此类型） */
+export type MediaType = 'image' | 'audio' | 'video';
+
 /** 扩展内部产出的一张图片：仅含文件引用（file Uri 字符串） */
 export interface TaskImage {
 	name: string;
 	uri: string;
 	/** 同目录下存在同主名 .md 描述文件（素材库扫描时打标：排序靠前、插入引用时附带描述） */
 	hasDesc?: boolean;
+	/** 媒体大类，仅素材库扫描会产出音/视频；缺省按图片处理（任务产物恒为图片） */
+	media?: MediaType;
 }
 
 /** 扩展内部的一个生成任务（对应一个 task-* 文件夹） */
@@ -182,6 +191,8 @@ export interface StatusState {
 export interface WebviewEditImage {
 	name: string;
 	src: string;
+	/** 媒体大类，缺省按图片渲染；音/视频改用原生 <video>/占位块 */
+	media?: MediaType;
 	/** 原图较大且尚无压缩展示图时为 true，webview 据此生成并经 saveEditThumb 回传 */
 	needsThumb?: boolean;
 }
@@ -320,6 +331,7 @@ export type OutboundMessage =
 	| { type: 'selectProvider'; providerId: string }
 	| { type: 'openProviderSettings' }
 	| { type: 'generate' }
+	| { type: 'buildAndCopy' }
 	| { type: 'previewRequest' }
 	| { type: 'openImage'; uri: string }
 	| { type: 'insertImage'; uri: string }
@@ -334,6 +346,7 @@ export type OutboundMessage =
 	| { type: 'editClearImages' }
 	| { type: 'editOpenImage'; name: string }
 	| { type: 'editGenerate'; prompt: string }
+	| { type: 'editBuildAndCopy'; prompt: string }
 	| { type: 'editPreviewRequest'; prompt: string }
 	| { type: 'openPrompt'; folder: string }
 	| { type: 'refreshTemplates' }

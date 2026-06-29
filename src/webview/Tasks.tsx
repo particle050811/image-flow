@@ -27,6 +27,8 @@ function Thumbs({
 					src={img.src}
 					title={img.name}
 					uri={img.uri}
+					name={img.name}
+					media={img.media}
 					draggable
 					onClick={openImageClick(img.uri)}
 					collections={collections}
@@ -132,9 +134,10 @@ function PendingDetail({
 			<div className="task-detail-head">
 				<button
 					className="link"
+					title="打开提示词文件"
 					onClick={() => vscode.postMessage({ type: 'openPrompt', folder: task.folder })}
 				>
-					提示词
+					{`${task.promptName}.md`}
 				</button>
 				<span className="task-model">{task.model}</span>
 				<span>{task.imageSize}</span>
@@ -180,9 +183,10 @@ function HistoryDetail({
 			<div className="task-detail-head">
 				<button
 					className="link"
+					title="打开提示词文件"
 					onClick={() => vscode.postMessage({ type: 'openPrompt', folder: task.folder })}
 				>
-					提示词
+					{task.promptName ? `${task.promptName}.md` : '提示词'}
 				</button>
 				{meta ? (
 					<>
@@ -302,8 +306,12 @@ export function Tasks({
 									: item.task.meta
 										? rateClass(item.task.meta.succeeded, item.task.meta.requested)
 										: '';
-							// 已完成但未点开看过的任务亮未读特效（进行中任务恒亮 data-pending）
-							const unseen = item.kind === 'history' && !viewedTasks.has(item.folder);
+							// 已完成但未点开看过的任务亮未读特效（进行中任务恒亮 data-pending）。
+							// 「构建并复制」任务（requested=0）是用户主动导出，不亮未读特效。
+							const unseen =
+								item.kind === 'history' &&
+								item.task.meta?.requested !== 0 &&
+								!viewedTasks.has(item.folder);
 							return (
 								<button
 									key={item.key}

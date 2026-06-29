@@ -22,6 +22,8 @@ function LibThumbs({
 				<Thumb
 					key={img.uri}
 					src={img.src}
+					name={img.name}
+					media={img.media}
 					title={`${img.name}（左键打开 · 右键插入引用 · 可拖入编辑区）`}
 					uri={img.uri}
 					draggable

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { isPreviewDoc, previewRequestCommand } from './task/preview';
-import { seedModelInjections } from './ui/config';
+import { cleanEmptyTaskFolders } from './task/history';
+import { seedModelInjections, readConfig } from './ui/config';
 import { reloadCustomProvider } from './backend/providerRuntime';
 import { SidebarProvider } from './ui/sidebarProvider';
 import { registerCliBridge } from './ui/cliBridge';
@@ -26,6 +27,16 @@ export async function activate(context: vscode.ExtensionContext) {
 	// 异步任务管理器：提交/轮询/持久化。配合 onStartupFinished 激活，开机即 resume 续拉重启前未完成的任务。
 	const taskManager = new TaskManager(context);
 	context.subscriptions.push(taskManager);
+
+	// 启动清理无产物任务夹（默认开、可在设置关）：排除持久化待续拉任务的文件夹，避免删掉正在下载中的任务。
+	// 须在 resume() 前做：清理与续拉互不干扰，「构建并复制」未回收的视频任务到下次启动即被清掉。
+	const startupConfig = await readConfig(context);
+	if (startupConfig.cleanEmptyTasksOnStartup) {
+		const removed = await cleanEmptyTaskFolders(new Set(taskManager.list().map((t) => t.folder)));
+		if (removed) {
+			log(`启动清理无产物任务夹 ${removed} 个`);
+		}
+	}
 
 	const sidebar = new SidebarProvider(context, taskManager);
 

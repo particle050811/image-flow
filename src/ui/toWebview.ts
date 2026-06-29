@@ -24,6 +24,10 @@ async function toWebviewImage(
 	if (!webview) {
 		return { ...img, src: img.uri, favorited };
 	}
+	// 音/视频不做缩略图：原生 <audio>/<video> 直接加载原文件，canvas 降采样不适用
+	if (img.media && img.media !== 'image') {
+		return { ...img, src: webview.asWebviewUri(vscode.Uri.parse(img.uri)).toString(), favorited };
+	}
 	const { thumbUri, thumbKey } = await resolveThumb(img.uri);
 	return {
 		...img,
