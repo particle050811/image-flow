@@ -15,8 +15,9 @@ suite('buildEditFinalPrompt', () => {
 		const out = buildEditFinalPrompt(baseConfig, '看[猫]', ['猫.png']);
 		assert.strictEqual(out, '看【@图片1】');
 	});
-	test('编辑区有图但正文一次都没引用 → 抛错', () => {
-		assert.throws(() => buildEditFinalPrompt(baseConfig, '纯文本', ['猫.png']), /猫/);
+	test('编辑区有图但正文一次都没引用 → 不拦截，声明被删后仅剩正文', () => {
+		const out = buildEditFinalPrompt(baseConfig, '纯文本', ['猫.png']);
+		assert.strictEqual(out, '纯文本');
 	});
 	test('含空格文件名的声明用尖括号包裹，引用按主名匹配', () => {
 		const out = buildEditFinalPrompt(baseConfig, '看[狗 (1)]', ['狗 (1).png']);

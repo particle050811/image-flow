@@ -41,6 +41,16 @@ function Thumbs({
 					>
 						✎
 					</button>
+					<button
+						className="thumb-rename"
+						title="重命名文件"
+						onClick={(e) => {
+							e.stopPropagation();
+							vscode.postMessage({ type: 'renameImage', uri: img.uri });
+						}}
+					>
+						R
+					</button>
 				</Thumb>
 			))}
 		</div>
@@ -191,8 +201,9 @@ function HistoryDetail({
 				{meta ? (
 					<>
 						<span className="task-model">{meta.model}</span>
-						<span>{meta.imageSize}</span>
-						<span>{meta.aspectRatio}</span>
+						{/* 构建并复制任务的分辨率/比例在外部设定、此处为空，空值不渲染避免 flex 间隙 */}
+						{meta.imageSize && <span>{meta.imageSize}</span>}
+						{meta.aspectRatio && <span>{meta.aspectRatio}</span>}
 						<span className={rateClass(meta.succeeded, meta.requested)}>
 							{meta.succeeded}/{meta.requested}
 						</span>

@@ -1045,7 +1045,7 @@ button.secondary {
 /* 收藏星标占据最右，其余动作按钮（✎ 送编辑等）依次左移让位 */
 .thumb-wrap:has(.thumb-star) .thumb-action { right: 26px; }
 
-/* 重命名按钮：仅收藏页渲染；星标右移后排在 ✎ 左侧。
+/* 重命名按钮：任务/素材库/收藏页缩略图共用；星标右移后排在 ✎ 左侧。
    带下划线的 R（rename 首字母），与 ✎ 区分；下划线走 CSS 不依赖字体字形 */
 .thumb-rename {
 	position: absolute;

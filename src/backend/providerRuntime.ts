@@ -145,8 +145,14 @@ function cleanTitle(raw: string): string {
 	return oneLine.slice(0, NAMING_MAX_CHARS);
 }
 
+/** 命名重试次数：命名模型偶发失败（adapter 失败即返回 undefined），多试几次提高成功率 */
+const NAMING_MAX_ATTEMPTS = 3;
+/** 命名失败后重试前的暂停（毫秒）：给瞬时限流 / 抖动留恢复时间 */
+const NAMING_RETRY_DELAY_MS = 20_000;
+
 /**
- * 调对话 adapter 给任务起短名（生成与编辑通用）。无对话模型 / 失败 / 超时 / 返回空一律返回 undefined，
+ * 调对话 adapter 给任务起短名（生成与编辑通用）。无对话模型直接返回 undefined；
+ * 失败 / 超时 / 返回空最多重试 NAMING_MAX_ATTEMPTS 次，仍拿不到则返回 undefined，
  * 由调用方静默回退占位名——命名是锦上添花，绝不影响任务本身。
  */
 export async function requestTaskName(config: ImageFlowConfig, rawPrompt: string): Promise<string | undefined> {
@@ -154,18 +160,26 @@ export async function requestTaskName(config: ImageFlowConfig, rawPrompt: string
 	if (!call) {
 		return undefined;
 	}
-	const content = await call.adapter.chat(
-		call.ctx,
-		call.model,
-		[
-			{ role: 'system', content: NAMING_SYSTEM },
-			{ role: 'user', content: rawPrompt },
-		],
-		NAMING_MAX_TOKENS
-	);
-	if (typeof content !== 'string') {
-		return undefined;
+	for (let attempt = 0; attempt < NAMING_MAX_ATTEMPTS; attempt++) {
+		const content = await call.adapter.chat(
+			call.ctx,
+			call.model,
+			[
+				{ role: 'system', content: NAMING_SYSTEM },
+				{ role: 'user', content: rawPrompt },
+			],
+			NAMING_MAX_TOKENS
+		);
+		if (typeof content === 'string') {
+			const title = cleanTitle(content);
+			if (title) {
+				return title;
+			}
+		}
+		// 非末次失败才暂停后重试；末次不等待，直接退出回退占位名
+		if (attempt < NAMING_MAX_ATTEMPTS - 1) {
+			await new Promise((resolve) => setTimeout(resolve, NAMING_RETRY_DELAY_MS));
+		}
 	}
-	const title = cleanTitle(content);
-	return title || undefined;
+	return undefined;
 }

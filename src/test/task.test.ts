@@ -8,7 +8,7 @@ import {
 	parseMediaDecls,
 	buildNameTable,
 	replaceMediaRefs,
-	assertAllDeclsReferenced,
+	findUnreferencedDecls,
 } from '../prompt/buildPrompt';
 import { isTransientNetworkError, isTaskActive, aggregateProgress } from '../task/tasks';
 import { buildPromptFileContent, dataUriBytes } from '../task/taskFiles';
@@ -139,17 +139,17 @@ suite('replaceMediaRefs', () => {
 	});
 });
 
-suite('assertAllDeclsReferenced', () => {
-	test('声明名与引用名不一致（声明未被引用）→ 抛错列出未引用名', () => {
+suite('findUnreferencedDecls', () => {
+	test('声明名与引用名不一致（声明未被引用）→ 列出未引用名', () => {
 		const src = '- [李樱] 主角。![李樱三视图](../李樱三视图.png)\n- [九胡] 女仆。![九胡三视图](../九胡三视图.png)';
-		assert.throws(() => assertAllDeclsReferenced(src, parseMediaDecls(src)), /李樱三视图/);
+		assert.deepStrictEqual(findUnreferencedDecls(src, parseMediaDecls(src)), ['李樱三视图', '九胡三视图']);
 	});
-	test('全部声明都被引用 → 不抛', () => {
+	test('全部声明都被引用 → 空数组', () => {
 		const src = '![传送石](a.png) [传送石]手持';
-		assert.doesNotThrow(() => assertAllDeclsReferenced(src, parseMediaDecls(src)));
+		assert.deepStrictEqual(findUnreferencedDecls(src, parseMediaDecls(src)), []);
 	});
-	test('无声明 → 不抛', () => {
-		assert.doesNotThrow(() => assertAllDeclsReferenced('纯文本 [未知]', parseMediaDecls('纯文本 [未知]')));
+	test('无声明 → 空数组', () => {
+		assert.deepStrictEqual(findUnreferencedDecls('纯文本 [未知]', parseMediaDecls('纯文本 [未知]')), []);
 	});
 });
 

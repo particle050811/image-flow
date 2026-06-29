@@ -4,6 +4,7 @@
 
 ## 轮次记录
 
+- **2026-06-30 第八轮（聚焦：维护者命题——是否符合「图片替换+生成做成服务、工作台/编辑按钮做成 manager」的类 DDD 分层）**：逐文件复核结论「服务层达标、manager 层只做了编辑侧」。无 Critical/High。新增 2 项并**当场修复**（维护者选定方案 a）：F071（工作台三按钮编排内联 Provider 且与 EditController 逐字重复 → 抽 `WorkbenchController` 对称、三件套移出，Provider 524→约 410 行）、F072（edit.ts 三处声明头拼装重复 → 抽 `prependDecls`）。`check-types`/`lint` 全绿、`npm test` 151 项全绿（行为等价）。
 - **2026-06-28 第七轮（聚焦：round-6 后增量——src 按域重组 + 大文件拆分 + 新增 CLI 文件桥）**：复审约 25 个提交。无 Critical/High。新增 4 项 + 顺手了结 F033，**当场全部修复**：F067（cliBridge 重复实现 scanDirImages 且无上限 → 导出 materials 版复用）、F068（cliBridge 340 行纯逻辑零测试 → 抽 `cliBridgeLogic.ts` + 14 项直测）、F069（CLI 请求字段/路径未校验 → 类型校验 + out 锁 tmpdir/md 锁工作区）、F070（CLAUDE.md 路径漂移 → 全量更新 + 补新模块；README 无漂移）、F033（scanDirImages 计数口径注释 → 改准确）。过独立代码审核（行为等价、无 blocker），`check-types`/`lint` 全绿、`npm test` 134→148 项全绿。
 
 - **2026-06-27 第六轮（聚焦：未推送的「多 API 兼容」重大改造）**：复审 15 个未推送提交（adapter 抽象 + Provider 数据模型 + settings.json 加载）。无 Critical/High。新增 5 项并**当场全部修复**：F061（sync adapter 并行提交）、F062（自定义模型缺 key 不回落 grsai 密钥）、F063（gemini 鉴权定性为已知限制——OpenAI 兼容渠道用 openai adapter、原生谷歌端点暂不支持）、F064（CLAUDE.md 文档漂移）、F066（settings.json 解析失败显式提示）。`check-types`/`lint` 全绿、`npm test` 仍 137 项全绿。
@@ -13,6 +14,13 @@
 - **2026-06-11 第三轮**：复核 F001–F031 全部成立；F032 因毫秒时间戳自然解决；新增 F039–F049，其中 F039–F041/F043–F047/F049 当轮修复（commit fc21dcd），F042 完成第①步。`compile`/`npm test`（52 项）全绿，已过代码审核（ready to merge）。
 - **2026-06-09 第二轮**：新增 F023–F038；F023–F028/F030/F031 当轮修复，F029 部分修复（npm audit fix 修掉 glob 高危）。抽出纯函数 isTaskActive/aggregateProgress/replaceImageRefs/isImageFileName，logic.test.ts 25→35 项。
 - **2026-06-08 首轮**：F001–F022 全部修复。新增 `src/images.ts`、`src/paths.ts`、`src/test/logic.test.ts`，删除一次性迁移代码 `migrateLegacySettings`，补测试时抓出并修掉尖括号正则截断 bug（F009）。
+
+## 第八轮已修（2026-06-30）— 服务/manager 分层补齐
+
+| ID | Status | Category | File:Line | Sev | Effort | Description | 修复 |
+|----|--------|----------|-----------|-----|--------|-------------|------|
+| F071 | ✅RESOLVED | Architectural decay (对称性 + 重复编排) | src/ui/sidebarProvider.ts vs src/prompt/editController.ts | Medium | M | 工作台三按钮（生成/构建并复制/预览）编排内联在 SidebarProvider，编辑区同名三件套在 EditController——manager 层不对称（编辑有、工作台无），且三组编排逐字重复（generate/buildAndCopy/preview）。buildAndCopy 的重复为 round-7 后新引入。Provider 身兼宿主+路由+工作台 manager+Provider 切换四职。 | 维护者选定方案 a：新建 `src/ui/workbenchController.ts`（`WorkbenchController`，与 EditController 对称），把 `doGenerate`/`doBuildAndCopy`/`doPreviewRequest` + `requireActiveMd`/`activeTabIsCurrentMd` 移出 Provider；「当前 MD」经 `deps.currentMd()` 回调取（工作台无 EditSession 那样的常驻状态，是与 EditController 唯一结构差异，类注释已交代）。onMessage 三 case + `generateFor` 改为委派。SidebarProvider 524→约 410 行、回归宿主+路由。行为等价（`npm test` 151 全绿）。 |
+| F072 | ✅RESOLVED | Consistency (微重复) | src/prompt/edit.ts | Low | S | `buildEditFinalPrompt`/`buildEditArchivePrompt`/`buildEditExportPrompt` 各自重复「`names.map(mediaDeclSnippet(stemOf(n),路径)).join('\n')` + `content = decls?...:...`」拼声明头逻辑。 | 抽 `prependDecls(rawPrompt, names, pathOf?)`：pathOf 默认取文件名（提交/导出），归档场景传 `(_, i) => input/${fileNames[i]}`。三处复用，去掉重复 ternary。 |
 
 ## 第七轮已修（2026-06-28）— 结构重组 + CLI 文件桥
 

@@ -3,9 +3,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { EditSession } from './editSession';
 import { buildEditFinalPrompt, buildEditExportPrompt } from './edit';
-import { readConfig, editConfigView } from '../ui/config';
+import { readConfig } from '../ui/config';
 import { openTextPreview } from '../task/preview';
-import { writeBuildAndCopyTask } from '../task/buildAndCopy';
+import { writeBuildAndCopyTask, nameBuildAndCopyTask } from '../task/buildAndCopy';
 import { TaskManager } from '../task/tasks';
 import { errMsg } from '../util/errors';
 import { showTransientInfo } from '../util/notify';
@@ -139,38 +139,34 @@ export class EditController {
 	}
 
 	/**
-	 * 编辑页「构建并复制」：与工作台共用 writeBuildAndCopyTask，只是参考媒体来自编辑区（内存 data URI）、
-	 * 参数走编辑专属配置（editConfigView）。本地/云端视频 API 用不起，故只建任务不提交、不调 API。
+	 * 编辑页「构建并复制」：与工作台共用 writeBuildAndCopyTask，只是参考媒体来自编辑区（内存 data URI）。
+	 * 本地/云端视频 API 用不起，故只建任务不提交、不调生图 API（仅后台调一次对话模型给任务命名）。
 	 */
 	async buildAndCopy(rawPrompt: string): Promise<void> {
 		if (!rawPrompt.trim()) {
 			this.deps.post({ type: 'error', message: '提示词为空，无法构建。' });
 			return;
 		}
-		const config = editConfigView(await readConfig(this.context));
 		this.deps.post({ type: 'busy', busy: true });
 		try {
 			const refs = this.edit.list();
 			const { prompt, archivePrompt, fileNames } = buildEditExportPrompt(rawPrompt, refs.map((r) => r.name));
-			await writeBuildAndCopyTask({
+			const dir = await writeBuildAndCopyTask({
 				prompt,
 				archivePrompt,
 				promptFileName: 'edit.md',
 				names: fileNames,
 				images: refs.map((r) => r.data),
-				meta: {
-					source: '（编辑任务）',
-					title: 'edit',
-					model: config.model,
-					aspectRatio: config.aspectRatio,
-					imageSize: config.imageSize,
-					requested: 0,
-					succeeded: 0,
-					durations: [],
-				},
+				source: '（编辑任务）',
+				title: 'edit',
 			});
 			await this.deps.refreshHistory();
 			showTransientInfo('已构建任务并复制提示词，参考媒体已按顺序导出到 input/。');
+			// 不提交也 AI 命名：后台非阻塞、用全局配置（namingModel/key），失败静默回退 edit 占位
+			const config = await readConfig(this.context);
+			if (config.autoName) {
+				void nameBuildAndCopyTask(dir, config, rawPrompt, () => this.deps.refreshHistory());
+			}
 		} catch (err: unknown) {
 			this.deps.post({ type: 'error', message: errMsg(err) });
 		} finally {

@@ -2,7 +2,6 @@ import {
 	parseMediaDecls,
 	buildNameTable,
 	replaceMediaRefs,
-	assertAllDeclsReferenced,
 	orderPrefixNames,
 	dedupeArchiveNames,
 } from './buildPrompt';
@@ -25,10 +24,9 @@ export function buildEditFinalPrompt(base: ImageFlowConfig, rawPrompt: string, n
 		throw new Error(`本地后端不支持音视频生成，请从编辑区移除：${nonImage.join('、')}`);
 	}
 	const config = editConfigView(base);
-	const decls = names.map((n) => mediaDeclSnippet(stemOf(n), n)).join('\n');
-	const content = decls ? `${decls}\n${rawPrompt.trim()}` : rawPrompt.trim();
+	const content = prependDecls(rawPrompt, names);
 	const parsed = parseMediaDecls(content);
-	assertAllDeclsReferenced(content, parsed);
+	// 编辑区不校验声明是否都被引用（不拦截也不警告）：未被正文引用的图同样按声明顺序上传，只是正文里没有对应 【@图片N】 指向
 	const replaced = replaceMediaRefs(content, buildNameTable(parsed));
 	return joinPrompt([modelInjection(base, config.model), replaced]);
 }
@@ -40,9 +38,7 @@ export function buildEditFinalPrompt(base: ImageFlowConfig, rawPrompt: string, n
  * fileNames 为去重后的归档落盘名（与 archiveInputs 一致），与 names 一一对应。
  */
 export function buildEditArchivePrompt(rawPrompt: string, names: string[], fileNames: string[]): string {
-	const decls = names.map((n, i) => mediaDeclSnippet(stemOf(n), `input/${fileNames[i]}`)).join('\n');
-	const body = rawPrompt.trim();
-	return decls ? `${decls}\n${body}` : body;
+	return prependDecls(rawPrompt, names, (_n, i) => `input/${fileNames[i]}`);
 }
 
 /** 编辑「构建并复制」的导出结果：发送正文 + 归档正文 + 有序落盘名（与编辑区图一一对应） */
@@ -62,15 +58,25 @@ export interface EditExportResult {
  * 与 buildEditFinalPrompt 的区别：不限图片（允许音视频）、不拼注入句、文件名带顺序前缀。
  */
 export function buildEditExportPrompt(rawPrompt: string, names: string[]): EditExportResult {
-	const decls = names.map((n) => mediaDeclSnippet(stemOf(n), n)).join('\n');
-	const content = decls ? `${decls}\n${rawPrompt.trim()}` : rawPrompt.trim();
+	const content = prependDecls(rawPrompt, names);
 	const parsed = parseMediaDecls(content);
 	const table = buildNameTable(parsed);
-	assertAllDeclsReferenced(content, parsed);
+	// 编辑区不校验声明是否都被引用（不拦截也不警告）
 	const prompt = replaceMediaRefs(content, table);
 	const fileNames = dedupeArchiveNames(orderPrefixNames(names));
 	const archivePrompt = buildEditArchivePrompt(rawPrompt, names, fileNames);
 	return { prompt, archivePrompt, fileNames };
+}
+
+/**
+ * 把编辑区图按序拼成顶部声明块 `![名](路径)` 前置到正文之上（无图则原样返回正文）。
+ * pathOf 默认取文件名（提交/发送场景，路径即落盘名）；归档场景传 `(_, i) => input/${fileNames[i]}` 指向 input/。
+ * 提交（buildEditFinalPrompt）、归档（buildEditArchivePrompt）、导出（buildEditExportPrompt）共用此拼装，避免漂移。
+ */
+function prependDecls(rawPrompt: string, names: string[], pathOf: (name: string, i: number) => string = (n) => n): string {
+	const decls = names.map((n, i) => mediaDeclSnippet(stemOf(n), pathOf(n, i))).join('\n');
+	const body = rawPrompt.trim();
+	return decls ? `${decls}\n${body}` : body;
 }
 
 /** 文件名去扩展主名，与 namedRefSnippet 内部一致——声明 alt 与命名引用必须同名才能对上 */

@@ -43,7 +43,7 @@ npm test               # 运行扩展测试（vscode-test，会下载并启动 V
 
 ### 前后端通信与异步任务
 
-侧栏前端（`src/webview/`，React）与扩展主进程通过 `postMessage` 通信，消息协议与共享类型集中在 `src/shared.ts`（唯一定义处，前后端都从这里取，避免漂移）。`SidebarProvider`（`src/ui/sidebarProvider.ts`）持有 Webview、转发消息、把文件 Uri 经 `asWebviewUri` 转成前端可加载的 `src`，并把素材库消息委派给 `src/ui/materialsController.ts`、编辑页消息委派给 `src/prompt/editController.ts`、收藏委派给 `src/favorites/favoritesController.ts`。Webview 静态资源（`media/sidebar.js`、`media/sidebar.css`）走 `asWebviewUri` + CSP nonce 加载。
+侧栏前端（`src/webview/`，React）与扩展主进程通过 `postMessage` 通信，消息协议与共享类型集中在 `src/shared.ts`（唯一定义处，前后端都从这里取，避免漂移）。`SidebarProvider`（`src/ui/sidebarProvider.ts`）持有 Webview、转发消息、把文件 Uri 经 `asWebviewUri` 转成前端可加载的 `src`，并把工作台页消息（生成/构建并复制/预览请求）委派给 `src/ui/workbenchController.ts`、素材库消息委派给 `src/ui/materialsController.ts`、编辑页消息委派给 `src/prompt/editController.ts`、收藏委派给 `src/favorites/favoritesController.ts`。`WorkbenchController` 与 `EditController` 对称（前者无 EditSession 那样的常驻状态，「当前 MD」经回调取自 Provider）。Webview 静态资源（`media/sidebar.js`、`media/sidebar.css`）走 `asWebviewUri` + CSP nonce 加载。
 
 **给 AI 零点击调用的 CLI 文件桥**（`src/ui/cliBridge.ts` + `scripts/imgflow.mjs`）：壳进程往工作区根 `.image-flow/requests/req-*.json` 写请求（`{op:list|fix, md, out}`），扩展用 FileSystemWatcher 收到后在主进程内跑（list 列可用参考图、fix 修正失效图片引用路径），结果原子写回 `out`。选文件监听而非 vscode:// URI 是为绕开安全确认实现零点击；请求字段类型与 `md`/`out` 路径在处理前校验（`out` 限 os.tmpdir、`md` 限工作区内）。引用决策/报告的纯逻辑在 `src/ui/cliBridgeLogic.ts`（有直测），目录扫描复用 `src/storage/materials.ts` 的 `scanDirImages`。
 

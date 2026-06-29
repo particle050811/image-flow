@@ -345,26 +345,38 @@ export class TaskManager {
 		} else {
 			// sync（openai-images / gemini）并行提交：submit 阻塞到整张图生成完才返回（300s 窗口）。
 			// 串行会让「并发数」退化为串行生成（墙钟 ≈ 张数 × 单图生成时长）。并行让各图同时生成；
-			// 各请求自带独立的 300s 超时（gen 占大头、upload 占小头，并发上传争抢仍远在窗口内），
-			// 落盘共享 task.images.length 计数，故先并发收齐结果、再按序 storeJobResults 避免重名竞态。
-			const settled = await Promise.allSettled(
+			// 各请求自带独立的 300s 超时（gen 占大头、upload 占小头，并发上传争抢仍远在窗口内）。
+			// 落盘共享 task.images.length 计数，故用串行链 chain 串起每张的落盘避免重名竞态；
+			// 谁先生成完谁先落盘并 emit，使前几张不必等最慢/失败的那张就先显示在侧栏。
+			// 两处易错点（破坏其一则 await Promise.all 返回时 chain 可能未排空）：handler 内
+			// `chain = chain.then(...)` 与 `return chain` 必须同步相邻（其间不得插 await），且必须 return chain——
+			// 这样每个 link 都被自己的成员 promise adopt，Promise.all 才会等到整条链跑完。
+			let chain: Promise<void> = Promise.resolve();
+			await Promise.all(
 				submitting.map((job) => {
 					job.startedAt = Date.now();
-					return adapter.submit(ctx, prompt, images, 1);
+					return adapter.submit(ctx, prompt, images, 1).then(
+						(res) => {
+							chain = chain.then(async () => {
+								await this.applySubmitResult(task, job, res);
+								this.emit();
+							});
+							return chain;
+						},
+						(err) => {
+							chain = chain.then(() => {
+								this.failJob(task, job, err);
+								this.emit();
+							});
+							return chain;
+						}
+					);
 				})
 			);
-			for (let i = 0; i < submitting.length; i++) {
-				const r = settled[i];
-				if (r.status === 'fulfilled') {
-					await this.applySubmitResult(task, submitting[i], r.value);
-				} else {
-					this.failJob(task, submitting[i], r.reason);
-				}
-			}
 		}
 
-		// 不变量：自上面的串行循环结束到下面的 isTaskActive 判定之间不得有 await（保持同步）。
-		// 否则 4s 轮询可能观察到「已终结但仍在列表」的任务而重复 notifyFinished + 移除。
+		// 不变量：自上面的提交处理（含 sync 落盘串行链）结束到下面的 isTaskActive 判定之间不得有 await
+		// （保持同步）。否则 4s 轮询可能观察到「已终结但仍在列表」的任务而重复 notifyFinished + 移除。
 		if (!isTaskActive(task)) {
 			// 提交后已无活跃 job：sync 任务全部就地出图/失败，或 async 全部提交失败。
 			// 就地终结（轮询不会接管无 running job 的它），文件夹与 meta.json 保留进入历史留痕。

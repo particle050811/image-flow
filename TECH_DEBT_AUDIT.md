@@ -1,7 +1,17 @@
 # Tech Debt Audit — image-flow
-首轮：2026-06-08 · 第二轮：2026-06-09 · 第三轮：2026-06-11 · 第四轮：2026-06-19（聚焦：前端重复造轮子 + 大文件拆分）· 第五轮：2026-06-26（聚焦：round-4 后增量——分辨率档位/收藏控制器/媒体引用重构）· 第六轮：2026-06-27（聚焦：15 个未推送提交的「多 API 兼容」重大改造）· **第七轮：2026-06-28（聚焦：round-6 后增量——src 按域重组 + 大文件拆分 + 新增 CLI 文件桥 cliBridge + sync 任务通知/轻提示）** · 范围：全仓（src/ ~8,280 LOC，含 webview）
+首轮：2026-06-08 · 第二轮：2026-06-09 · 第三轮：2026-06-11 · 第四轮：2026-06-19（聚焦：前端重复造轮子 + 大文件拆分）· 第五轮：2026-06-26（聚焦：round-4 后增量——分辨率档位/收藏控制器/媒体引用重构）· 第六轮：2026-06-27（聚焦：15 个未推送提交的「多 API 兼容」重大改造）· 第七轮：2026-06-28（聚焦：round-6 后增量——src 按域重组 + 大文件拆分 + 新增 CLI 文件桥 cliBridge + sync 任务通知/轻提示）· **第八轮：2026-06-30（聚焦：维护者指定——是否符合「图片替换+生成做成服务、工作台/编辑按钮做成 manager 调用服务」的类 DDD 分层）** · 范围：全仓（src/ ~8,280 LOC，含 webview）
 
 本文件只保留**未终结**的发现（OPEN / PARTIAL / 开放问题）。已修复与已判定可接受的项（F001–F032、F036–F041、F043–F047、F049、F051–F066，共 60+ 项）归档在 [`TECH_DEBT_RESOLVED.md`](TECH_DEBT_RESOLVED.md)，含各轮修复记录。复审时：新发现追加进下表并标 `NEW`，修完移入归档文件。
+
+## 第八轮小结（2026-06-30）— 按「服务 + manager」分层视角复核
+
+维护者命题：**①「一篇 MD 的图片替换、生成 API 调用」是否做成了单独的服务；②工作台与编辑区的按钮（预览/生成/构建并复制）是否做成单独的 manager 去调用这些服务。看代码是不是这么实现的。** 逐文件核对结论——**服务层基本做到了，manager 层只做了一半（编辑区有、工作台没有，且两边按钮编排逐字重复）。**
+
+- **① 服务层：是，且复用得当。** 「MD 图片替换」确为独立纯逻辑服务 `prompt/buildPrompt.ts`（`buildPrompt`/`buildExportPrompt` 共享 `buildPromptCore`，被生成/预览/构建并复制三处复用）；编辑区的等价物 `prompt/edit.ts` 反过来 import 复用 buildPrompt 的纯函数（`parseMediaDecls`/`buildNameTable`/`replaceMediaRefs`/`orderPrefixNames`/`dedupeArchiveNames`），不是另写一份。「生成 API 调用」是干净的三层端口/适配器：`backend/api.ts`(HTTP 底层) → `backend/adapters/*`(协议叶子) → `providers.ts`/`providerRuntime.ts`(Provider 解析)；提交/轮询服务化在 `task/tasks.ts` 的 `TaskManager`，「构建并复制」服务化在 `task/buildAndCopy.ts`（`writeBuildAndCopyTask`，工作台/编辑共用），「预览」服务化在 `task/preview.ts`。这部分与维护者设想一致。
+- **② manager 层：不对称，是本轮唯一实质发现（F071）。** 编辑区按钮有真正的 manager——`prompt/editController.ts` 的 `EditController`（自持 `EditSession`，generate/buildAndCopy/preview/upload 全在内）。**但工作台按钮没有对应的 `WorkbenchController`**（已全仓确认无此类）：`doGenerate`/`doBuildAndCopy`/`doPreviewRequest` 连同 `requireActiveMd`/`activeMd`/`activeTabIsCurrentMd` 共约 110 行直接内联在 `ui/sidebarProvider.ts`，使该类同时扮演「webview 宿主 + 消息路由 + 工作台按钮 manager + Provider 切换」。结果是**三组按钮编排在工作台侧与编辑侧逐字重复**：generate（`sidebarProvider.ts:433-447` vs `editController.ts:125-139`，apiKey 校验→busy→submit→catch→busy 同构）、buildAndCopy（`sidebarProvider.ts:458-489` vs `editController.ts:145-175`，empty 校验→buildExportPrompt/buildEditExportPrompt→writeBuildAndCopyTask→refreshHistory→showTransientInfo→autoName 同构）、preview（`sidebarProvider.ts:419-430` vs `editController.ts:178-187`）。其中 buildAndCopy 的重复是 round-7 之后新代码引入的（`e4c56a1`/`891952e`，工作台与编辑区先后接 buildAndCopy）——上一轮未覆盖。
+- **其余代码并行复扫：无实质可修项。** 另派 subagent 全量复审 round-7 之后增量（构建并复制视频导出、编辑区构建并复制、同步任务陆续展示、AI 命名失败重试、素材库右键智能插入/重命名）及 backend/task/storage/util/favorites/prompt/ui 各域：死代码/未用导出零孤儿、`as any`/`@ts-ignore`/`TODO` 零命中、信任边界（cliBridge 白名单、data URI 形状校验、path.basename 防逃逸）完好、错误形状统一（`errMsg`/`showTransient*` 边界清晰）、无 3+ 真重复。结论与历轮一致——**round-7+ 增量上「无 Critical/High、代码面健康」继续成立**。两条已记入「开放观察（非债）」：`requestTaskName` 重试只覆盖 adapter 契约性返回 undefined（不覆盖违约抛错，当前唯一实现守约，加 try/catch 属为不可能场景防御）；openai-images JSON/multipart 两分支自定义参数处理差异是 FormData 语义必然、行为正确。
+- **是否「类 DDD」：是分层/端口适配器，不是严格 DDD。** 有清晰的「领域纯逻辑（prompt/*）/ 应用编排（task/* + controllers）/ 基础设施（backend adapters + storage）」分层，backend adapters 就是标准 ports&adapters；但没有聚合根/实体/值对象/仓储接口那套 DDD 战术模式（也不需要——这是个 VS Code 扩展，不是业务域系统）。按「分层 + 服务复用」标准衡量是健康的。
+- **本轮 2 项 NEW（F071 Medium / F072 Low）均已修复（维护者选定方案 a），移入 [`TECH_DEBT_RESOLVED.md`](TECH_DEBT_RESOLVED.md)。** F071：新建 `src/ui/workbenchController.ts`（`WorkbenchController`，与 EditController 对称），把 `doGenerate`/`doBuildAndCopy`/`doPreviewRequest` + `requireActiveMd`/`activeTabIsCurrentMd` 从 SidebarProvider 移出，Provider 回归宿主+路由（524→约 410 行）；F072：edit.ts 抽 `prependDecls` 收口三处声明头拼装。无 Critical/High。`check-types`/`lint` 全绿、`npm test` **151 项全绿**（行为等价、无新增测试）。
 
 ## 第七轮小结（2026-06-28）— 结构重组 + CLI 文件桥
 
@@ -39,10 +49,11 @@
 - **大文件：`sidebarProvider.ts` 经下沉图转换簇 726→663（F056）。** 仍略越 500 阈值：收藏夹 CRUD 簇评估后有意保留（抽出需传 3–4 个回调、耦合得不偿失），663 行对 webview 宿主属常见体量，维护者决策接受、不再拆。其余文件（`tasks.ts` 455、`command.ts` 288）职责单一、未失控。
 - F052–F057 已移入 `TECH_DEBT_RESOLVED.md`；`npm run compile` 与收藏单测全绿，过代码审核。
 
-## 当前状态（2026-06-28 第七轮收尾）
+## 当前状态（2026-06-30 第八轮收尾）
 
-- `npm run check-types`/`lint` 全绿；`npm test` **148 项全绿**（本轮 cliBridgeLogic 补 14 项直测）。
-- **无 Critical / High 未决项。** 本轮新增 4 项（F068/F070 Medium + F067/F069 Low）+ 顺手了结 F033，**已当场全部修复**（移入归档），过代码审核无 blocker。
+- 第八轮按维护者命题做架构复核 + 修复；`check-types`/`lint` 全绿、`npm test` **151 项全绿**。
+- **无 Critical / High 未决项。** 本轮 2 项结构债（F071 Medium / F072 Low）**已修复**（F071 抽 `WorkbenchController` 与 EditController 对称、三件套移出 Provider；F072 edit.ts 抽 `prependDecls`），移入归档。
+- 维护者命题答复：图片替换/生成 API/构建并复制/预览**均已服务化**（buildPrompt/backend·三层/tasks/buildAndCopy/preview）；按钮 manager 层**只做了编辑侧**（EditController），工作台侧未抽且与编辑侧编排重复（F071）。
 - 此前 3 项未终结：F029/F050 跟踪上游/外部，F048 待维护者决策。
 - 安全卫生维持：grsai apiKey 走 secrets、ConfigOptions 不下发 url/key、CSP script 锁 nonce、无硬编码密钥、`parseGenerateResponse` 形状校验、fetch 全程超时（async 提交 120s / sync 300s、查询下载 30s）。唯一新增的边界面是 F069：CLI 文件桥信任「能往工作区写文件的本机进程」、对请求里的 `md`/`out` 路径不校验（本机威胁模型下不构成提权，详见 Open questions）。
 
@@ -64,6 +75,8 @@ VS Code 扩展，把 Markdown 正文（生成页）或手填提示词 + 编辑�
 
 ## 看着像问题、其实没问题
 
+- **manager 层不对称（编辑有 EditController、工作台没有）——看似漏抽，部分是有道理的。** EditController 的存在理由是它**封装了 EditSession 这个可变内存状态**（编辑区图片列表，webview 重建不丢）；工作台没有等价的常驻状态——它的「状态」只是 `currentMd`（因跟随活动编辑器由宿主持有，不属于按钮逻辑）+ 磁盘上的 MD 文件。故强抽一个 `WorkbenchController` 会得到一个只有方法、没有状态的空壳，与本仓既有取舍（round-4/5「抽出需传 3-4 个回调、耦合不偿失」）相悖。**真正该消的债是三组按钮编排的逐字重复（F071），而非「必须造一个对称的类」**——抽公共编排帮手即可去重，是否升格为 Controller 是次要选择。
+- **`buildPrompt.ts` 250 行、导出十余个函数——不是 god 文件。** 它是「MD 图片替换」这一单一关注点的纯函数簇（正则解析/名字表/引用替换/归档/编号），被生成/预览/构建并复制/编辑四条链路复用、有完整直测，正是「服务做对了」的样板。`edit.ts` import 它的纯函数是正确复用、非跨层违规（同属 prompt/ 领域层）。勿因行数拆分。
 - **CLI 文件桥用「文件请求 + FileSystemWatcher」而非 vscode:// URI，刻意绕过安全确认——看似安全后门。** 是为「AI 零点击调用 list/fix」的必要取舍：URI 由外部进程触发会弹「是否允许扩展打开此 URI」确认，与零点击冲突；改写文件不弹确认。请求目录在工作区内，天然按工作区隔离。威胁模型是本机进程——能写 `.image-flow/requests/` 的进程本就有等同 FS 权限，文件桥不给它新增能力（无提权），不是远程/网络可达面。设计可接受；真正的债是边角的校验缺失（F069）与重复实现（F067）、零测试（F068），不是桥本身。
 - **cliBridge 用「rename req-*.json → .lock」做认领锁——看似多此一举。** 是 F048 同源问题的局部正解：同工作区双开时两个窗口都会收到 `onDidCreate`，`rename(overwrite:false)` 只有一个成功，另一个 catch 退出，避免 fix 被双跑、后写的「修正 0」报告覆盖真报告。任务轮询那侧（F048）尚未享有同等隔离，但 CLI 这侧已正确处理。
 - **sync 任务在 `submitJobs` 里就 `notifyFinished` + 移出列表（不经轮询）——看似与轮询路径重复。** sync adapter 提交即出图、无 job id 不进轮询，必须就地终结；注释明确「自串行循环结束到 isTaskActive 判定之间不得有 await」护住了与 4s 轮询的竞态。async 仍走轮询终结。两条终结路径是协议差异的必然，非重复。
@@ -94,6 +107,16 @@ VS Code 扩展，把 Markdown 正文（生成页）或手填提示词 + 编辑�
 
 > 第七轮已结案（不再悬而未决）：F069（CLI 请求字段类型校验 + out 锁 tmpdir/md 锁工作区，本机信任改为白名单约束）、F070（CLAUDE.md 路径全量更新，README 经查无源码路径引用、无漂移）、F033（scanDirImages 注释改为准确口径，与 F067 一并收口）。
 > 此前已拍板/落地：F034 确认单根工作区为产品决策（写进 CLAUDE.md）；F035 台账日志已加（`src/util/log.ts`）；编辑区「清空」按钮已上线。
+
+## Assessment（第八轮 · 2026-06-30）
+
+按维护者指定的「服务 + manager」分层视角逐文件复核，结论分两半：
+
+**服务层达标。** 「一篇 MD 的图片替换」是独立纯逻辑服务（`prompt/buildPrompt.ts`，生成/预览/构建并复制三处复用，编辑链路 `edit.ts` 反向复用其纯函数而非另写）；「生成 API 调用」是干净的端口/适配器三层（`api.ts`→`adapters/*`→`providers/providerRuntime`）；提交轮询、构建并复制、预览各自服务化在 `task/{tasks,buildAndCopy,preview}.ts`。这与维护者设想一致，是健康的分层（端口适配器，非严格 DDD 战术模式，但本场景不需要后者）。
+
+**manager 层原只做了一半（F071，Medium），本轮已补齐。** 原状：编辑区按钮有真正的 manager（`EditController`，因其封装 `EditSession` 内存状态而成类成立）；工作台按钮没有对应物——`doGenerate`/`doBuildAndCopy`/`doPreviewRequest` 内联在 `SidebarProvider`，使该类身兼宿主+路由+工作台 manager+Provider 切换四职，且三组编排与编辑侧逐字重复（buildAndCopy 的重复为 round-7 后新代码引入、上轮未覆盖）。**维护者选定方案 a（结构最整齐）**：新建 `WorkbenchController` 与 EditController 对称，把三件套 + `requireActiveMd`/`activeTabIsCurrentMd` 移出，「当前 MD」经 `deps.currentMd()` 回调取（工作台无常驻状态、这是与 EditController 唯一的结构差异，已在类注释交代）。SidebarProvider 由 524→约 410 行、回归宿主+路由。F072（edit.ts 三处声明头拼装）抽 `prependDecls` 收口。两项行为等价（`npm test` 151 项全绿、check-types/lint 全绿），移入归档。整体仍**无 Critical/High**，代码面健康。
+
+---
 
 ## Assessment（第七轮 · 2026-06-28）
 

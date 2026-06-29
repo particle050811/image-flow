@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import { createTaskFolder } from './history';
-import { writePromptFile, archiveInputs, writeTaskMeta, buildPromptFileContent } from './taskFiles';
+import { writePromptFile, archiveInputs, writeTaskMeta, readTaskMeta, buildPromptFileContent } from './taskFiles';
 import { PREVIEW_DOC_NAME } from './preview';
-import type { TaskMeta } from '../shared';
+import { requestTaskName } from '../backend/providerRuntime';
+import type { ImageFlowConfig } from '../shared';
 
 /** 「构建并复制」一次导出所需的全部数据，工作台（来源 md）与编辑区（内存图）共用 */
 export interface BuildAndCopyInput {
@@ -16,7 +17,10 @@ export interface BuildAndCopyInput {
 	names: string[];
 	/** 参考媒体 base64 data URI，与 names 一一对应 */
 	images: string[];
-	meta: TaskMeta;
+	/** 任务来源：生成 = 来源 md 相对路径；编辑 = （编辑任务） */
+	source: string;
+	/** 可读短名：工作台为 md 名、编辑为 edit */
+	title: string;
 }
 
 /**
@@ -28,13 +32,23 @@ export interface BuildAndCopyInput {
  * listHistory/openTaskPrompt 也跳过它取归档式提示词作为历史的源提示词。
  * 任务夹若一直没放回成片，下次启动会被「无产物清理」清掉（满 1 天）。
  */
-export async function writeBuildAndCopyTask(input: BuildAndCopyInput): Promise<void> {
+export async function writeBuildAndCopyTask(input: BuildAndCopyInput): Promise<vscode.Uri> {
 	const [, dir] = await createTaskFolder();
 	await writePromptFile(dir, input.promptFileName, buildPromptFileContent(input.archivePrompt));
 	const copyUri = vscode.Uri.joinPath(dir, PREVIEW_DOC_NAME);
 	await writePromptFile(dir, PREVIEW_DOC_NAME, buildPromptFileContent(input.prompt));
 	await archiveInputs(dir, input.names.map((name, i) => ({ name, data: input.images[i] })));
-	await writeTaskMeta(dir, input.meta);
+	// 不调任何 API：模型走外部视频模型、分辨率/比例也在外部设定，此处无从知晓，故模型恒记「视频」、分辨率/比例留空
+	await writeTaskMeta(dir, {
+		source: input.source,
+		title: input.title,
+		model: '视频',
+		aspectRatio: '',
+		imageSize: '',
+		requested: 0,
+		succeeded: 0,
+		durations: [],
+	});
 
 	await vscode.env.clipboard.writeText(input.prompt);
 	await vscode.commands.executeCommand('vscode.open', copyUri);
@@ -45,4 +59,28 @@ export async function writeBuildAndCopyTask(input: BuildAndCopyInput): Promise<v
 			vscode.Uri.joinPath(dir, 'input', input.names[0])
 		);
 	}
+	return dir;
+}
+
+/**
+ * 「构建并复制」任务的后台 AI 命名：与提交任务共用 requestTaskName，但任务已落盘定稿（不在进行中列表），
+ * 故拿到短名后直接改写 meta.json 的 title 再刷新历史。命名是锦上添花——失败 / 无对话模型静默跳过、
+ * 不阻塞构建本身（失败重试可能耗时数十秒），故调用方以 `void` 后台触发。
+ */
+export async function nameBuildAndCopyTask(
+	dir: vscode.Uri,
+	config: ImageFlowConfig,
+	namingPrompt: string,
+	refresh: () => Promise<void>
+): Promise<void> {
+	const title = await requestTaskName(config, namingPrompt);
+	if (!title) {
+		return;
+	}
+	const meta = await readTaskMeta(dir);
+	if (!meta) {
+		return;
+	}
+	await writeTaskMeta(dir, { ...meta, title });
+	await refresh();
 }

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { mimeOf, mediaTypeOf, type MediaType } from '../util/images';
 import { dedupeName } from '../favorites/favorites';
 import { mediaDeclSnippet } from '../refs';
+import { showTransientWarning } from '../util/notify';
 
 /**
  * Markdown 图片语法的正则：匹配 `![alt](路径)`，路径可选 `<>` 包裹。
@@ -85,20 +86,17 @@ const MEDIA_LABEL: Record<MediaType, string> = { image: '图片', audio: '音频
 const NAMED_REF_REGEX = /\[([^\[\]]+)\](?!\()/g;
 
 /**
- * 校验每条媒体声明都在正文里被 `[名]` 引用至少一次，否则抛错列出未引用名。
- * 防止声明名与引用名不一致（如声明 `![李樱三视图]` 但正文写 `[李樱]`）导致图片被上传却无
- * `【@图片N】` 指向、`[名]` 当字面文本残留这类静默错误。生成与编辑提交前各调一次。
+ * 找出声明了但正文里没被 `[名]` 引用的名字（去重）。
+ * 声明名与引用名不一致（如声明 `![李樱三视图]` 但正文写 `[李樱]`）会让图片被上传却无 `【@图片N】`
+ * 指向、`[名]` 当字面文本残留——这是易踩的静默错误，调用方据此弹警告提醒（但不拦截生成）。
  */
-export function assertAllDeclsReferenced(content: string, decls: MediaDecl[]): void {
+export function findUnreferencedDecls(content: string, decls: MediaDecl[]): string[] {
 	const stripped = content.replace(IMAGE_REGEX, '');
 	const referenced = new Set<string>();
 	for (const m of stripped.matchAll(NAMED_REF_REGEX)) {
 		referenced.add(m[1].trim());
 	}
-	const unused = [...new Set(decls.filter((d) => !referenced.has(d.alt)).map((d) => d.alt))];
-	if (unused.length) {
-		throw new Error(`以下声明的图片未被引用（检查 [名] 是否与声明名一致）：${unused.join('、')}`);
-	}
+	return [...new Set(decls.filter((d) => !referenced.has(d.alt)).map((d) => d.alt))];
 }
 
 /**
@@ -191,10 +189,14 @@ async function buildPromptCore(
 		}
 	}
 
-	// 声明解析与校验放在读盘之前，命名不一致/同名时尽早失败，不浪费读图
+	// 声明解析放在读盘之前，同名声明等硬错误尽早失败，不浪费读图
 	const decls = parseMediaDecls(content);
 	const table = buildNameTable(decls);
-	assertAllDeclsReferenced(content, decls);
+	// 声明了却没被 [名] 引用：只弹警告不拦截——这类图仍会被上传为参考图，只是正文缺 【@图片N】 指针
+	const unused = findUnreferencedDecls(content, decls);
+	if (unused.length) {
+		showTransientWarning(`以下声明的图片未被引用（检查 [名] 是否与声明名一致）：${unused.join('、')}`);
+	}
 
 	// 按顺序读取每张参考媒体，转 base64；orderPrefix 时文件名加「类型+类型内序号」前缀（图片1-/视频1-…），
 	// 与 replaceMediaRefs 产出的【@图片N】/【@视频N】按媒体类型各自从 1 编号的规则对齐

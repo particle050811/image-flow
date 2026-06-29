@@ -4,18 +4,16 @@ import { mediaTypeOfFileName } from '../util/images';
 import { readConfig, writeConfig } from './config';
 import { configOptions, currentProvider, ensureSettingsFile, reloadCustomProvider } from '../backend/providerRuntime';
 import { providerSwitchPatch, CUSTOM_PROVIDER_ID } from '../backend/providers';
-import { listHistory, mdBaseName } from '../task/history';
-import { writeBuildAndCopyTask } from '../task/buildAndCopy';
-import { buildExportPrompt } from '../prompt/buildPrompt';
-import { openRequestPreview, isPreviewDoc, PREVIEW_DOC_NAME } from '../task/preview';
+import { listHistory } from '../task/history';
+import { isPreviewDoc, PREVIEW_DOC_NAME } from '../task/preview';
 import { TaskManager } from '../task/tasks';
 import { EditController } from '../prompt/editController';
+import { WorkbenchController } from './workbenchController';
 import { listPromptTemplates } from '../prompt/prompts';
 import { tasksRoot } from '../storage/storage';
 import { saveThumb } from '../storage/thumbs';
 import { log } from '../util/log';
 import { errMsg } from '../util/errors';
-import { showTransientInfo } from '../util/notify';
 import { openImageInEditor } from '../util/openImage';
 import {
 	readFavorites,
@@ -45,6 +43,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	/** 当前侧栏关联的 Markdown（跟随当前活动编辑器；切到非 .md 标签时保留上一个，不清空） */
 	private currentMd?: vscode.Uri;
+	/** 工作台页相关消息处理（生成/构建并复制/预览请求），「当前 MD」与视图推送经回调回到本类 */
+	private readonly workbench: WorkbenchController;
 	/** 编辑页相关消息处理（上传/生成/预览/缩略图），自持 EditSession，视图推送经回调回到本类 */
 	private readonly editCtrl: EditController;
 	/** 素材库相关消息处理（库增删/资源根/自动库/插入引用），view 与 currentMd 经 getter 回调取 */
@@ -60,6 +60,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		private readonly context: vscode.ExtensionContext,
 		private readonly tasks: TaskManager
 	) {
+		this.workbench = new WorkbenchController(context, tasks, {
+			post: (msg) => this.post(msg),
+			refreshHistory: () => this.pushHistory(),
+			currentMd: () => this.currentMd,
+		});
 		this.editCtrl = new EditController(context, tasks, {
 			post: (msg) => this.post(msg),
 			refreshHistory: () => this.pushHistory(),
@@ -101,7 +106,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	public async generateFor(mdUri: vscode.Uri): Promise<void> {
 		this.currentMd = mdUri;
 		await vscode.commands.executeCommand('image-flow.sidebar.focus');
-		await this.doGenerate(mdUri);
+		await this.workbench.generateFor(mdUri);
 	}
 
 	resolveWebviewView(view: vscode.WebviewView): void {
@@ -151,34 +156,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		return undefined;
 	}
 
-	/** 主编辑区当前激活标签打开的文件是否正是生效 MD（currentMd）。
-	 *  切到 preview.md、图片等其它标签后 currentMd 不变，此时返回 false，用于在预览/生成时拦截 */
-	private activeTabIsCurrentMd(): boolean {
-		if (!this.currentMd) {
-			return false;
-		}
-		const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
-		const uri =
-			input instanceof vscode.TabInputText || input instanceof vscode.TabInputCustom
-				? input.uri
-				: undefined;
-		return uri?.toString() === this.currentMd.toString();
-	}
-
-	/** 预览/生成前的统一校验：有生效 MD 且正是主标签页打开的文件才返回它，否则弹错并返回 undefined。
-	 *  action 用于错误文案（“生成”/“预览请求”） */
-	private requireActiveMd(action: string): vscode.Uri | undefined {
-		if (!this.currentMd) {
-			this.post({ type: 'error', message: '请先在编辑器中打开一个 Markdown 文件。' });
-			return undefined;
-		}
-		if (!this.activeTabIsCurrentMd()) {
-			this.post({ type: 'error', message: `主标签页当前打开的不是加载文件「${this.baseName(this.currentMd)}」，无法${action}。请切回该文件再操作。` });
-			return undefined;
-		}
-		return this.currentMd;
-	}
-
 	private baseName(uri: vscode.Uri): string {
 		return uriBaseName(uri);
 	}
@@ -212,22 +189,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			case 'openProviderSettings':
 				await this.openProviderSettings();
 				break;
-			case 'generate': {
-				const md = this.requireActiveMd('生成');
-				if (md) {
-					await this.doGenerate(md);
-				}
+			case 'generate':
+				await this.workbench.generate();
 				break;
-			}
-			case 'buildAndCopy': {
-				const md = this.requireActiveMd('构建并复制');
-				if (md) {
-					await this.doBuildAndCopy(md);
-				}
+			case 'buildAndCopy':
+				await this.workbench.buildAndCopy();
 				break;
-			}
 			case 'previewRequest':
-				await this.doPreviewRequest();
+				await this.workbench.previewRequest();
 				break;
 			case 'openImage':
 				await openImageInEditor(vscode.Uri.parse(msg.uri));
@@ -413,83 +382,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		await reloadCustomProvider();
 		await vscode.commands.executeCommand('vscode.open', uri);
 		await this.pushConfig();
-	}
-
-	/** 预览请求：对当前关联的 MD 解析提示词 + 拼请求参数，打开成预览文档（不调 API） */
-	private async doPreviewRequest(): Promise<void> {
-		const md = this.requireActiveMd('预览请求');
-		if (!md) {
-			return;
-		}
-		try {
-			const config = await readConfig(this.context);
-			await openRequestPreview(config, md);
-		} catch (err: unknown) {
-			this.postError(err);
-		}
-	}
-
-	/** 执行生成：校验 Key → 调 taskManager.submit 提交异步任务（立即返回，后台轮询） */
-	private async doGenerate(mdUri: vscode.Uri): Promise<void> {
-		const config = await readConfig(this.context);
-		if (!config.apiKey) {
-			this.post({ type: 'error', message: '尚未配置 API Key，请在设置页填写。' });
-			return;
-		}
-		this.post({ type: 'busy', busy: true });
-		try {
-			await this.tasks.submit(mdUri);
-		} catch (err: unknown) {
-			this.postError(err);
-		} finally {
-			this.post({ type: 'busy', busy: false });
-		}
-	}
-
-	/**
-	 * 「构建并复制」：本地/云端视频 API 用不起，故只在本地把任务建好但不提交——
-	 * 建任务夹 → 写两份提示词都保留：<md名>.md 为 ![](input/) 归档式（可渲染参考图、与其它任务一致、历史「打开提示词」指向它），
-	 * preview.md 为替换后的可复制发送正文(含【@视频N】) → 按顺序归档参考媒体（input/，文件名带类型序号前缀保上传顺序）→
-	 * 复制发送正文到剪贴板并打开 preview.md → 用系统资源管理器打开 input/ 方便拖拽上传。不调用 API、不轮询。
-	 * preview.md 命中既有「预览文档」约定（isPreviewDoc）：不会顶替工作台当前 MD、不会被误当可生成源；
-	 * listHistory/openTaskPrompt 也跳过它取源提示词，故归档版 <md名>.md 始终是历史的源提示词文件。
-	 * 任务夹若一直没放回成片，下次启动会被「无产物清理」清掉（满 1 天）。
-	 */
-	private async doBuildAndCopy(mdUri: vscode.Uri): Promise<void> {
-		const config = await readConfig(this.context);
-		this.post({ type: 'busy', busy: true });
-		try {
-			const bytes = await vscode.workspace.fs.readFile(mdUri);
-			const content = Buffer.from(bytes).toString('utf8').trim();
-			if (!content) {
-				throw new Error('Markdown 文件内容为空，无法构建。');
-			}
-			const { prompt, images, names, archivePrompt } = await buildExportPrompt(mdUri, content);
-			const prefix = mdBaseName(mdUri);
-			await writeBuildAndCopyTask({
-				prompt,
-				archivePrompt,
-				promptFileName: `${prefix}.md`,
-				names,
-				images,
-				meta: {
-					source: vscode.workspace.asRelativePath(mdUri),
-					title: prefix,
-					model: config.model,
-					aspectRatio: config.aspectRatio,
-					imageSize: config.imageSize,
-					requested: 0,
-					succeeded: 0,
-					durations: [],
-				},
-			});
-			await this.pushHistory();
-			showTransientInfo('已构建任务并复制提示词，参考媒体已按顺序导出到 input/。');
-		} catch (err: unknown) {
-			this.postError(err);
-		} finally {
-			this.post({ type: 'busy', busy: false });
-		}
 	}
 
 	private async pushHistory(): Promise<void> {

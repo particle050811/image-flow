@@ -11,8 +11,15 @@ import {
 	readImageDesc,
 	aliasFromDesc,
 } from '../storage/materials';
+import { parseMediaDecls } from '../prompt/buildPrompt';
 import { toWebviewLibrary } from './toWebview';
 import type { InboundMessage } from '../shared';
+
+/** 两个文件系统路径是否指向同一文件（规范化分隔符；Windows 大小写不敏感，统一小写比对） */
+function samePath(a: string, b: string): boolean {
+	const norm = (p: string) => path.normalize(p).toLowerCase();
+	return norm(a) === norm(b);
+}
 
 /** 素材控制器依赖：webview view 与当前 MD 由 SidebarProvider 动态持有，经 getter 回调取 */
 export interface MaterialsDeps {
@@ -101,6 +108,9 @@ export class MaterialsController {
 	 * 右键素材缩略图：把图片以相对引用插入「生效页面」光标处。
 	 * 生效页面 = 侧栏关联的 MD（currentMd）。仅当当前活动编辑器正是该 MD 时才插入，
 	 * 否则忽略——避免插到小说原文、预览或别的文件里。
+	 *
+	 * 正文里已声明该图（已有 `![名](路径)` 指向同一文件）时，只插命名引用 `[名]`（沿用已有声明的 alt，
+	 * 保证引用能对上声明）；否则插完整声明 `![alt](路径)`。对应「声明一次、多处引用」的写作流程。
 	 */
 	async insertImageRef(imageUri: string): Promise<void> {
 		const md = this.deps.currentMd();
@@ -120,6 +130,16 @@ export class MaterialsController {
 		if (!rel.startsWith('.')) {
 			rel = './' + rel;
 		}
+		// 正文已声明该图（声明路径解析到同一文件、且声明带非空 alt）时只插 `[名]` 引用。
+		// 按解析后的绝对路径比对，兼容 `./x`、`x`、`<x>` 等不同写法都算同一图。
+		const declared = parseMediaDecls(editor.document.getText()).find(
+			(d) => d.alt && samePath(path.resolve(mdDir, d.path), imgPath)
+		);
+		if (declared) {
+			await editor.edit((b) => b.insert(editor.selection.active, `[${declared.alt}]`));
+			await editor.document.save();
+			return;
+		}
 		// 图片旁有同主名 .md 描述文件时，描述在前、图片引用紧随其后一并写进正文
 		// （buildPrompt 拼提示词时自然包含），如：- [某角色] 描述文字。![alt](路径)
 		const desc = await readImageDesc(imageUri);
@@ -132,6 +152,9 @@ export class MaterialsController {
 		if (desc) {
 			snippet = desc + snippet;
 		}
-		await editor.edit((b) => b.insert(editor.selection.active, snippet));
+		// 首次插入的是整行声明（含可能的描述），末尾补一个换行让其独占一行、光标落到下一行；
+		// 后续只插 `[名]` 引用（上面的 declared 分支）是行内片段，不加换行。
+		await editor.edit((b) => b.insert(editor.selection.active, snippet + '\n'));
+		await editor.document.save();
 	}
 }
