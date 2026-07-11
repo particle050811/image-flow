@@ -1,5 +1,5 @@
 import type { Config, ConfigOptions, WebviewLibrary, WebviewCollection, PromptTemplate, StatusState } from './vscode';
-import { Select, Stepper, RatioSelect } from './fields';
+import { Stepper, ParamsSelect, ModelSelect } from './fields';
 import { NativeSelect } from './primitives';
 import { Materials } from './Materials';
 import { modelSizeControl } from '../modelOptions';
@@ -51,15 +51,13 @@ export function Workbench({
 	onRemoveLibrary: (folder: string) => void;
 	onSendToEdit: (uri: string) => void;
 }) {
-	// 分辨率随模型变化 + 切模型按各模型独立记忆恢复档位、播种参数默认值（工作台用 model 组）；与编辑页共用 modelSizeControl
-	const { sizeOptions, changeModel } = modelSizeControl(
+	// 档位/比例/自定义参数随模型变化 + 切模型按各模型独立记忆恢复档位、播种参数默认值（工作台用 model 组）；与编辑页共用 modelSizeControl
+	const { current, changeModel } = modelSizeControl(
 		config,
 		options,
-		{ model: 'model', size: 'imageSize', memory: 'imageSizeMemory', params: 'params' },
+		{ provider: 'providerId', model: 'model', size: 'imageSize', ratio: 'aspectRatio', memory: 'imageSizeMemory', params: 'params' },
 		onChangeMany
 	);
-	// 当前模型可调的自定义参数（自定义 Provider 的 custom[]；内置 grsai 恒空）
-	const customParams = options.customByModel[config.model] ?? [];
 	// 关闭「显示音频/视频」时，从素材库里滤掉非图片项（角标计数与网格都随之只剩图片）
 	const onlyImages = (lib: WebviewLibrary): WebviewLibrary =>
 		config.showAudioVideo
@@ -82,34 +80,25 @@ export function Workbench({
 
 			<div className="dock">
 				<div className="row">
-					<Select
+					<ModelSelect
 						label="模型"
-						value={config.model}
-						options={options.model.map((m) => ({ value: m, label: options.modelLabels[m] ?? m }))}
+						provider={current?.provider ?? config.providerId}
+						model={current?.model ?? config.model}
+						models={options.imageModels}
 						onChange={changeModel}
 					/>
-					<RatioSelect
-						label="比例"
-						value={config.aspectRatio}
-						options={options.aspectRatiosByModel[config.model] ?? options.aspectRatio}
-						onChange={(v) => onChange('aspectRatio', v)}
+					<ParamsSelect
+						label="参数"
+						aspectRatio={config.aspectRatio}
+						ratioOptions={current?.aspectRatios ?? []}
+						imageSize={config.imageSize}
+						sizeOptions={current?.imageSizes ?? []}
+						customParams={current?.custom ?? []}
+						paramValues={config.params}
+						onChangeRatio={(v) => onChange('aspectRatio', v)}
+						onChangeSize={(v) => onChange('imageSize', v)}
+						onChangeParam={(key, v) => onChange('params', { ...config.params, [key]: v })}
 					/>
-					<Select
-						label="分辨率"
-						value={config.imageSize}
-						options={sizeOptions}
-						onChange={(v) => onChange('imageSize', v)}
-					/>
-					{customParams.map((p) => (
-						<Select
-							key={p.key}
-							className="field-custom"
-							label={p.label}
-							value={config.params[p.key] ?? p.default}
-							options={p.options}
-							onChange={(v) => onChange('params', { ...config.params, [p.key]: v })}
-						/>
-					))}
 					<Stepper
 						label="并发数"
 						value={config.concurrency}

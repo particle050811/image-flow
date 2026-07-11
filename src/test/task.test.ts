@@ -79,6 +79,33 @@ suite('buildNameTable', () => {
 			/传送石/
 		);
 	});
+	test('同一路径声明多个名字抛错（产品决策：别名差异在模型侧丢失，只会误导作者），报错含两个名字', () => {
+		assert.throws(
+			() => buildNameTable([
+				{ alt: '正面', path: 'x.png', type: 'image' },
+				{ alt: '细节', path: 'x.png', type: 'image' },
+			]),
+			/x\.png[\s\S]*正面[\s\S]*细节/
+		);
+	});
+});
+
+suite('buildNameTable-extra', () => {
+	test('空 alt 第一条即抛错（产品决策：声明必须命名），报错含路径', () => {
+		assert.throws(
+			() => buildNameTable([
+				{ alt: '', path: 'a.png', type: 'image' },
+				{ alt: '传送石', path: 'c.png', type: 'image' },
+			]),
+			/未命名声明[\s\S]*a\.png/
+		);
+	});
+	test('纯空白 alt 经 trim 后也算空（content 级）', () => {
+		assert.throws(
+			() => buildNameTable(parseMediaDecls('![ ](a.png)')),
+			/未命名声明[\s\S]*a\.png/
+		);
+	});
 });
 
 suite('isTransientNetworkError', () => {
@@ -132,10 +159,8 @@ suite('replaceMediaRefs', () => {
 		const out = replaceMediaRefs(src, tableOf(src));
 		assert.strictEqual(out, '   【@图片1】【@音频1】【@图片2】');
 	});
-	test('同一路径两个 alt 各自编号（仅上传 1 张，编号到 2 为已知限制）', () => {
-		const src = '![甲](x.png) ![乙](x.png) [甲][乙]';
-		const out = replaceMediaRefs(src, tableOf(src));
-		assert.strictEqual(out, '  【@图片1】【@图片2】');
+	test('同一路径两个 alt 在建表时即抛错（content 级）', () => {
+		assert.throws(() => tableOf('![甲](x.png) ![乙](x.png) [甲][乙]'), /同一文件声明了多个名字/);
 	});
 });
 

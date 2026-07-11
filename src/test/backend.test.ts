@@ -11,8 +11,6 @@ import {
 	BUILTIN_GRSAI,
 	parseCustomProvider,
 	paramDefaults,
-	alignModel,
-	providerSwitchPatch,
 	parseJsonc,
 } from '../backend/providers';
 import { baseConfig } from './fixtures';
@@ -44,17 +42,23 @@ suite('toVipPixels', () => {
 });
 
 suite('providers', () => {
-	test('buildOptions：内置 grsai 派生候选，含 providers/isCustom、按模型分表、无 url/key', () => {
-		const opts = buildOptions(BUILTIN_GRSAI);
-		assert.deepStrictEqual(opts.providers, [
-			{ id: 'grsai', label: 'Grsai' },
-			{ id: 'custom', label: '自定义' },
-		]);
-		assert.strictEqual(opts.isCustom, false);
-		assert.deepStrictEqual(opts.imageSizesByModel['gpt-image-2'], ['1K']);
-		assert.strictEqual(opts.modelLabels['nano-banana-2'], 'Nano Banana 2');
+	test('buildOptions：合并多渠道模型（带渠道标识），无 url/key', () => {
+		const custom = parseCustomProvider({
+			image: [{ model: 'gpt-image-2', label: '自定义 GPT', adapter: 'openai-images', apiKey: 'k',
+				aspectRatios: ['1:1'], imageSizes: ['1K'] }],
+		});
+		const opts = buildOptions([BUILTIN_GRSAI, custom]);
+		// 内置模型齐全，且同名模型靠 provider 区分不互相覆盖
+		const grsaiGpt = opts.imageModels.find((m) => m.provider === 'grsai' && m.model === 'gpt-image-2');
+		const customGpt = opts.imageModels.find((m) => m.provider === 'custom' && m.model === 'gpt-image-2');
+		assert.deepStrictEqual(grsaiGpt?.imageSizes, ['1K']);
+		assert.strictEqual(grsaiGpt?.label, 'GPT Image 2');
+		assert.strictEqual(customGpt?.label, '自定义 GPT');
+		assert.strictEqual(customGpt?.providerLabel, '自定义');
 		// 不应泄漏任何 url/key 字段
-		assert.ok(!('apiKey' in opts) && !('baseUrl' in opts));
+		for (const m of opts.imageModels) {
+			assert.ok(!('apiKey' in m) && !('baseUrl' in m));
+		}
 	});
 
 	test('parseCustomProvider：解析 image/chat，跳过缺 model/adapter 的项，custom 参数齐全', () => {
@@ -84,28 +88,6 @@ suite('providers', () => {
 			paramDefaults([{ key: 'q', label: 'Q', options: ['a', 'b'], default: 'b' }]),
 			{ q: 'b' }
 		);
-	});
-
-	test('alignModel：模型在 Provider 内则保留，size/aspect 越界回退该模型首项并播种参数', () => {
-		const provider = parseCustomProvider({
-			image: [{ model: 'm1', label: 'M1', adapter: 'openai-images', aspectRatios: ['1:1', '16:9'], imageSizes: ['1K', '2K'],
-				custom: [{ key: 'q', label: 'Q', options: ['low'], default: 'low' }] }],
-		});
-		assert.deepStrictEqual(alignModel(provider, 'm1', '4K', '21:9'), {
-			model: 'm1', imageSize: '1K', aspectRatio: '1:1', params: { q: 'low' },
-		});
-		// 模型不在 Provider 内 → 取首个模型
-		assert.strictEqual(alignModel(provider, '不存在', '1K', '1:1')!.model, 'm1');
-		// 空 Provider → undefined
-		assert.strictEqual(alignModel(parseCustomProvider({}), 'm', '1K', '1:1'), undefined);
-	});
-
-	test('providerSwitchPatch：切到内置 grsai 时对齐工作台与编辑两组字段', () => {
-		const cfg = { ...baseConfig, model: '不存在的模型', editModel: 'gpt-image-2' };
-		const patch = providerSwitchPatch(BUILTIN_GRSAI, cfg);
-		assert.strictEqual(patch.model, 'nano-banana-2'); // 不存在 → 首个
-		assert.strictEqual(patch.editModel, 'gpt-image-2'); // 存在 → 保留
-		assert.deepStrictEqual(patch.params, {});
 	});
 
 	test('parseJsonc：解析 // 与 /* */ 注释，保留字符串里的 //（URL 不被误删）', () => {

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { EditSession } from './editSession';
 import { buildEditFinalPrompt, buildEditExportPrompt } from './edit';
 import { readConfig } from '../ui/config';
+import { GRSAI_PROVIDER_ID } from '../backend/providers';
 import { openTextPreview } from '../task/preview';
 import { writeBuildAndCopyTask, nameBuildAndCopyTask } from '../task/buildAndCopy';
 import { TaskManager } from '../task/tasks';
@@ -124,7 +125,9 @@ export class EditController {
 	/** 编辑页生成：校验 Key → submitEdit 提交异步任务 */
 	async generate(prompt: string): Promise<void> {
 		const config = await readConfig(this.context);
-		if (!config.apiKey) {
+		// 密钥检查按编辑页渠道分流（F095）：只有 grsai 用 secrets 里的 apiKey；
+		// 自定义模型自带密钥，缺失时由 resolveImageCall 报错，不能在这里用 grsai 密钥一票拦截
+		if (config.editProviderId === GRSAI_PROVIDER_ID && !config.apiKey) {
 			this.deps.post({ type: 'error', message: '尚未配置 API Key，请在设置页填写。' });
 			return;
 		}

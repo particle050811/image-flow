@@ -425,16 +425,11 @@ textarea::placeholder {
 	min-width: 0;
 }
 
-/* 参数行（工作台 dock / 编辑页）：模型名长，加宽模型列 */
-.dock .row > .field:first-child,
-[data-page='edit'] .row > .field:first-child {
-	flex: 1.8 1 0;
-}
-
-/* 参数行：自定义参数列（如「输出质量」的 medium）比短值列多分一点宽 */
-.dock .row > .field-custom,
-[data-page='edit'] .row > .field-custom {
-	flex: 1.5 1 0;
+/* 参数行（工作台 dock / 编辑页）：模型与参数两个弹层列（都含 .ratio-select 包装）文字长，
+   同分最宽；并发数步进列在下方单独收窄 */
+.dock .row > .field:has(.ratio-select),
+[data-page='edit'] .row > .field:has(.ratio-select) {
+	flex: 2 1 0;
 }
 
 /* 参数行：并发数仅 1 位数字，收窄输入框给模型名腾位（加减按钮各 34px 固定不缩）；
@@ -452,7 +447,7 @@ textarea::placeholder {
 	.dock .row > .field:has(.stepper) {
 		flex: 1 1 27%;
 	}
-	.dock .row > .field:first-child {
+	.dock .row > .field:has(.ratio-select) {
 		flex: 1 1 38%;
 	}
 }
@@ -514,11 +509,12 @@ textarea::placeholder {
 	position: relative;
 }
 
-/* 弹层：向上弹出（dock 贴底），承载图形网格 */
+/* 弹层：向上弹出（dock 贴底），承载图形网格。
+   左移「内边距 + 边框」宽度，让面板内卡片左缘与触发框左缘对齐（面板边框在外侧） */
 .ratio-pop {
 	position: absolute;
 	bottom: calc(100% + var(--sp-1));
-	left: 0;
+	left: calc(-1 * (var(--sp-2) + 1px));
 	z-index: 50;
 	padding: var(--sp-2);
 	background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background, var(--field-bg)));
@@ -531,7 +527,7 @@ textarea::placeholder {
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--sp-2);
-	width: 232px;
+	width: 248px;
 }
 
 /* 单个比例项：覆盖全局 button 的实色样式，做成轻量描边卡片 */
@@ -541,8 +537,8 @@ textarea::placeholder {
 	align-items: center;
 	justify-content: center;
 	gap: var(--sp-1);
-	width: 52px;
-	height: 56px;
+	width: 56px;
+	height: 62px;
 	padding: 0;
 	background: var(--field-bg);
 	color: var(--vscode-foreground);
@@ -579,7 +575,7 @@ textarea::placeholder {
 }
 
 .ratio-text {
-	font-size: 12px;
+	font-size: var(--fs-body);
 	font-variant-numeric: tabular-nums;
 	opacity: 0.85;
 	line-height: 1;
@@ -590,6 +586,80 @@ textarea::placeholder {
 	width: 22px;
 	height: 22px;
 	border-style: dashed;
+}
+
+/* ---------- 「参数」弹层（比例 + 分辨率 + 自定义参数合并面板） ---------- */
+.param-pop {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-3);
+	width: 280px;
+	max-height: 60vh;
+	overflow-y: auto;
+}
+
+.param-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-2);
+}
+
+.param-title {
+	font-size: 13px;
+	font-weight: 600;
+	opacity: 0.75;
+}
+
+.param-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--sp-2);
+}
+
+/* 档位 chip：轻量描边小按钮，选中态与比例卡片一致 */
+.param-chip {
+	width: auto;
+	padding: 5px 14px;
+	background: var(--field-bg);
+	color: var(--vscode-foreground);
+	border: 1px solid var(--field-border);
+	border-radius: var(--radius);
+	font-size: var(--fs-body);
+	font-variant-numeric: tabular-nums;
+	transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.param-chip:hover {
+	border-color: var(--vscode-focusBorder);
+	background: var(--vscode-list-hoverBackground);
+}
+
+.param-chip.selected {
+	border-color: var(--vscode-focusBorder);
+	background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+	box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+}
+
+/* 模型弹层：与「参数」弹层同款面板，模型卡片一行两个。
+   面板比模型列宽（约等于下方模型+参数两列），左边界略往左收，与触发框左缘对齐；
+   max-width 防窄侧栏下超出视口 */
+.model-pop {
+	width: 360px;
+	max-width: calc(100vw - 24px);
+}
+
+.model-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: var(--sp-2);
+}
+
+/* 模型卡片：文字可能较长，居中略高的按钮，选中态同比例卡片（蓝框），不打勾 */
+.model-item {
+	padding: 8px 6px;
+	font-size: var(--fs-body);
+	white-space: normal;
+	line-height: 1.3;
 }
 
 /* ---------- 按钮 ---------- */

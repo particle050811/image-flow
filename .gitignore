@@ -6,3 +6,5 @@ node_modules
 media/sidebar.js
 media/sidebar.js.map
 .vscode/*.png
+.claude/
+docs/

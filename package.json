@@ -2,7 +2,7 @@
   "name": "image-flow",
   "displayName": "image flow",
   "description": "在 VS Code 中构建和管理 AI 绘图",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "particle050811",
   "repository": {
     "type": "git",
@@ -10,7 +10,7 @@
   },
   "license": "Apache-2.0",
   "engines": {
-    "vscode": "^1.120.0"
+    "vscode": "^1.84.0"
   },
   "categories": [
     "Other"
@@ -95,7 +95,7 @@
     "@types/node": "22.x",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@types/vscode": "^1.120.0",
+    "@types/vscode": "^1.84.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.27.3",

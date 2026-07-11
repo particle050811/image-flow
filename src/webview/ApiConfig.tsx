@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { vscode, type Config, type ConfigOptions } from './vscode';
 import { Select, TextArea, Stepper, Checkbox } from './fields';
-import { NativeSelect } from './primitives';
 
 const GET_KEY_URL = 'https://grsai.ai/zh/dashboard/api-keys';
 
@@ -19,51 +18,41 @@ export function ApiConfig({
 }) {
 	// 设置页独立选择要编辑哪个模型的注入提示词，默认当前工作台模型，与工作台选择解耦
 	const [injectModel, setInjectModel] = useState(config.model);
+	// 注入提示词按裸模型名索引（跨渠道同名模型共用一句），下拉去重
+	const injectModels = [...new Set(options.imageModels.map((m) => m.model))];
 	return (
 		<div className="page" data-page="api" hidden={hidden}>
+			{/* 自定义渠道的模型在 ~/.image-flow/settings.json 配置，模型下拉按渠道分组展示全部 */}
 			<div className="field">
 				<div className="field-head field-head-inline">
-					<label>API</label>
-					<div className="field-head-grow">
-						<NativeSelect
-							value={config.providerId}
-							options={options.providers.map((p) => ({ value: p.id, label: p.label }))}
-							onChange={(id) => vscode.postMessage({ type: 'selectProvider', providerId: id })}
-							ariaLabel="API"
-						/>
-					</div>
-					{/* 内置 grsai 无 settings.json 配置文件，仅自定义 Provider 显示入口 */}
-					{options.isCustom && (
-						<button
-							type="button"
-							className="link link-inline"
-							onClick={() => vscode.postMessage({ type: 'openProviderSettings' })}
-						>
-							打开配置文件
-						</button>
-					)}
+					<label>自定义 API 模型</label>
+					<button
+						type="button"
+						className="link link-inline"
+						onClick={() => vscode.postMessage({ type: 'openProviderSettings' })}
+					>
+						打开配置文件
+					</button>
 				</div>
 			</div>
-			{/* 内置 grsai 的 API Key（走 secrets）；自定义 Provider 的 key 在 settings.json 每个模型里自带，故隐藏 */}
-			{!options.isCustom && (
-				<div className="field">
-					<div className="field-head">
-						<label>API Key</label>
-						<button
-							type="button"
-							className="link link-inline"
-							onClick={() => vscode.postMessage({ type: 'openExternal', url: GET_KEY_URL })}
-						>
-							获取
-						</button>
-					</div>
-					<input
-						type="password"
-						value={config.apiKey}
-						onChange={(e) => onChange('apiKey', e.target.value)}
-					/>
+			{/* 内置 grsai 的 API Key（走 secrets）；自定义渠道的 key 在 settings.json 每个模型里自带 */}
+			<div className="field">
+				<div className="field-head">
+					<label>Grsai API Key</label>
+					<button
+						type="button"
+						className="link link-inline"
+						onClick={() => vscode.postMessage({ type: 'openExternal', url: GET_KEY_URL })}
+					>
+						获取
+					</button>
 				</div>
-			)}
+				<input
+					type="password"
+					value={config.apiKey}
+					onChange={(e) => onChange('apiKey', e.target.value)}
+				/>
+			</div>
 			<div className="row">
 				<Stepper
 					label="工作台图片每行张数"
@@ -142,7 +131,7 @@ export function ApiConfig({
 			<Select
 				label="模型注入提示词 — 选择模型"
 				value={injectModel}
-				options={options.model}
+				options={injectModels}
 				onChange={setInjectModel}
 			/>
 			<TextArea

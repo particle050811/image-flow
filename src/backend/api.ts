@@ -12,6 +12,96 @@ export class TransientError extends Error {
 /** 网络请求默认超时（ms）：避免挂起的连接卡住轮询串行锁 */
 const FETCH_TIMEOUT = 30000;
 
+/** 响应体大小上限：JSON 体（含 base64 形式的成图）与 URL 下载共用，防异常 Provider 一次撑爆宿主内存 */
+export const MAX_BODY_BYTES = 100 * 1024 * 1024;
+/** 响应体读取窗口（ms）：fetchWithTimeout 只覆盖到收到响应头，这里覆盖正文传输全程 */
+const BODY_TIMEOUT = 120 * 1000;
+/** 控制面 JSON（提交回执/轮询状态/命名）正常只有 KB 级：小上限 + 短窗口，
+ *  异常查询体不至于占 100MB 内存或把串行轮询卡住两分钟 */
+export const CONTROL_BODY_BYTES = 5 * 1024 * 1024;
+export const CONTROL_BODY_TIMEOUT = 30 * 1000;
+
+/**
+ * 按上限、带全程超时读取响应体（F100/F101）：
+ * - Content-Length 预检 + 流式累计双保险，超限即断流报错；
+ * - 超时覆盖从开始读到正文读完的全过程——上游只发响应头不发完正文时断流，
+ *   抛 TransientError 让轮询按瞬时错误重试，而不是无限等待卡死轮询串行锁。
+ */
+export async function readBodyLimited(
+	res: Response,
+	what: string,
+	maxBytes = MAX_BODY_BYTES,
+	timeoutMs = BODY_TIMEOUT
+): Promise<Uint8Array> {
+	const overLimitError = () => new Error(`${what}超过大小上限（${Math.round(maxBytes / 1024 / 1024)}MB）`);
+	const declared = Number(res.headers.get('content-length'));
+	if (Number.isFinite(declared) && declared > maxBytes) {
+		// 预检拒收也要取消正文：否则上游继续推送大响应，占着 socket/连接池，限量就只省了内存
+		void res.body?.cancel().catch(() => {});
+		throw overLimitError();
+	}
+	if (!res.body) {
+		// 无流式 body（空体或实现差异）：一次性读取后按上限校验
+		const data = new Uint8Array(await res.arrayBuffer());
+		if (data.byteLength > maxBytes) {
+			throw overLimitError();
+		}
+		return data;
+	}
+	const reader = res.body.getReader();
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		void reader.cancel().catch(() => {});
+	}, timeoutMs);
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) {
+				break;
+			}
+			total += value.byteLength;
+			if (total > maxBytes) {
+				await reader.cancel().catch(() => {});
+				throw overLimitError();
+			}
+			chunks.push(value);
+		}
+	} finally {
+		clearTimeout(timer);
+	}
+	if (timedOut) {
+		throw new TransientError(`${what}读取超时（${Math.round(timeoutMs / 1000)}s 内未传完）`);
+	}
+	return Buffer.concat(chunks);
+}
+
+/**
+ * 限时限量读取响应体并解析为 JSON（替代裸 `response.json()`）。
+ * 解析失败报带上下文的错误，而不是裸 SyntaxError。
+ * 上限/超时默认按成图体（100MB/120s）；控制面调用传 CONTROL_BODY_BYTES/CONTROL_BODY_TIMEOUT。
+ */
+export async function readJsonLimited(
+	res: Response,
+	what: string,
+	maxBytes = MAX_BODY_BYTES,
+	timeoutMs = BODY_TIMEOUT
+): Promise<unknown> {
+	const bytes = await readBodyLimited(res, what, maxBytes, timeoutMs);
+	// Response.json() 接受带 BOM 的 JSON，Buffer.toString 会保留 U+FEFF 导致 parse 报错——剥掉保持等价
+	let text = Buffer.from(bytes).toString('utf8');
+	if (text.charCodeAt(0) === 0xfeff) {
+		text = text.slice(1);
+	}
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		throw new Error(`${what}不是合法 JSON（HTTP ${res.status}）`);
+	}
+}
+
 /**
  * 带超时的 fetch：超时即 abort 抛错，由调用方按瞬时错误处理。
  * 抽出供 generate/result/下载图片共用，避免任一请求挂死拖垮整个轮询。

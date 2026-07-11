@@ -28,7 +28,7 @@
       //   若挂了系统代理（如 Clash 默认 60 秒断开空闲连接）会被掐断且仍扣费——
       //   国内 API 建议在代理里给该域名配直连(DIRECT)，或生成时临时关代理。
       "baseUrl": "https://yunwu.ai",
-      "apiKey": "在此填写你的 API Key",
+      "apiKey": "在此填写你的_API_Key",
       "aspectRatios": ["1:1", "16:9", "9:16", "4:3", "3:4"],
       "imageSizes": ["1K", "2K", "4K"],
       "custom": [

@@ -5,7 +5,7 @@
 // 故不带 response_format / moderation / image（空），否则报 "Unknown parameter"。
 // 返回统一取 data[].url 或 data[].b64_json（gpt-image 系列恒返回 b64_json）。
 
-import { fetchWithTimeout, resolveImageSize, normalizeBase } from '../api';
+import { fetchWithTimeout, readJsonLimited, resolveImageSize, normalizeBase } from '../api';
 import { extFromMime } from '../../util/images';
 import type { ImageFlowConfig } from '../../shared';
 import { mergeCustomParams } from './types';
@@ -114,7 +114,10 @@ export const openaiImages: ImageAdapter = {
 			);
 		}
 
-		const data = (await response.json()) as { data?: unknown; error?: { message?: unknown } };
+		const data = (await readJsonLimited(response, '图片生成响应')) as {
+			data?: unknown;
+			error?: { message?: unknown };
+		};
 		if (!response.ok) {
 			const msg = typeof data.error?.message === 'string' ? data.error.message : `HTTP ${response.status}`;
 			throw new Error(`图片生成失败：${msg}`);

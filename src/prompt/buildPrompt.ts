@@ -63,16 +63,30 @@ export function parseMediaDecls(content: string): MediaDecl[] {
 }
 
 /**
- * 由声明列表构建名字表：每类从 1 起独立编号（按出现顺序）。
- * 任意两条声明 alt 相同即抛错——避免命名引用 [名] 歧义。
+ * 由声明列表构建名字表：每类从 1 起独立编号（按声明出现顺序）。
+ * 三类非法输入第一时间抛错（产品决策：声明必须规范）：
+ * - alt 为空：提示词应经「插入引用」或 AI 生成，空名声明无法被 [名] 引用；
+ * - 两条声明 alt 相同：命名引用 [名] 会歧义；
+ * - 同一路径声明多个名字：上传按路径去重只传一张，所有别名最终都指向同一个【@图片N】，
+ *   别名差异在模型侧完全丢失，只会误导作者以为模型能区分，故直接报错要求合并。
+ * 每条声明路径唯一后，按类型计数的编号天然与按路径去重的上传下标对齐。
  */
 export function buildNameTable(decls: MediaDecl[]): Map<string, NameEntry> {
 	const counters: Record<MediaType, number> = { image: 0, audio: 0, video: 0 };
+	const altByPath = new Map<string, string>();
 	const table = new Map<string, NameEntry>();
 	for (const d of decls) {
+		if (!d.alt) {
+			throw new Error(`提示词存在未命名声明：![](${d.path})，请补写名字 ![名](路径) 或用右键「插入引用」`);
+		}
 		if (table.has(d.alt)) {
 			throw new Error(`提示词存在重名引用：${d.alt}`);
 		}
+		const firstAlt = altByPath.get(d.path);
+		if (firstAlt !== undefined) {
+			throw new Error(`同一文件声明了多个名字：${d.path}（[${firstAlt}] 与 [${d.alt}]），同一张图只能用一个名字`);
+		}
+		altByPath.set(d.path, d.alt);
 		counters[d.type] += 1;
 		table.set(d.alt, { type: d.type, index: counters[d.type] });
 	}
@@ -89,6 +103,7 @@ const NAMED_REF_REGEX = /\[([^\[\]]+)\](?!\()/g;
  * 找出声明了但正文里没被 `[名]` 引用的名字（去重）。
  * 声明名与引用名不一致（如声明 `![李樱三视图]` 但正文写 `[李樱]`）会让图片被上传却无 `【@图片N】`
  * 指向、`[名]` 当字面文本残留——这是易踩的静默错误，调用方据此弹警告提醒（但不拦截生成）。
+ * 前置条件：入参声明须已过 buildNameTable（无空 alt），否则会产出空字符串告警项。
  */
 export function findUnreferencedDecls(content: string, decls: MediaDecl[]): string[] {
 	const stripped = content.replace(IMAGE_REGEX, '');
@@ -166,7 +181,7 @@ export function archiveImageRefs(content: string, indexBy: Map<string, number>, 
 
 /**
  * 解析 Markdown 正文中的图片语法 `![alt](相对路径)` 的公共内核，生成与「构建并复制」共用：
- * - 按首次出现顺序去重编号（同一图片复用同一序号）；
+ * - 按首次出现顺序编号（同一文件声明多个名字属非法输入，由 buildNameTable 报错）；
  * - 相对 Markdown 所在目录读取参考媒体，转成 base64 data URI；
  * - 删声明 + 把命名引用 `[名]` 替换为 `【@图片N】`/`【@音频N】`/`【@视频N】`。
  * @param allowNonImage true 时不对音/视频引用报错（构建并复制导出给外部后端用）。
@@ -220,10 +235,8 @@ async function buildPromptCore(
 	const names = orderPrefix ? orderPrefixNames(baseNames) : baseNames;
 
 	// 发给模型的 prompt：删声明 + 命名引用替换为【@图片N】。
-	// 已知限制（仅 buildPrompt 上传链路）：【@图片N】按媒体类型独立编号，而 images[] 由 parseImageRefs 按
-	// 全局出现顺序（路径去重）上传。纯图片、无重复路径时两套编号一致；同路径多 alt 时编号与上传下标会错位
-	// （详见 logic.test.ts 的两条锁定测试）。buildExportPrompt 用 orderPrefix 把文件名也按类型内序号命名，
-	// 故导出链路文件名与【@类型N】对齐（同路径多 alt 的极端情形仍可能偏差）。
+	// 编号口径：buildNameTable 已保证每条声明路径唯一（同路径多名字报错），
+	// 按类型计数的编号与 images[] 按路径去重的上传下标对齐；buildExportPrompt 的 orderPrefix 文件名同理。
 	const prompt = replaceMediaRefs(content, table);
 	// 归档文件名：保留原名（含类型序号前缀）、重名去重，归档正文与 input/ 落盘共用，引用才能对上
 	const fileNames = dedupeArchiveNames(names);

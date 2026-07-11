@@ -4,7 +4,7 @@
 // 真正的文件 IO（读/写 settings.json）在 providerRuntime.ts（node 侧）。
 
 import { parse as jsoncParse, type ParseError } from 'jsonc-parser';
-import type { ConfigOptions, CustomParam, ImageFlowConfig } from '../shared';
+import type { ConfigOptions, CustomParam } from '../shared';
 
 export const GRSAI_PROVIDER_ID = 'grsai';
 export const CUSTOM_PROVIDER_ID = 'custom';
@@ -181,73 +181,26 @@ export function parseCustomProvider(raw: unknown): RuntimeProvider {
 
 // —— 发往 webview 的 ConfigOptions（剥掉 baseUrl/apiKey） —— //
 
-/** 由当前生效 Provider 构建 ConfigOptions（只含展示/下拉所需，绝不含 url/key） */
-export function buildOptions(current: RuntimeProvider): ConfigOptions {
-	const fromImage = <V>(pick: (m: RuntimeImageModel) => V): Record<string, V> =>
-		Object.fromEntries(current.image.map((m) => [m.model, pick(m)]));
+/** 合并全部可用渠道的图片模型，构建 ConfigOptions（只含展示/下拉所需，绝不含 url/key） */
+export function buildOptions(providers: readonly RuntimeProvider[]): ConfigOptions {
 	return {
-		providers: [
-			{ id: GRSAI_PROVIDER_ID, label: GRSAI_LABEL },
-			{ id: CUSTOM_PROVIDER_ID, label: CUSTOM_LABEL },
-		],
-		isCustom: current.id === CUSTOM_PROVIDER_ID,
-		model: current.image.map((m) => m.model),
-		modelLabels: fromImage((m) => m.label),
-		aspectRatiosByModel: fromImage((m) => m.aspectRatios),
-		imageSizesByModel: fromImage((m) => m.imageSizes),
-		customByModel: fromImage((m) => m.custom),
-		aspectRatio: GRSAI_ASPECT_RATIOS,
-		imageSize: GRSAI_SIZES_FULL,
-		namingModel: current.chat.map((c) => c.model),
+		imageModels: providers.flatMap((p) =>
+			p.image.map((m) => ({
+				provider: p.id,
+				providerLabel: p.label,
+				model: m.model,
+				label: m.label,
+				aspectRatios: m.aspectRatios,
+				imageSizes: m.imageSizes,
+				custom: m.custom,
+			}))
+		),
 	};
 }
 
-/** 某模型的可见参数默认值（切 Provider/模型时播种进 config.params） */
+/** 某模型的可见参数默认值（切模型时播种进 config.params） */
 export function paramDefaults(custom: readonly CustomParam[]): Record<string, string> {
 	return Object.fromEntries(custom.map((c) => [c.key, c.default]));
-}
-
-/**
- * 把（工作台或编辑页的）模型/分辨率/比例对齐到目标 Provider 的有效值，并播种参数默认值。
- * 当前 model 在 Provider 内则保留，否则取首个模型；size/aspect 仍受支持则保留，否则取该模型首项。
- * 供切 Provider 时收敛历史选择，避免下拉出现该 Provider 没有的值导致空白。
- */
-export function alignModel(
-	provider: RuntimeProvider,
-	model: string,
-	imageSize: string,
-	aspectRatio: string
-): { model: string; imageSize: string; aspectRatio: string; params: Record<string, string> } | undefined {
-	if (!provider.image.length) {
-		return undefined;
-	}
-	const m = provider.image.find((x) => x.model === model) ?? provider.image[0];
-	return {
-		model: m.model,
-		imageSize: m.imageSizes.includes(imageSize) ? imageSize : m.imageSizes[0] ?? imageSize,
-		aspectRatio: m.aspectRatios.includes(aspectRatio) ? aspectRatio : m.aspectRatios[0] ?? aspectRatio,
-		params: paramDefaults(m.custom),
-	};
-}
-
-/** 切 Provider 时同时对齐工作台与编辑页两组模型字段 */
-export function providerSwitchPatch(provider: RuntimeProvider, config: ImageFlowConfig): Partial<ImageFlowConfig> {
-	const patch: Partial<ImageFlowConfig> = {};
-	const wb = alignModel(provider, config.model, config.imageSize, config.aspectRatio);
-	if (wb) {
-		patch.model = wb.model;
-		patch.imageSize = wb.imageSize;
-		patch.aspectRatio = wb.aspectRatio;
-		patch.params = wb.params;
-	}
-	const ed = alignModel(provider, config.editModel, config.editImageSize, config.editAspectRatio);
-	if (ed) {
-		patch.editModel = ed.model;
-		patch.editImageSize = ed.imageSize;
-		patch.editAspectRatio = ed.aspectRatio;
-		patch.editParams = ed.params;
-	}
-	return patch;
 }
 
 /**

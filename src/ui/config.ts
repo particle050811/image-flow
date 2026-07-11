@@ -36,12 +36,14 @@ const DEFAULTS: StoredConfig = {
 	modelInjections: {},
 	workbenchTemplate: '',
 	editModel: 'nano-banana-2',
+	editProviderId: 'grsai',
 	editAspectRatio: '3:4',
 	editImageSize: '4K',
 	editImageSizeMemory: {},
 	editConcurrency: 4,
 	editParams: {},
 	namingModel: 'gemini-3.1-flash-lite',
+	namingProviderId: 'grsai',
 	autoName: true,
 	showThumbActions: true,
 	showAudioVideo: true,
@@ -52,7 +54,24 @@ const DEFAULTS: StoredConfig = {
 export async function readConfig(context: vscode.ExtensionContext): Promise<ImageFlowConfig> {
 	const stored = context.globalState.get<Partial<StoredConfig>>(STATE_KEY, {});
 	const apiKey = (await context.secrets.get(SECRET_KEY)) ?? '';
-	return { ...DEFAULTS, ...stored, apiKey };
+	const config = { ...DEFAULTS, ...stored, apiKey };
+	// 旧配置迁移：providerId 曾是全局渠道开关（工作台/编辑/命名共用），拆成三个字段后
+	// 首次读取把旧值带给编辑页与命名，保持行为不变（此前选自定义则三处都在自定义渠道）。
+	// 必须落盘一次：派生源 providerId 会随工作台切模型而变，不落盘的话之后每次读取
+	// 都按新 providerId 重新派生，编辑页/命名的渠道会被工作台操作静默改写。
+	const migration: Partial<StoredConfig> = {};
+	if (stored.editProviderId === undefined) {
+		migration.editProviderId = config.providerId;
+		config.editProviderId = config.providerId;
+	}
+	if (stored.namingProviderId === undefined) {
+		migration.namingProviderId = config.providerId;
+		config.namingProviderId = config.providerId;
+	}
+	if (Object.keys(migration).length) {
+		await writeConfig(context, migration);
+	}
+	return config;
 }
 
 /** 写回配置：apiKey 存 secrets，其余存 globalState（按字段合并） */
@@ -94,6 +113,7 @@ export async function seedModelInjections(context: vscode.ExtensionContext): Pro
 export function editConfigView(config: ImageFlowConfig): ImageFlowConfig {
 	return {
 		...config,
+		providerId: config.editProviderId,
 		model: config.editModel,
 		imageSize: config.editImageSize,
 		aspectRatio: config.editAspectRatio,

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { TransientError } from '../backend/api';
 import { resolveImageCall, requestTaskName } from '../backend/providerRuntime';
+import type { ImageCall } from '../backend/providerRuntime';
 import { buildPrompt, dedupeArchiveNames } from '../prompt/buildPrompt';
 import { createTaskFolder, saveResults, mdBaseName } from './history';
 import { readConfig, editConfigView } from '../ui/config';
@@ -89,6 +90,12 @@ export function aggregateProgress(jobs: PendingJob[]): number {
 	return Math.round(jobs.reduce((sum, j) => sum + jobScore(j), 0) / jobs.length);
 }
 
+/** TaskManager 的可注入依赖（测试 seam）：默认取真实实现，测试替换 Provider 解析与任务文件夹创建 */
+export interface TaskManagerDeps {
+	resolveImageCall: typeof resolveImageCall;
+	createTaskFolder: typeof createTaskFolder;
+}
+
 /**
  * 异步生成任务管理器：负责提交（replyType:async）、持久化、定时轮询拉结果、
  * 完成下载与重启续拉。所有进行中任务共用一个定时器。
@@ -107,7 +114,10 @@ export class TaskManager {
 	/** 点完成通知「查看」时的跳转回调，由 SidebarProvider 注入（聚焦侧栏 + 切任务栏定位） */
 	private revealHandler?: (folder: string) => void;
 
-	constructor(private readonly context: vscode.ExtensionContext) {
+	constructor(
+		private readonly context: vscode.ExtensionContext,
+		private readonly deps: TaskManagerDeps = { resolveImageCall, createTaskFolder }
+	) {
 		// 旧版（任务建在 md 同级）持久化记录无 kind/dir 字段，目录定位已失效，直接丢弃不续拉
 		this.tasks = context.globalState
 			.get<PendingTask[]>(PENDING_KEY, [])
@@ -265,7 +275,7 @@ export class TaskManager {
 	 * 后台并发提交（不 await，调用方立即返回）。返回新建的任务对象，供调用方（如编辑命名）后续更新。
 	 */
 	private async start(opts: StartOptions): Promise<PendingTask> {
-		const [folder, dir] = await createTaskFolder();
+		const [folder, dir] = await this.deps.createTaskFolder();
 		await writePromptFile(dir, opts.promptFileName, buildPromptFileContent(opts.archivePrompt));
 		await archiveInputs(dir, opts.names.map((name, i) => ({ name, data: opts.images[i] })));
 
@@ -287,7 +297,7 @@ export class TaskManager {
 		// 解析失败（如缺密钥）留 false，submitJobs 会照常逐 job 失败处理，不影响这里。
 		let sync = false;
 		try {
-			sync = resolveImageCall(opts.config).adapter.kind === 'sync';
+			sync = this.deps.resolveImageCall(opts.config).adapter.kind === 'sync';
 		} catch {
 			/* 留 false */
 		}
@@ -329,8 +339,19 @@ export class TaskManager {
 		images: string[]
 	): Promise<void> {
 		const submitting = task.jobs.filter((j) => j.status === 'submitting');
-		const { adapter, ctx } = resolveImageCall(config);
-		if (adapter.kind === 'async') {
+		// Provider 解析包 try/catch（F079）：解析失败（缺密钥/渠道不可用等）即批量判失败、
+		// 走下方公共终结路径。此前抛错会让 submitJobs 整个 reject（调用方 void 不接收），
+		// 任务永远卡在 submitting 不终结、不报错。
+		let call: ImageCall | undefined;
+		try {
+			call = this.deps.resolveImageCall(config);
+		} catch (err) {
+			for (const job of submitting) {
+				this.failJob(task, job, err);
+			}
+		}
+		if (call && call.adapter.kind === 'async') {
+			const { adapter, ctx } = call;
 			// async（grsai）串行（错开）提交：submit 只上传 base64、秒回 job id，生成在服务端并行。
 			// 并发提交时多份大图抢同一条上行带宽、各请求 120s 超时计时同瞬起跑，整体上传一旦超窗就被一起
 			// abort——大图编辑任务因此全军覆没。逐个提交让每份上传独占带宽、超时窗口只覆盖自身。
@@ -341,8 +362,25 @@ export class TaskManager {
 				} catch (err) {
 					this.failJob(task, job, err);
 				}
+				// 每处理完一个 job 立即持久化并评估轮询（F096）：远端一接单本地就记账，
+				// 后续 job 还在上传时重载/崩溃也不丢已提交（可能已扣费）的 job id；
+				// 首个 id 到手即开始轮询，不必等整批提交完。
+				// 仅任务仍活跃时才做中途持久化：最后一个 job 若把任务收尾成终态，交给下方
+				// 公共终结路径同步判定——否则这里的 await 会给已在跑的轮询留下「观察到
+				// 已终结任务并抢先通知/移除」的窗口，造成双重终结。
+				if (isTaskActive(task)) {
+					try {
+						await this.persist();
+					} catch (err) {
+						// 持久化失败不打断状态机：job id 仍在内存、轮询照常，下次写入补全
+						log(`任务 ${task.folder} 中途持久化失败（忽略）：${errMsg(err)}`);
+					}
+					this.ensureTimer();
+					this.emit();
+				}
 			}
-		} else {
+		} else if (call) {
+			const { adapter, ctx } = call;
 			// sync（openai-images / gemini）并行提交：submit 阻塞到整张图生成完才返回（300s 窗口）。
 			// 串行会让「并发数」退化为串行生成（墙钟 ≈ 张数 × 单图生成时长）。并行让各图同时生成；
 			// 各请求自带独立的 300s 超时（gen 占大头、upload 占小头，并发上传争抢仍远在窗口内）。
@@ -377,13 +415,20 @@ export class TaskManager {
 
 		// 不变量：自上面的提交处理（含 sync 落盘串行链）结束到下面的 isTaskActive 判定之间不得有 await
 		// （保持同步）。否则 4s 轮询可能观察到「已终结但仍在列表」的任务而重复 notifyFinished + 移除。
-		if (!isTaskActive(task)) {
+		// 兜底再查列表成员资格：最后一个 job 转 running 后轮询可能在本函数收尾前就完成并终结了
+		// 该任务（通知 + 移除都在轮询的同步块内），此时这里跳过，不重复通知。
+		if (!isTaskActive(task) && this.tasks.includes(task)) {
 			// 提交后已无活跃 job：sync 任务全部就地出图/失败，或 async 全部提交失败。
 			// 就地终结（轮询不会接管无 running job 的它），文件夹与 meta.json 保留进入历史留痕。
 			this.notifyFinished(task);
 			this.tasks = this.tasks.filter((t) => t !== task);
 		}
-		await this.persist();
+		try {
+			await this.persist();
+		} catch (err) {
+			// 持久化失败不打断状态机（本函数经 void 调用，reject 会被吞掉导致定时器不启动）
+			log(`任务 ${task.folder} 持久化失败（忽略）：${errMsg(err)}`);
+		}
 		this.ensureTimer();
 		this.emit();
 	}
@@ -562,11 +607,16 @@ export class TaskManager {
 	private async pollJob(config: ImageFlowConfig, task: PendingTask, job: PendingJob): Promise<boolean> {
 		// 按任务自身的 provider+model 解析协议，不受用户事后切换模型/Provider 影响。
 		// baseUrl/apiKey 对内置 grsai 仍回落 config（secrets），对自定义按 model 取自 settings.json。
-		const { adapter, ctx } = resolveImageCall({
-			...config,
-			providerId: task.providerId ?? config.providerId,
-			model: task.model,
-		});
+		// requireModel：原模型被删除/改名时明确报错终结 job（F099），绝不回落首个模型——
+		// 那会把旧 job id 发往另一模型的地址，任务永远查不回来还说不清用了哪个模型
+		const { adapter, ctx } = this.deps.resolveImageCall(
+			{
+				...config,
+				providerId: task.providerId ?? config.providerId,
+				model: task.model,
+			},
+			{ requireModel: true }
+		);
 		if (!adapter.poll) {
 			throw new Error('当前协议不支持异步轮询');
 		}

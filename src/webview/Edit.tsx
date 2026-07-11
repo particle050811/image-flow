@@ -7,7 +7,7 @@ import {
 	type PromptTemplate,
 	type StatusState,
 } from './vscode';
-import { Select, Stepper, Field, RatioSelect } from './fields';
+import { Stepper, Field, ParamsSelect, ModelSelect } from './fields';
 import { Thumb } from './Thumb';
 import { useCooldown } from './useCooldown';
 import { namedRefSnippet } from '../refs';
@@ -114,15 +114,13 @@ export function Edit({
 		});
 	};
 
-	// 分辨率随模型变化 + 切模型按各模型独立记忆恢复档位、播种参数默认值（编辑页用 editModel 组）；与工作台共用 modelSizeControl
-	const { sizeOptions, changeModel } = modelSizeControl(
+	// 档位/比例/自定义参数随模型变化 + 切模型按各模型独立记忆恢复档位、播种参数默认值（编辑页用 editModel 组）；与工作台共用 modelSizeControl
+	const { current, changeModel } = modelSizeControl(
 		config,
 		options,
-		{ model: 'editModel', size: 'editImageSize', memory: 'editImageSizeMemory', params: 'editParams' },
+		{ provider: 'editProviderId', model: 'editModel', size: 'editImageSize', ratio: 'editAspectRatio', memory: 'editImageSizeMemory', params: 'editParams' },
 		onChangeMany
 	);
-	// 编辑模型可调的自定义参数（自定义 Provider 的 custom[]；内置 grsai 恒空）
-	const customParams = options.customByModel[config.editModel] ?? [];
 
 	// 选中模板：追加到提示词末尾（不覆盖已有内容）
 	const applyTemplate = (name: string) => {
@@ -237,34 +235,25 @@ export function Edit({
 
 			<div className="dock">
 			<div className="row">
-				<Select
+				<ModelSelect
 					label="模型"
-					value={config.editModel}
-					options={options.model.map((m) => ({ value: m, label: options.modelLabels[m] ?? m }))}
+					provider={current?.provider ?? config.editProviderId}
+					model={current?.model ?? config.editModel}
+					models={options.imageModels}
 					onChange={changeModel}
 				/>
-				<RatioSelect
-					label="比例"
-					value={config.editAspectRatio}
-					options={options.aspectRatiosByModel[config.editModel] ?? options.aspectRatio}
-					onChange={(v) => onChange('editAspectRatio', v)}
+				<ParamsSelect
+					label="参数"
+					aspectRatio={config.editAspectRatio}
+					ratioOptions={current?.aspectRatios ?? []}
+					imageSize={config.editImageSize}
+					sizeOptions={current?.imageSizes ?? []}
+					customParams={current?.custom ?? []}
+					paramValues={config.editParams}
+					onChangeRatio={(v) => onChange('editAspectRatio', v)}
+					onChangeSize={(v) => onChange('editImageSize', v)}
+					onChangeParam={(key, v) => onChange('editParams', { ...config.editParams, [key]: v })}
 				/>
-				<Select
-					label="分辨率"
-					value={config.editImageSize}
-					options={sizeOptions}
-					onChange={(v) => onChange('editImageSize', v)}
-				/>
-				{customParams.map((p) => (
-					<Select
-						key={p.key}
-						className="field-custom"
-						label={p.label}
-						value={config.editParams[p.key] ?? p.default}
-						options={p.options}
-						onChange={(v) => onChange('editParams', { ...config.editParams, [p.key]: v })}
-					/>
-				))}
 				<Stepper
 					label="并发数"
 					value={config.editConcurrency}

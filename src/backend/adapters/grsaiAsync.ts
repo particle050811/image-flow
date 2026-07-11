@@ -1,7 +1,16 @@
 // grsai 异步图片生成协议：POST /v1/api/generate 拿 job id → 轮询 GET /v1/api/result。
 // nano-banana / gpt-image-2 系列共用此协议。内置 grsai Provider 的图片模型即走这里。
 
-import { fetchWithTimeout, parseGenerateResponse, toVipPixels, normalizeBase, TransientError } from '../api';
+import {
+	fetchWithTimeout,
+	readJsonLimited,
+	parseGenerateResponse,
+	toVipPixels,
+	normalizeBase,
+	TransientError,
+	CONTROL_BODY_BYTES,
+	CONTROL_BODY_TIMEOUT,
+} from '../api';
 import type { ImageFlowConfig } from '../../shared';
 import type { ImageAdapter, CallContext, AdapterJobResult, ResultItem, SubmitAsync } from './types';
 
@@ -66,7 +75,10 @@ export const grsaiAsync: ImageAdapter = {
 			SUBMIT_TIMEOUT
 		);
 
-		const data = parseGenerateResponse(await response.json());
+		// 提交回执只有 job id 等 KB 级字段：按控制面小上限读，异常体不占大内存
+		const data = parseGenerateResponse(
+			await readJsonLimited(response, '提交响应', CONTROL_BODY_BYTES, CONTROL_BODY_TIMEOUT)
+		);
 		if (!response.ok || data.status === 'failed' || data.status === 'violation') {
 			throw new Error(data.error || `提交生成失败（status: ${data.status}）`);
 		}
@@ -83,9 +95,14 @@ export const grsaiAsync: ImageAdapter = {
 		});
 		// 上游网关 5xx / 限流 429 是可恢复的瞬时故障（常返回 HTML body），抛 TransientError 让轮询下轮重试，不判失败
 		if (!response.ok && (response.status >= 500 || response.status === 429)) {
+			// 不读错误体就提前抛：先取消正文，别让异常上游占着 socket
+			void response.body?.cancel().catch(() => {});
 			throw new TransientError(`查询结果失败（HTTP ${response.status}）`);
 		}
-		const data = parseGenerateResponse(await response.json());
+		// 查询结果只带状态与图片 url：按控制面小上限 + 短窗口读，异常体不把串行轮询卡两分钟
+		const data = parseGenerateResponse(
+			await readJsonLimited(response, '查询响应', CONTROL_BODY_BYTES, CONTROL_BODY_TIMEOUT)
+		);
 
 		if (data.status === 'failed' || data.status === 'violation') {
 			return { status: data.status, results: [], error: data.error || `生成失败（status: ${data.status}）` };

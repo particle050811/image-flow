@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { Task, TaskImage } from '../shared';
-import { fetchWithTimeout } from '../backend/api';
+import { fetchWithTimeout, readBodyLimited } from '../backend/api';
 import { isImageExt, isMediaFileName, mediaTypeOfFileName, extFromMime } from '../util/images';
 import type { ResultItem } from '../backend/adapters/types';
 import { uriStem } from '../storage/paths';
@@ -57,9 +57,11 @@ export async function saveResults(
 		if (item.kind === 'url') {
 			const res = await fetchWithTimeout(item.url);
 			if (!res.ok) {
+				// 不读错误体就抛：先取消正文释放连接
+				void res.body?.cancel().catch(() => {});
 				throw new Error(`下载图片失败（HTTP ${res.status}）`);
 			}
-			data = new Uint8Array(await res.arrayBuffer());
+			data = await readBodyLimited(res, '下载图片');
 			// 从 URL 取扩展名，校验落在图片白名单内，否则回退 png——避免畸形 URL 落地怪扩展名
 			const rawExt = '.' + (item.url.split('?')[0].split('.').pop()?.toLowerCase() || 'png');
 			ext = isImageExt(rawExt) ? rawExt.slice(1) : 'png';

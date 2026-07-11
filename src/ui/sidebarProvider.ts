@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import { uriBaseName } from '../storage/paths';
 import { mediaTypeOfFileName } from '../util/images';
 import { readConfig, writeConfig } from './config';
-import { configOptions, currentProvider, ensureSettingsFile, reloadCustomProvider } from '../backend/providerRuntime';
-import { providerSwitchPatch, CUSTOM_PROVIDER_ID } from '../backend/providers';
+import { configOptions, ensureSettingsFile, reloadCustomProvider } from '../backend/providerRuntime';
+import { CUSTOM_PROVIDER_ID } from '../backend/providers';
 import { listHistory } from '../task/history';
 import { isPreviewDoc, PREVIEW_DOC_NAME } from '../task/preview';
 import { TaskManager } from '../task/tasks';
@@ -163,9 +163,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private async onMessage(msg: OutboundMessage): Promise<void> {
 		switch (msg.type) {
 			case 'init': {
-				// 自愈：providerId=custom 但缺 settings.json → 重建脚手架并重读，避免「选中自定义却无模型」的卡死
+				// 自愈：选中自定义渠道模型但缺 settings.json → 重建脚手架并重读，避免「选中自定义却无模型」的卡死
 				const initConfig = await readConfig(this.context);
-				if (initConfig.providerId === CUSTOM_PROVIDER_ID) {
+				if (initConfig.providerId === CUSTOM_PROVIDER_ID || initConfig.editProviderId === CUSTOM_PROVIDER_ID) {
 					await ensureSettingsFile(this.context.extensionUri);
 					await reloadCustomProvider();
 				}
@@ -182,9 +182,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			}
 			case 'saveConfig':
 				await writeConfig(this.context, msg.patch);
-				break;
-			case 'selectProvider':
-				await this.selectProvider(msg.providerId);
 				break;
 			case 'openProviderSettings':
 				await this.openProviderSettings();
@@ -338,42 +335,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		await this.materials.pushAutoLibraries();
 	}
 
-	/** 推送当前配置 + 由当前 Provider 派生的 options（下拉候选随 grsai/自定义切换） */
+	/** 推送当前配置 + 合并全渠道派生的 options（模型下拉分组候选） */
 	private async pushConfig(): Promise<void> {
 		const config = await readConfig(this.context);
-		this.post({ type: 'config', config, options: configOptions(config) });
-		this.warnIfCustomEmpty(config);
+		const options = configOptions();
+		this.post({ type: 'config', config, options });
+		this.warnIfCustomMissing(config, options);
 	}
 
 	/**
-	 * 自定义 Provider 选中但没有可用图片模型（settings.json 的 image[] 为空或全部无效）时给明确提示。
-	 * 补「缺文件自愈」覆盖不到的一格：文件存在但内容没配模型——否则前端模型下拉空白、点生成才报错。
+	 * 选中的是自定义渠道模型、但自定义渠道没有可用图片模型（settings.json 缺失/解析失败/image[] 为空）时给明确提示。
+	 * 补「缺文件自愈」覆盖不到的一格：文件存在但内容没配模型——否则前端模型下拉回落首个、点生成才报错。
 	 */
-	private warnIfCustomEmpty(config: ImageFlowConfig): void {
-		if (config.providerId === CUSTOM_PROVIDER_ID && !currentProvider(config).image.length) {
+	private warnIfCustomMissing(config: ImageFlowConfig, options: ReturnType<typeof configOptions>): void {
+		const usesCustom = config.providerId === CUSTOM_PROVIDER_ID || config.editProviderId === CUSTOM_PROVIDER_ID;
+		if (usesCustom && !options.imageModels.some((m) => m.provider === CUSTOM_PROVIDER_ID)) {
 			this.post({
 				type: 'error',
 				message: '自定义 API 没有可用的图片模型，请在 settings.json 的 image[] 中配置（点「打开配置文件」），改后重载窗口生效。',
 			});
 		}
-	}
-
-	/**
-	 * 切换 API（Provider）：存 providerId；选自定义则确保 settings.json 存在并重读；
-	 * 再把工作台/编辑模型对齐到新 Provider 的有效值并播种参数默认值，最后回推配置与候选。
-	 */
-	private async selectProvider(providerId: string): Promise<void> {
-		await writeConfig(this.context, { providerId });
-		if (providerId === CUSTOM_PROVIDER_ID) {
-			await ensureSettingsFile(this.context.extensionUri);
-			await reloadCustomProvider();
-		}
-		const config = await readConfig(this.context);
-		const patch = providerSwitchPatch(currentProvider(config), config);
-		if (Object.keys(patch).length) {
-			await writeConfig(this.context, patch);
-		}
-		await this.pushConfig();
 	}
 
 	/** 打开自定义配置文件：缺则先建脚手架，重读后用编辑器打开；刷新候选（刚创建时模型列表更新） */

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { uriBaseName } from '../storage/paths';
 import { readConfig } from './config';
+import { GRSAI_PROVIDER_ID } from '../backend/providers';
 import { TaskManager } from '../task/tasks';
 import { buildExportPrompt } from '../prompt/buildPrompt';
 import { openRequestPreview } from '../task/preview';
@@ -75,7 +76,9 @@ export class WorkbenchController {
 	/** 执行生成：校验 Key → 调 taskManager.submit 提交异步任务（立即返回，后台轮询） */
 	private async doGenerate(mdUri: vscode.Uri): Promise<void> {
 		const config = await readConfig(this.context);
-		if (!config.apiKey) {
+		// 密钥检查按当前渠道分流（F095）：只有 grsai 用 secrets 里的 apiKey；
+		// 自定义模型自带密钥，缺失时由 resolveImageCall 报错，不能在这里用 grsai 密钥一票拦截
+		if (config.providerId === GRSAI_PROVIDER_ID && !config.apiKey) {
 			this.deps.post({ type: 'error', message: '尚未配置 API Key，请在设置页填写。' });
 			return;
 		}

@@ -1,78 +1,113 @@
 import * as assert from 'assert';
-import { editConfigView } from '../ui/config';
-import { supportedSizes, switchModelSize, modelSizeControl } from '../modelOptions';
+import * as vscode from 'vscode';
+import { editConfigView, readConfig, writeConfig } from '../ui/config';
+import { switchModelParams, modelSizeControl, qualifiedModel, splitQualifiedModel, findImageModel } from '../modelOptions';
 import { buildOptions, BUILTIN_GRSAI } from '../backend/providers';
 import type { ImageFlowConfig } from '../shared';
 import { baseConfig } from './fixtures';
 
-// 内置 grsai 派生的 ConfigOptions，供 supportedSizes/switchModelSize/modelSizeControl 测试复用
-const CONFIG_OPTIONS = buildOptions(BUILTIN_GRSAI);
+// 内置 grsai 派生的 ConfigOptions，供 modelOptions 各函数测试复用
+const CONFIG_OPTIONS = buildOptions([BUILTIN_GRSAI]);
 
-suite('supportedSizes', () => {
-	test('受限模型只列支持档位，其余回退全集', () => {
-		assert.deepStrictEqual(supportedSizes(CONFIG_OPTIONS, 'gpt-image-2'), ['1K']);
-		assert.deepStrictEqual(supportedSizes(CONFIG_OPTIONS, 'nano-banana-2'), ['1K', '2K', '4K']);
+suite('qualifiedModel', () => {
+	test('拼接与拆分互逆；非法值当作 grsai 裸模型名', () => {
+		const q = qualifiedModel('custom', 'gpt-image-2');
+		assert.deepStrictEqual(splitQualifiedModel(q), { provider: 'custom', model: 'gpt-image-2' });
+		assert.deepStrictEqual(splitQualifiedModel('nano-banana-2'), { provider: 'grsai', model: 'nano-banana-2' });
 	});
 });
 
-suite('switchModelSize', () => {
-	test('切到受限模型回退首档，旧模型分辨率记入记忆', () => {
-		const r = switchModelSize(CONFIG_OPTIONS, {}, 'nano-banana-2', '4K', 'gpt-image-2');
-		assert.strictEqual(r.size, '1K');
-		assert.strictEqual(r.memory['nano-banana-2'], '4K');
+suite('findImageModel', () => {
+	test('按 (渠道, 模型) 精确命中；找不到先回落同渠道首个，渠道不可用再回落全局首个', () => {
+		assert.strictEqual(findImageModel(CONFIG_OPTIONS, 'grsai', 'gpt-image-2')?.label, 'GPT Image 2');
+		// 同渠道回落：模型被删仍留在 grsai 内（与后端 resolveImageCall 一致）
+		assert.strictEqual(findImageModel(CONFIG_OPTIONS, 'grsai', '已删除的模型')?.model, 'nano-banana-2');
+		// 渠道整个不可用（无 custom 项）→ 回落全局首个
+		assert.strictEqual(findImageModel(CONFIG_OPTIONS, 'custom', '不存在')?.model, 'nano-banana-2');
 	});
-	test('切回原模型恢复其独立分辨率（4K 不丢）', () => {
-		const r = switchModelSize(
-			CONFIG_OPTIONS,
-			{ 'nano-banana-2': '4K' },
-			'gpt-image-2',
-			'1K',
-			'nano-banana-2'
-		);
-		assert.strictEqual(r.size, '4K');
-		assert.strictEqual(r.memory['gpt-image-2'], '1K');
+});
+
+suite('switchModelParams', () => {
+	const NANO = qualifiedModel('grsai', 'nano-banana-2');
+	const GPT = qualifiedModel('grsai', 'gpt-image-2');
+	const nanoModel = findImageModel(CONFIG_OPTIONS, 'grsai', 'nano-banana-2')!;
+	const gptModel = findImageModel(CONFIG_OPTIONS, 'grsai', 'gpt-image-2')!;
+	const snap = (aspectRatio: string, imageSize: string, params: Record<string, string> = {}) =>
+		({ aspectRatio, imageSize, params });
+	test('切到受限模型回退首档，旧模型整套参数记入记忆', () => {
+		const r = switchModelParams(gptModel, {}, NANO, snap('3:4', '4K'), GPT);
+		assert.strictEqual(r.snapshot.imageSize, '1K');
+		assert.strictEqual(r.snapshot.aspectRatio, '3:4'); // gpt-image-2 支持 3:4 → 保留
+		assert.deepStrictEqual(r.memory[NANO], snap('3:4', '4K'));
 	});
-	test('切到未访问且兼容的模型沿用当前分辨率', () => {
-		const r = switchModelSize(CONFIG_OPTIONS, {}, 'nano-banana-2', '2K', 'nano-banana-pro');
-		assert.strictEqual(r.size, '2K');
+	test('切回原模型恢复其独立参数（4K 与比例都不丢）', () => {
+		const r = switchModelParams(nanoModel, { [NANO]: snap('16:9', '4K') }, GPT, snap('3:4', '1K'), NANO);
+		assert.strictEqual(r.snapshot.imageSize, '4K');
+		assert.strictEqual(r.snapshot.aspectRatio, '16:9');
+		assert.deepStrictEqual(r.memory[GPT], snap('3:4', '1K'));
+	});
+	test('切到未访问且兼容的模型沿用当前参数', () => {
+		const r = switchModelParams(nanoModel, {}, GPT, snap('1:1', '2K'), NANO);
+		assert.strictEqual(r.snapshot.imageSize, '2K');
+		assert.strictEqual(r.snapshot.aspectRatio, '1:1');
+	});
+	test('旧配置的裸字符串记忆值当作无记忆，不抛错', () => {
+		const legacy = { [NANO]: '4K' as unknown as import('../shared').ModelParamSnapshot };
+		const r = switchModelParams(nanoModel, legacy, GPT, snap('3:4', '1K'), NANO);
+		assert.strictEqual(r.snapshot.imageSize, '1K'); // 沿用当前值而非崩溃
+	});
+	test('自定义参数逐键校验：记忆值失效用默认值', () => {
+		const custom = { ...gptModel, custom: [{ key: 'q', label: 'Q', options: ['low', 'high'], default: 'low' }] };
+		const r = switchModelParams(custom, { [GPT]: snap('3:4', '1K', { q: '已下线档位' }) }, NANO, snap('3:4', '4K'), GPT);
+		assert.deepStrictEqual(r.snapshot.params, { q: 'low' });
+		const r2 = switchModelParams(custom, { [GPT]: snap('3:4', '1K', { q: 'high' }) }, NANO, snap('3:4', '4K'), GPT);
+		assert.deepStrictEqual(r2.snapshot.params, { q: 'high' });
 	});
 });
 
 suite('modelSizeControl', () => {
-	test('工作台组：切模型一次性写回三键（单条 patch）', () => {
+	test('工作台组：切模型一次性写回六键（单条 patch），比例越界回退首项', () => {
 		const patches: Partial<ImageFlowConfig>[] = [];
-		const { sizeOptions, changeModel } = modelSizeControl(
+		const { current, changeModel } = modelSizeControl(
 			baseConfig,
 			CONFIG_OPTIONS,
-			{ model: 'model', size: 'imageSize', memory: 'imageSizeMemory', params: 'params' },
+			{ provider: 'providerId', model: 'model', size: 'imageSize', ratio: 'aspectRatio', memory: 'imageSizeMemory', params: 'params' },
 			(p) => patches.push(p)
 		);
-		assert.deepStrictEqual(sizeOptions, ['1K', '2K', '4K']);
-		changeModel('gpt-image-2');
-		// 只发一条 patch（F059：原 3 次 onChange 收敛为 1 次），且四键齐全、值正确（内置 grsai 无自定义参数 → params 为空）
+		assert.deepStrictEqual(current?.imageSizes, ['1K', '2K', '4K']);
+		changeModel(qualifiedModel('grsai', 'gpt-image-2'));
+		// 只发一条 patch，六键齐全、值正确（内置 grsai 无自定义参数 → params 为空；3:4 受支持 → 比例保留）
 		assert.strictEqual(patches.length, 1);
 		assert.deepStrictEqual(patches[0], {
+			providerId: 'grsai',
 			model: 'gpt-image-2',
 			imageSize: '1K',
-			imageSizeMemory: { 'nano-banana-2': '1K' },
+			aspectRatio: '3:4',
+			imageSizeMemory: {
+				[qualifiedModel('grsai', 'nano-banana-2')]: { aspectRatio: '3:4', imageSize: '1K', params: {} },
+			},
 			params: {},
 		});
 	});
-	test('编辑组：用 editModel/editImageSize/editImageSizeMemory 三键', () => {
+	test('编辑组：用 editProviderId/editModel/editImageSize/editAspectRatio/editImageSizeMemory 键', () => {
 		const patches: Partial<ImageFlowConfig>[] = [];
-		const { sizeOptions, changeModel } = modelSizeControl(
+		const { current, changeModel } = modelSizeControl(
 			baseConfig,
 			CONFIG_OPTIONS,
-			{ model: 'editModel', size: 'editImageSize', memory: 'editImageSizeMemory', params: 'editParams' },
+			{ provider: 'editProviderId', model: 'editModel', size: 'editImageSize', ratio: 'editAspectRatio', memory: 'editImageSizeMemory', params: 'editParams' },
 			(p) => patches.push(p)
 		);
-		assert.deepStrictEqual(sizeOptions, ['1K']); // editModel=gpt-image-2 仅 1K
-		changeModel('nano-banana-2');
+		assert.deepStrictEqual(current?.imageSizes, ['1K']); // editModel=gpt-image-2 仅 1K
+		changeModel(qualifiedModel('grsai', 'nano-banana-2'));
 		assert.strictEqual(patches.length, 1);
 		assert.deepStrictEqual(patches[0], {
+			editProviderId: 'grsai',
 			editModel: 'nano-banana-2',
 			editImageSize: '2K',
-			editImageSizeMemory: { 'gpt-image-2': '2K' },
+			editAspectRatio: '16:9',
+			editImageSizeMemory: {
+				[qualifiedModel('grsai', 'gpt-image-2')]: { aspectRatio: '16:9', imageSize: '2K', params: {} },
+			},
 			editParams: {},
 		});
 	});
@@ -80,13 +115,50 @@ suite('modelSizeControl', () => {
 
 suite('editConfigView', () => {
 	test('用编辑专属参数覆盖主参数，其余字段保留', () => {
-		const view = editConfigView({ ...baseConfig, editParams: { quality: 'low' } });
+		const view = editConfigView({ ...baseConfig, editParams: { quality: 'low' }, editProviderId: 'custom' });
 		assert.strictEqual(view.model, 'gpt-image-2');
+		assert.strictEqual(view.providerId, 'custom');
 		assert.strictEqual(view.aspectRatio, '16:9');
 		assert.strictEqual(view.imageSize, '2K');
 		assert.strictEqual(view.concurrency, 3);
 		assert.deepStrictEqual(view.params, { quality: 'low' });
 		assert.strictEqual(view.apiKey, 'k');
 		assert.strictEqual(view.baseUrl, 'https://example.com');
+	});
+});
+suite('readConfig 渠道字段迁移', () => {
+	const makeContext = (initial: Record<string, unknown>) => {
+		let stored = initial;
+		return {
+			context: {
+				globalState: {
+					get: () => stored,
+					update: async (_key: string, value: Record<string, unknown>) => {
+						stored = value;
+					},
+				},
+				secrets: { get: async () => 'k', store: async () => {} },
+			} as unknown as vscode.ExtensionContext,
+			getStored: () => stored,
+		};
+	};
+	test('旧配置首读把 providerId 带给编辑页/命名并落盘，之后工作台切渠道不再影响两者', async () => {
+		const { context, getStored } = makeContext({ providerId: 'custom' });
+		const first = await readConfig(context);
+		assert.strictEqual(first.editProviderId, 'custom');
+		assert.strictEqual(first.namingProviderId, 'custom');
+		// 迁移已落盘（只发生一次）
+		assert.strictEqual(getStored().editProviderId, 'custom');
+		// 模拟工作台切回 grsai 模型
+		await writeConfig(context, { providerId: 'grsai' });
+		const second = await readConfig(context);
+		assert.strictEqual(second.providerId, 'grsai');
+		assert.strictEqual(second.editProviderId, 'custom'); // 不被工作台操作改写
+		assert.strictEqual(second.namingProviderId, 'custom');
+	});
+	test('已迁移过的配置不再改写', async () => {
+		const { context } = makeContext({ providerId: 'custom', editProviderId: 'grsai', namingProviderId: 'grsai' });
+		const cfg = await readConfig(context);
+		assert.strictEqual(cfg.editProviderId, 'grsai');
 	});
 });

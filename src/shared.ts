@@ -2,19 +2,26 @@
 // 纯类型文件——编译后被擦除，对两端环境都安全，不要在此引入 vscode 或 DOM 依赖。
 // 这是 Config / Task / 消息协议的唯一定义处，避免在 api.ts、command.ts、webview 各写一份导致漂移。
 
+/** 一个模型上次使用的参数快照：切走时整体记下，切回时校验后恢复（比例/分辨率/自定义参数全独立） */
+export interface ModelParamSnapshot {
+	aspectRatio: string;
+	imageSize: string;
+	params: Record<string, string>;
+}
+
 /** 扩展配置（globalState 存非敏感项 + secrets 存 apiKey） */
 export interface ImageFlowConfig {
 	apiKey: string;
 	baseUrl: string;
-	/** 当前选用的 API（Provider）：'grsai' = 内置；'custom' = settings.json 自定义 */
+	/** 工作台选中模型所属渠道：'grsai' = 内置；'custom' = settings.json 自定义（随模型选择自动切换） */
 	providerId: string;
 	model: string;
 	/** 工作台当前模型的可见自定义参数当前值（如 {quality:'high'}）；内置 grsai 恒空 */
 	params: Record<string, string>;
 	aspectRatio: string;
 	imageSize: string;
-	/** 每个生成模型上次选用的分辨率，切模型时据此恢复（imageSize 是当前模型的生效值） */
-	imageSizeMemory: Record<string, string>;
+	/** 每个 (渠道, 模型) 上次使用的参数快照，切模型时据此恢复（键为渠道限定名，各渠道各模型互相独立） */
+	imageSizeMemory: Record<string, ModelParamSnapshot>;
 	concurrency: number;
 	/** 工作台素材库图片每行显示几张 */
 	workbenchCols: number;
@@ -36,18 +43,22 @@ export interface ImageFlowConfig {
 	workbenchTemplate: string;
 	/** 编辑页专属模型（与主生成界面互不影响） */
 	editModel: string;
+	/** 编辑页选中模型所属渠道（随模型选择自动切换） */
+	editProviderId: string;
 	/** 编辑页专属比例 */
 	editAspectRatio: string;
 	/** 编辑页专属分辨率 */
 	editImageSize: string;
-	/** 每个编辑模型上次选用的分辨率，切模型时据此恢复 */
-	editImageSizeMemory: Record<string, string>;
+	/** 每个 (渠道, 模型) 上次使用的编辑页参数快照，切模型时据此恢复 */
+	editImageSizeMemory: Record<string, ModelParamSnapshot>;
 	/** 编辑页专属并发数 */
 	editConcurrency: number;
 	/** 编辑页当前模型的可见自定义参数当前值（与 params 互不影响） */
 	editParams: Record<string, string>;
 	/** AI 给任务命名所用的对话模型 */
 	namingModel: string;
+	/** 命名模型所属渠道 */
+	namingProviderId: string;
 	/** 是否在提交任务时自动 AI 命名（生成与编辑通用） */
 	autoName: boolean;
 	/** 缩略图上的收藏 ⭐ / 编辑 ✎ 按钮是否常驻显示（关闭则仅 hover 出现；编辑区除外） */
@@ -93,31 +104,31 @@ export interface CustomParam {
 	default: string;
 }
 
+/** 发往 webview 的一个图片模型：跨渠道合并列表的一项，同名模型靠 provider 区分；不含 baseUrl/apiKey */
+export interface WebviewImageModel {
+	/** 所属渠道 id：'grsai' = 内置；'custom' = settings.json 自定义 */
+	provider: string;
+	/** 渠道展示名（模型下拉分组标题） */
+	providerLabel: string;
+	/** 模型 API 名 */
+	model: string;
+	/** 模型展示名 */
+	label: string;
+	/** 该模型支持的比例 */
+	aspectRatios: readonly string[];
+	/** 该模型支持的分辨率档位 */
+	imageSizes: readonly string[];
+	/** 该模型可调的自定义参数（可见项），无则空数组 */
+	custom: readonly CustomParam[];
+}
+
 /**
- * 各配置项的可选值，供侧栏下拉渲染。随当前 Provider（grsai / 自定义）派生。
- * 模型相关项按模型分表（…ByModel），前端用当前选中模型名索引；不含任何 baseUrl/apiKey。
+ * 各配置项的可选值，供侧栏下拉渲染。合并全部渠道（内置 grsai + 可用的自定义）的模型，
+ * 前端用 (providerId, model) 二元组索引；不含任何 baseUrl/apiKey。
  */
 export interface ConfigOptions {
-	/** 可选的 API（Provider）列表：内置 grsai + 自定义 */
-	providers: readonly { id: string; label: string }[];
-	/** 当前 Provider 是否为自定义（前端据此隐藏内置 grsai 的 API Key 输入框） */
-	isCustom: boolean;
-	/** 当前 Provider 的图片模型 API 名列表 */
-	model: readonly string[];
-	/** 图片模型 API 名 → 展示名 */
-	modelLabels: Record<string, string>;
-	/** 模型 → 该模型支持的比例；模型不在表内时回退 aspectRatio 全集 */
-	aspectRatiosByModel: Record<string, readonly string[]>;
-	/** 模型 → 该模型支持的分辨率档位；模型不在表内时回退 imageSize 全集 */
-	imageSizesByModel: Record<string, readonly string[]>;
-	/** 模型 → 该模型可调的自定义参数（可见项），无则空数组 */
-	customByModel: Record<string, readonly CustomParam[]>;
-	/** 比例全集兜底（模型不在 aspectRatiosByModel 时用） */
-	aspectRatio: readonly string[];
-	/** 分辨率全集兜底（模型不在 imageSizesByModel 时用） */
-	imageSize: readonly string[];
-	/** 当前 Provider 的命名（对话）模型 API 名列表 */
-	namingModel: readonly string[];
+	/** 全部渠道的图片模型（按渠道分组的顺序排列） */
+	imageModels: readonly WebviewImageModel[];
 }
 
 /** 媒体大类：图片 / 音频 / 视频。前后端共享单一来源（util/images 的判定函数复用此类型） */
@@ -328,7 +339,6 @@ export type InboundMessage =
 export type OutboundMessage =
 	| { type: 'init' }
 	| { type: 'saveConfig'; patch: Partial<ImageFlowConfig> }
-	| { type: 'selectProvider'; providerId: string }
 	| { type: 'openProviderSettings' }
 	| { type: 'generate' }
 	| { type: 'buildAndCopy' }

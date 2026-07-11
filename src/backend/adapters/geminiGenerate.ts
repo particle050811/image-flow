@@ -4,7 +4,7 @@
 // OpenAI 兼容的 gemini 代理（说 /v1/images 或 /v1/chat 那套）请改用 openai-images / openai-chat adapter；
 // 谷歌原生端点（generativelanguage.googleapis.com，用 ?key=/x-goog-api-key）暂不在支持范围。
 
-import { fetchWithTimeout, normalizeBase } from '../api';
+import { fetchWithTimeout, readJsonLimited, normalizeBase } from '../api';
 import { mergeCustomParams } from './types';
 import type { ImageFlowConfig } from '../../shared';
 import type { ImageAdapter, CallContext, SubmitSync, ResultItem } from './types';
@@ -86,7 +86,7 @@ export const geminiGenerate: ImageAdapter = {
 			SUBMIT_TIMEOUT
 		);
 
-		const data = (await response.json()) as {
+		const data = (await readJsonLimited(response, '图片生成响应')) as {
 			candidates?: unknown;
 			error?: { message?: unknown };
 		};
