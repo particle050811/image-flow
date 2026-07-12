@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { promptsRoot } from '../storage/storage';
+import { log } from '../util/log';
 import type { PromptTemplate } from '../shared';
 
 /**
@@ -37,6 +38,8 @@ export async function listPromptTemplates(): Promise<PromptTemplate[]> {
 /**
  * 按名读单个预设模板内容（.image-flow/prompts/<name>.md 全文，trim）。
  * 空名 / 文件不存在 / 读取失败 / 空内容均返回空串——工作台预设是可选前置，缺失不阻断生成。
+ * 空名是「未选模板」属正常静默；非空名读不到说明用户选了模板但文件被删/读坏，
+ * 生成会静默少掉模板段，记台账日志留痕，避免「为什么模板没生效」无从排查。
  */
 export async function readTemplateContent(name: string): Promise<string> {
 	if (!name) {
@@ -46,7 +49,8 @@ export async function readTemplateContent(name: string): Promise<string> {
 		const uri = vscode.Uri.joinPath(promptsRoot(), `${name}.md`);
 		const bytes = await vscode.workspace.fs.readFile(uri);
 		return Buffer.from(bytes).toString('utf8').trim();
-	} catch {
+	} catch (err) {
+		log(`警告：预设模板「${name}」读取失败（.image-flow/prompts/${name}.md），本次生成不含该模板段：${err instanceof Error ? err.message : String(err)}`);
 		return '';
 	}
 }

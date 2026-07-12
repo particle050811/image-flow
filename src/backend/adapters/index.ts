@@ -5,11 +5,13 @@ import { grsaiAsync } from './grsaiAsync';
 import { openaiImages } from './openaiImages';
 import { geminiGenerate } from './geminiGenerate';
 import { openaiChat } from './openaiChat';
+import { jimengCli } from './jimengCli';
 
 const IMAGE_ADAPTERS: Record<string, ImageAdapter> = {
 	[grsaiAsync.id]: grsaiAsync,
 	[openaiImages.id]: openaiImages,
 	[geminiGenerate.id]: geminiGenerate,
+	[jimengCli.id]: jimengCli,
 };
 
 const CHAT_ADAPTERS: Record<string, ChatAdapter> = {

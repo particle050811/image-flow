@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import { TransientError } from '../backend/api';
 import { resolveImageCall, requestTaskName } from '../backend/providerRuntime';
 import type { ImageCall } from '../backend/providerRuntime';
+import { isJimengVideoModel, JIMENG_PROVIDER_ID } from '../backend/providers';
+import { ensureJimengReady } from '../backend/jimengGuide';
 import { buildPrompt, dedupeArchiveNames } from '../prompt/buildPrompt';
 import { createTaskFolder, saveResults, mdBaseName } from './history';
 import { readConfig, editConfigView } from '../ui/config';
@@ -27,6 +29,15 @@ interface StartOptions {
 	source: string;
 	/** 本次生效的配置（编辑任务传入 editConfigView 结果） */
 	config: ImageFlowConfig;
+	/** AI 命名用配置（编辑任务命名走全局配置而非编辑视图），缺省取 config */
+	namingConfig?: ImageFlowConfig;
+	/** 创建阶段（后台）执行：解析提示词与参考图。视频参考素材可达数十 MB（读文件 + base64），
+	 *  放在点击路径上会让「生成」按钮长时间卡在忙碌态，故建卡后再在后台执行 */
+	build: () => Promise<BuiltPrompt>;
+}
+
+/** build 回调的产物：提交与归档所需的全部提示词/素材 */
+interface BuiltPrompt {
 	/** 注入后的最终提示词（用于提交发送） */
 	prompt: string;
 	/** 归档正文：图片引用指向任务 input/，写入提示词文件，可直接右键重新生成 */
@@ -35,6 +46,8 @@ interface StartOptions {
 	images: string[];
 	/** 参考图归档文件名（与 images 等长，保留原名、重名已去重，与 archivePrompt 引用对应） */
 	names: string[];
+	/** AI 命名的概括对象（生成 = md 正文含图片引用、不含注入句；编辑 = 原始提示词） */
+	namingPrompt: string;
 }
 
 /** globalState 中存放未完成任务的键 */
@@ -47,6 +60,15 @@ const POLL_INTERVAL_SLOW = 30 * 1000;
 const SLOW_AFTER = 10 * 60 * 1000;
 /** 单个任务超时兜底（ms）：超过则把仍 running 的 job 标记失败，避免僵死记录永不清除 */
 const TASK_TIMEOUT = 30 * 60 * 1000;
+/** 即梦视频单任务条数上限：视频耗积分大，防止误用生图并发档位一次提交太多条 */
+const JIMENG_VIDEO_MAX_COUNT = 4;
+/** 即梦生图单任务张数上限：CLI generate_num 上限 10，提交前钳制让台账（requested）与远端一致 */
+const JIMENG_IMAGE_MAX_COUNT = 10;
+
+/** 本次配置是否为即梦视频（全能参考）调用 */
+function isJimengVideoCall(config: ImageFlowConfig): boolean {
+	return config.providerId === JIMENG_PROVIDER_ID && isJimengVideoModel(config.model);
+}
 
 /**
  * 是否为可重试的网络瞬时错误。
@@ -141,7 +163,11 @@ export class TaskManager {
 	}
 
 	private async persist(): Promise<void> {
-		await this.context.globalState.update(PENDING_KEY, this.tasks);
+		// 创建中的任务不持久化：尚无已提交的远端 job，重启后无从续拉，resume 直接不出现
+		await this.context.globalState.update(
+			PENDING_KEY,
+			this.tasks.filter((t) => !t.creating)
+		);
 	}
 
 	/** 把 task.meta 串行写入 meta.json。写失败为非关键（readTaskMeta 有回退），吞掉不阻断主流程 */
@@ -190,7 +216,7 @@ export class TaskManager {
 	}
 
 	/**
-	 * 提交一次 Markdown 生成：读文件 → 解析提示词 → 走公共提交流程。
+	 * 提交一次 Markdown 生成：读文件校验非空 → 走公共提交流程（提示词解析在后台创建阶段执行）。
 	 */
 	async submit(mdUri: vscode.Uri): Promise<void> {
 		const config = await readConfig(this.context);
@@ -199,27 +225,31 @@ export class TaskManager {
 		if (!content) {
 			throw new Error('Markdown 文件内容为空，无法生成。');
 		}
-
-		const { prompt: basePrompt, images, names, archivePrompt } = await buildPrompt(mdUri, content);
-		const prompt = await buildInjectedPrompt(config, basePrompt);
 		const prefix = mdBaseName(mdUri);
-		const task = await this.start({
+		await this.start({
 			kind: 'generate',
 			prefix,
 			mdUri: mdUri.toString(),
 			promptFileName: `${prefix}.md`,
 			source: vscode.workspace.asRelativePath(mdUri),
 			config,
-			prompt,
-			archivePrompt,
-			images,
-			names,
+			build: async () => {
+				// 即梦视频（全能参考）可直接吃音/视频参考素材，放开非图片限制；其余后端维持仅图片
+				const { prompt: basePrompt, images, names, archivePrompt } = await buildPrompt(
+					mdUri,
+					content,
+					isJimengVideoCall(config)
+				);
+				// AI 命名用 md 正文（含图片引用、不含注入句）概括；同一 md 多次生成内容可能不同，故单独命名
+				return {
+					prompt: await buildInjectedPrompt(config, basePrompt),
+					archivePrompt,
+					images,
+					names,
+					namingPrompt: basePrompt,
+				};
+			},
 		});
-		// AI 命名：用 md 正文（含图片引用、不含注入句）概括，命名前先以 md 名占位、失败即回退该名。
-		// 同一 md 多次生成内容可能不同，故生成任务也单独命名。
-		if (config.autoName) {
-			void this.nameTask(task, config, basePrompt);
-		}
 	}
 
 	/**
@@ -237,21 +267,22 @@ export class TaskManager {
 		// 归档落盘名保留原名、重名去重；发送提示词仍按编辑区原名编号 [imageN]
 		const fileNames = dedupeArchiveNames(names);
 		const archivePrompt = buildEditArchivePrompt(rawPrompt, names, fileNames);
-		const task = await this.start({
+		await this.start({
 			kind: 'edit',
 			prefix: 'edit',
 			promptFileName: 'edit.md',
 			source: '（编辑任务）',
 			config,
-			prompt,
-			archivePrompt,
-			images: refs.map((r) => r.data),
-			names: fileNames,
+			// AI 命名用全局配置（namingModel/baseUrl/apiKey）而非编辑视图，失败静默回退占位名
+			namingConfig: base,
+			build: async () => ({
+				prompt,
+				archivePrompt,
+				images: refs.map((r) => r.data),
+				names: fileNames,
+				namingPrompt: rawPrompt,
+			}),
 		});
-		// AI 命名：后台非阻塞，用全局配置（namingModel/baseUrl/apiKey），失败静默回退占位名
-		if (base.autoName) {
-			void this.nameTask(task, base, rawPrompt);
-		}
 	}
 
 	/**
@@ -271,15 +302,19 @@ export class TaskManager {
 	}
 
 	/**
-	 * 公共提交流程：建任务文件夹 → 写提示词文件 + meta.json + 归档参考图 → 建卡入列 →
-	 * 后台并发提交（不 await，调用方立即返回）。返回新建的任务对象，供调用方（如编辑命名）后续更新。
+	 * 公共提交流程（快路径）：建任务文件夹 → 「创建中」卡片入列 → 立即返回让调用方解除 busy。
+	 * 耗时的创建工作（即梦前置检查、提示词/参考图解析、归档落盘）转 createAndSubmit 后台执行，
+	 * 完成后转入提交；失败则撤卡删夹。
 	 */
 	private async start(opts: StartOptions): Promise<PendingTask> {
-		const [folder, dir] = await this.deps.createTaskFolder();
-		await writePromptFile(dir, opts.promptFileName, buildPromptFileContent(opts.archivePrompt));
-		await archiveInputs(dir, opts.names.map((name, i) => ({ name, data: opts.images[i] })));
-
-		const count = Math.max(1, opts.config.concurrency);
+		const video = isJimengVideoCall(opts.config);
+		// 即梦条数钳制：视频耗积分大收紧到 4；生图对齐 generate_num 上限 10（台账与远端实际张数一致）
+		const cap = video
+			? JIMENG_VIDEO_MAX_COUNT
+			: opts.config.providerId === JIMENG_PROVIDER_ID
+				? JIMENG_IMAGE_MAX_COUNT
+				: Infinity;
+		const count = Math.min(cap, Math.max(1, opts.config.concurrency));
 		// 生成任务标题用来源 md 名；编辑任务留空，等 AI 命名回填
 		const meta: TaskMeta = {
 			source: opts.source,
@@ -291,17 +326,23 @@ export class TaskManager {
 			succeeded: 0,
 			durations: [],
 		};
-		await writeTaskMeta(dir, meta);
 
 		// sync adapter 的提交即整图生成（无独立 job id），据此让前端把「提交中」显示为「生成中」。
-		// 解析失败（如缺密钥）留 false，submitJobs 会照常逐 job 失败处理，不影响这里。
+		// batch：async 且支持批量（即梦生图 generate_num）时单 job 一次提交 count 张；
+		// 视频无批量参数，仍按 count 拆成多 job 串行提交。
+		// 解析失败（如缺密钥）都留 false，submitJobs 会照常逐 job 失败处理，不影响这里。
 		let sync = false;
+		let batch = false;
 		try {
-			sync = this.deps.resolveImageCall(opts.config).adapter.kind === 'sync';
+			const adapter = this.deps.resolveImageCall(opts.config).adapter;
+			sync = adapter.kind === 'sync';
+			batch = adapter.kind === 'async' && adapter.supportsBatch && !video;
 		} catch {
 			/* 留 false */
 		}
+		const jobCount = batch ? 1 : count;
 
+		const [folder, dir] = await this.deps.createTaskFolder();
 		const task: PendingTask = {
 			id: folder,
 			kind: opts.kind,
@@ -314,18 +355,67 @@ export class TaskManager {
 			sync,
 			title: meta.title,
 			meta,
-			jobs: Array.from({ length: count }, () => ({ status: 'submitting' as const })),
+			creating: true,
+			jobs: Array.from({ length: jobCount }, () => ({ status: 'submitting' as const })),
 			images: [],
 			createdAt: Date.now(),
 			startedAt: Date.now(),
 		};
+		// 建卡即入列并刷新侧栏（创建中的任务不持久化，persist 由创建完成后统一做）
 		this.tasks.unshift(task);
-		await this.persist();
 		this.emit();
 
-		log(`提交任务 ${folder}（${opts.kind}，${count} 张，模型 ${opts.config.model}）`);
-		void this.submitJobs(opts.config, task, opts.prompt, opts.images);
+		log(`创建任务 ${folder}（${opts.kind}，${count} 张，模型 ${opts.config.model}）`);
+		void this.createAndSubmit(opts, task, dir, batch ? count : 1);
 		return task;
+	}
+
+	/**
+	 * 后台创建阶段：即梦前置检查（CLI 安装 / 登录态，未就绪弹引导）→ 解析提示词与参考图（build）→
+	 * 写提示词文件 + meta.json + 归档参考图 → 转入提交。任一步失败即撤卡、删除尚无远端订单的
+	 * 任务夹（不留痕不扣积分）并弹错——此时「生成」按钮早已释放，错误只能经通知呈现。
+	 */
+	private async createAndSubmit(
+		opts: StartOptions,
+		task: PendingTask,
+		dir: vscode.Uri,
+		perJobCount: number
+	): Promise<void> {
+		let built: BuiltPrompt;
+		try {
+			await ensureJimengReady(opts.config);
+			built = await opts.build();
+			await writePromptFile(dir, opts.promptFileName, buildPromptFileContent(built.archivePrompt));
+			await archiveInputs(dir, built.names.map((name, i) => ({ name, data: built.images[i] })));
+			await writeTaskMeta(dir, task.meta);
+		} catch (err) {
+			this.tasks = this.tasks.filter((t) => t !== task);
+			void vscode.workspace.fs
+				.delete(dir, { recursive: true, useTrash: false })
+				.then(undefined, () => undefined);
+			this.emit();
+			log(`任务 ${task.folder} 创建失败：${errMsg(err)}`);
+			void vscode.window.showErrorMessage(`Image Flow：任务创建失败：${errMsg(err)}`);
+			return;
+		}
+		// 与 images/names 一一对应的 input/ 归档素材绝对路径，供 CLI 型 adapter（吃文件路径）使用
+		const refPaths = built.names.map((name) => vscode.Uri.joinPath(dir, 'input', name).fsPath);
+		task.creating = false;
+		try {
+			await this.persist();
+		} catch (err) {
+			// 持久化失败不打断状态机（本函数经 void 调用，reject 会被吞掉导致任务不提交）
+			log(`任务 ${task.folder} 持久化失败（忽略）：${errMsg(err)}`);
+		}
+		this.emit();
+
+		log(`提交任务 ${task.folder}（${opts.kind}，${task.meta.requested} 张，模型 ${opts.config.model}）`);
+		void this.submitJobs(opts.config, task, built.prompt, built.images, refPaths, perJobCount);
+		// AI 命名：后台非阻塞，失败静默回退占位名（生成 = md 名；编辑 = 「编辑任务」文案）
+		const namingCfg = opts.namingConfig ?? opts.config;
+		if (namingCfg.autoName) {
+			void this.nameTask(task, namingCfg, built.namingPrompt);
+		}
 	}
 
 	/**
@@ -336,7 +426,9 @@ export class TaskManager {
 		config: ImageFlowConfig,
 		task: PendingTask,
 		prompt: string,
-		images: string[]
+		images: string[],
+		refPaths: string[],
+		perJobCount: number
 	): Promise<void> {
 		const submitting = task.jobs.filter((j) => j.status === 'submitting');
 		// Provider 解析包 try/catch（F079）：解析失败（缺密钥/渠道不可用等）即批量判失败、
@@ -351,14 +443,16 @@ export class TaskManager {
 			}
 		}
 		if (call && call.adapter.kind === 'async') {
-			const { adapter, ctx } = call;
+			const adapter = call.adapter;
+			// 提交上下文附带 input/ 归档素材路径（CLI 型 adapter 用；HTTP 型忽略）
+			const ctx = { ...call.ctx, refPaths };
 			// async（grsai）串行（错开）提交：submit 只上传 base64、秒回 job id，生成在服务端并行。
 			// 并发提交时多份大图抢同一条上行带宽、各请求 120s 超时计时同瞬起跑，整体上传一旦超窗就被一起
 			// abort——大图编辑任务因此全军覆没。逐个提交让每份上传独占带宽、超时窗口只覆盖自身。
 			for (const job of submitting) {
 				try {
 					job.startedAt = Date.now();
-					await this.applySubmitResult(task, job, await adapter.submit(ctx, prompt, images, 1));
+					await this.applySubmitResult(task, job, await adapter.submit(ctx, prompt, images, perJobCount));
 				} catch (err) {
 					this.failJob(task, job, err);
 				}
@@ -573,7 +667,9 @@ export class TaskManager {
 		const name = task.title || (task.kind === 'edit' ? '编辑任务' : task.folder);
 		const errors = [...new Set(failed.map((j) => j.error).filter((e): e is string => !!e))];
 		const detail = errors.length ? `：${errors.join('；')}` : '';
-		log(`任务 ${task.folder} 终结：成功 ${task.images.length}/${task.jobs.length}，失败 ${failed.length}${detail}`);
+		// 分母按张数（meta.requested）：批量 adapter 单 job 出多张，按 job 数会记成「成功 10/1」
+		const requested = Math.max(task.jobs.length, task.meta.requested);
+		log(`任务 ${task.folder} 终结：成功 ${task.images.length}/${requested}，失败 ${failed.length}${detail}`);
 		if (!failed.length) {
 			this.notify(task.folder, `✅ Image Flow：${name} 生成完成（${task.images.length} 张）`, 'info');
 		} else if (task.images.length) {
@@ -620,8 +716,9 @@ export class TaskManager {
 		if (!adapter.poll) {
 			throw new Error('当前协议不支持异步轮询');
 		}
-		// 仅 running job 进入这里，id 必已回填；断言收窄可选类型
-		const result = await adapter.poll(ctx, job.id!);
+		// 仅 running job 进入这里，id 必已回填；断言收窄可选类型。
+		// taskDir：CLI 型 adapter 把成品下载到任务夹 download/ 子目录（同盘 rename、残片随任务夹回收）
+		const result = await adapter.poll({ ...ctx, taskDir: vscode.Uri.parse(task.dir).fsPath }, job.id!);
 		if (result.status === 'running') {
 			// 进度有变化才算「变更」，驱动侧栏刷新；无变化则不触发整轮 emit，避免空刷
 			if (typeof result.progress === 'number' && result.progress !== job.progress) {

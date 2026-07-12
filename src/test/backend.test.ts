@@ -12,7 +12,9 @@ import {
 	parseCustomProvider,
 	paramDefaults,
 	parseJsonc,
+	pickNamingChat,
 } from '../backend/providers';
+import type { RuntimeChatModel } from '../backend/providers';
 import { baseConfig } from './fixtures';
 
 suite('toVipPixels', () => {
@@ -114,7 +116,27 @@ suite('providers', () => {
 		const provider = parseCustomProvider(parseJsonc(fs.readFileSync(file, 'utf8')));
 		assert.ok(provider.image.length >= 1);
 		assert.ok(provider.chat.length >= 1);
-		assert.strictEqual(provider.image[0].adapter, 'grsai-async');
+		// 模板不再放 grsai 示例（内置渠道已含全部 grsai 模型），首个示例是 OpenAI 兼容同步协议
+		assert.strictEqual(provider.image[0].adapter, 'openai-images');
+	});
+});
+
+suite('pickNamingChat（AI 命名优先自定义 chat 的选择逻辑）', () => {
+	const chat = (model: string, extra: Partial<RuntimeChatModel> = {}): RuntimeChatModel =>
+		({ model, label: model, adapter: 'openai-chat', baseUrl: 'https://c.example', apiKey: 'ck', ...extra });
+	test('namingModel 命中且凭据齐全 → 精确选中', () => {
+		const picked = pickNamingChat([chat('a'), chat('b')], 'b');
+		assert.strictEqual(picked?.model, 'b');
+	});
+	test('未命中 → 取首个可用项；缺 apiKey 或缺 baseUrl 的项一律跳过（不与内置凭据混用）', () => {
+		const list = [chat('no-key', { apiKey: undefined }), chat('no-url', { baseUrl: undefined }), chat('ok')];
+		assert.strictEqual(pickNamingChat(list, '不存在的模型')?.model, 'ok');
+		// namingModel 命中的项凭据不全 → 也不能选它，落到首个可用项
+		assert.strictEqual(pickNamingChat(list, 'no-key')?.model, 'ok');
+	});
+	test('无可用项（空列表 / 全部凭据不全）→ undefined，由调用方回落内置渠道', () => {
+		assert.strictEqual(pickNamingChat([], 'a'), undefined);
+		assert.strictEqual(pickNamingChat([chat('a', { apiKey: undefined })], 'a'), undefined);
 	});
 });
 

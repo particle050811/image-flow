@@ -132,19 +132,22 @@ function PendingDetail({
 	onSendToEdit: (uri: string) => void;
 }) {
 	const elapsed = useElapsed(task.startedAt);
-	// 阶段：还有 job 没拿到 id 即「提交中」，进度条按已提交占比走；全部提交完转「生成中」用聚合进度。
+	// 阶段：创建中（解析提示词/归档参考图，视频参考大文件耗时明显）→ 提交中 → 生成中。
+	// 还有 job 没拿到 id 即「提交中」，进度条按已提交占比走；全部提交完转「生成中」用聚合进度。
 	// sync adapter 的提交就是整图生成（无独立 job id、无远端进度），故这一阶段直接叫「生成中」。
 	const submitted = task.total - task.submitting;
 	const inSubmit = task.submitting > 0;
 	const barPct = inSubmit ? Math.round((submitted / task.total) * 100) : task.progress;
-	const submitLabel = task.sync ? '生成中' : '提交中';
+	const submitLabel = task.creating ? '创建中' : task.sync ? '生成中' : '提交中';
 	return (
 		<div className="task-detail">
 			{/* 头部与历史详情一致：提示词链接 + 模型 + 分辨率 + 比例 + 进度（已存/总数） */}
 			<div className="task-detail-head">
+				{/* 创建阶段提示词文件尚未写盘，禁点避免打开失败报错 */}
 				<button
 					className="link"
 					title="打开提示词文件"
+					disabled={task.creating}
 					onClick={() => vscode.postMessage({ type: 'openPrompt', folder: task.folder })}
 				>
 					{`${task.promptName}.md`}

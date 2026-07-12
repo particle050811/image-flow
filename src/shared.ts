@@ -2,10 +2,12 @@
 // 纯类型文件——编译后被擦除，对两端环境都安全，不要在此引入 vscode 或 DOM 依赖。
 // 这是 Config / Task / 消息协议的唯一定义处，避免在 api.ts、command.ts、webview 各写一份导致漂移。
 
-/** 一个模型上次使用的参数快照：切走时整体记下，切回时校验后恢复（比例/分辨率/自定义参数全独立） */
+/** 一个模型上次使用的参数快照：切走时整体记下，切回时校验后恢复（比例/分辨率/并发/自定义参数全独立） */
 export interface ModelParamSnapshot {
 	aspectRatio: string;
 	imageSize: string;
+	/** 该模型上次使用的并发数；旧配置的快照无此字段，视为无记忆 */
+	concurrency?: number;
 	params: Record<string, string>;
 }
 
@@ -41,6 +43,12 @@ export interface ImageFlowConfig {
 	modelInjections: Record<string, string>;
 	/** 工作台选中的预设模板名（.image-flow/prompts/ 下文件去扩展名）；'' = 不加载预设。生成/预览时其内容前置进 prompt */
 	workbenchTemplate: string;
+	/** 视频/图片两种模式各自记忆的工作台预设模板名：跨类切换模型时离开方存入、进入方恢复 */
+	workbenchVideoTemplate: string;
+	workbenchImageTemplate: string;
+	/** 最近使用的视频/图片模型（渠道限定名：qualifiedModel 的 provider+NUL+model 编码）：加载 *v.md / *i.md 时按模式自动恢复 */
+	lastVideoModel: string;
+	lastImageModel: string;
 	/** 编辑页专属模型（与主生成界面互不影响） */
 	editModel: string;
 	/** 编辑页选中模型所属渠道（随模型选择自动切换） */
@@ -65,7 +73,9 @@ export interface ImageFlowConfig {
 	showThumbActions: boolean;
 	/** 工作台素材库是否显示音频/视频（关闭则只列图片） */
 	showAudioVideo: boolean;
-	/** 扩展启动时是否清理「无产物」任务文件夹（顶层无图/音/视频文件，含「构建并复制」未回收的视频任务与失败留痕） */
+	/** 视频模型仅允许文件名以 v.md 结尾的 Markdown 生成（防误触发付费视频任务）；设置页可关 */
+	videoOnlyVmd: boolean;
+	/** 扩展启动时是否清理「无产物」任务文件夹（顶层无图/音/视频文件的失败留痕，含历史「构建并复制」遗留夹） */
 	cleanEmptyTasksOnStartup: boolean;
 }
 
@@ -118,6 +128,12 @@ export interface WebviewImageModel {
 	aspectRatios: readonly string[];
 	/** 该模型支持的分辨率档位 */
 	imageSizes: readonly string[];
+	/** 并发上限（并发选择器渲染 1..max）；视频模型 4、其余 10 */
+	maxConcurrency: number;
+	/** 是否视频模型：编辑页不可用，且默认仅允许 *v.md 文件生成 */
+	video?: boolean;
+	/** 首次切到该模型（无参数记忆）时的默认参数；缺省沿用切换前的当前值 */
+	defaults?: { aspectRatio?: string; imageSize?: string; concurrency?: number };
 	/** 该模型可调的自定义参数（可见项），无则空数组 */
 	custom: readonly CustomParam[];
 }
@@ -251,6 +267,9 @@ export interface PendingTask {
 	title?: string;
 	/** 任务元数据（落盘 meta.json），succeeded/title 随进度更新后回写 */
 	meta: TaskMeta;
+	/** 创建阶段：建卡即置 true，后台解析提示词/归档参考图（视频参考可达数十 MB）完成后转 false 开始提交。
+	 *  创建中的任务不持久化（尚无可续拉的 job），重启即消失 */
+	creating?: boolean;
 	jobs: PendingJob[];
 	/** 已成功下载到文件夹的图片，随 job 完成累加 */
 	images: TaskImage[];
@@ -276,6 +295,8 @@ export interface WebviewPendingTask {
 	total: number;
 	done: number;
 	failed: number;
+	/** 创建阶段（解析提示词/归档参考图中），前端把「提交中」显示为「创建中」 */
+	creating?: boolean;
 	/** 仍在提交（尚未拿到 job id）的 job 数，>0 表示任务处于「提交中」阶段，前端据此区分提交/生成 */
 	submitting: number;
 	/** 是否 sync adapter：sync 的提交即整图生成，前端把「提交中」阶段显示为「生成中」 */
@@ -340,13 +361,14 @@ export type OutboundMessage =
 	| { type: 'init' }
 	| { type: 'saveConfig'; patch: Partial<ImageFlowConfig> }
 	| { type: 'openProviderSettings' }
+	| { type: 'jimengLogin' }
 	| { type: 'generate' }
-	| { type: 'buildAndCopy' }
 	| { type: 'previewRequest' }
 	| { type: 'openImage'; uri: string }
 	| { type: 'insertImage'; uri: string }
 	| { type: 'openExternal'; url: string }
 	| { type: 'refreshHistory' }
+	| { type: 'refreshAutoLibraries' }
 	| { type: 'addLibrary' }
 	| { type: 'removeLibrary'; folder: string }
 	| { type: 'editUpload' }
@@ -356,7 +378,6 @@ export type OutboundMessage =
 	| { type: 'editClearImages' }
 	| { type: 'editOpenImage'; name: string }
 	| { type: 'editGenerate'; prompt: string }
-	| { type: 'editBuildAndCopy'; prompt: string }
 	| { type: 'editPreviewRequest'; prompt: string }
 	| { type: 'openPrompt'; folder: string }
 	| { type: 'refreshTemplates' }

@@ -16,6 +16,7 @@ export function Thumb({
 	onContextMenu,
 	collections,
 	favorited,
+	onRatio,
 	children,
 }: {
 	src: string;
@@ -32,6 +33,8 @@ export function Thumb({
 	/** 传入 collections 即渲染 StarButton（需配套 uri）；不传则无星标（如编辑区） */
 	collections?: WebviewCollection[];
 	favorited?: boolean;
+	/** 图片/视频加载出尺寸后回报宽高比（w/h），供素材库按比例排序；音频无画面不回报 */
+	onRatio?: (ratio: number) => void;
 	/** 额外角标 / 动作按钮（✎ 送编辑、序号、× 移除等） */
 	children?: ReactNode;
 }) {
@@ -47,14 +50,41 @@ export function Thumb({
 		<div className="thumb-wrap" data-media={media ?? 'image'}>
 			{media === 'video' ? (
 				// 视频自带首帧作缩略；preload=metadata 只拉首帧不下整片，muted 防意外出声
-				<video className="thumb-media" src={src} preload="metadata" muted {...handlers} />
+				<video
+					className="thumb-media"
+					src={src}
+					preload="metadata"
+					muted
+					onLoadedMetadata={
+						onRatio &&
+						((e) => {
+							const v = e.currentTarget;
+							if (v.videoHeight > 0) {
+								onRatio(v.videoWidth / v.videoHeight);
+							}
+						})
+					}
+					{...handlers}
+				/>
 			) : media === 'audio' ? (
 				// 音频无画面，用占位块 + 下方文件名表示；点开同样进编辑器原生播放器
 				<div className="thumb-media thumb-audio" {...handlers}>
 					<span className="thumb-audio-icon">♪</span>
 				</div>
 			) : (
-				<img src={src} {...handlers} />
+				<img
+					src={src}
+					onLoad={
+						onRatio &&
+						((e) => {
+							const el = e.currentTarget;
+							if (el.naturalHeight > 0) {
+								onRatio(el.naturalWidth / el.naturalHeight);
+							}
+						})
+					}
+					{...handlers}
+				/>
 			)}
 			{isMedia && name && (
 				<div className="thumb-name" title={name}>

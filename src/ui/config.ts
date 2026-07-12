@@ -35,6 +35,10 @@ const DEFAULTS: StoredConfig = {
 	templateCols: 4,
 	modelInjections: {},
 	workbenchTemplate: '',
+	workbenchVideoTemplate: '',
+	workbenchImageTemplate: '',
+	lastVideoModel: '',
+	lastImageModel: '',
 	editModel: 'nano-banana-2',
 	editProviderId: 'grsai',
 	editAspectRatio: '3:4',
@@ -47,6 +51,7 @@ const DEFAULTS: StoredConfig = {
 	autoName: true,
 	showThumbActions: true,
 	showAudioVideo: true,
+	videoOnlyVmd: true,
 	cleanEmptyTasksOnStartup: true,
 };
 

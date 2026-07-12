@@ -9,7 +9,8 @@ import * as vscode from 'vscode';
 import { TaskManager } from '../task/tasks';
 import type { TaskManagerDeps } from '../task/tasks';
 import { readTaskMeta } from '../task/taskFiles';
-import { resolveImageCall, requestTaskName } from '../backend/providerRuntime';
+import { resolveImageCall, resolveChatCall, requestTaskName } from '../backend/providerRuntime';
+import type { RuntimeProvider } from '../backend/providers';
 import type { ImageAdapter, SubmitAsync } from '../backend/adapters/types';
 import type { PendingTask } from '../shared';
 import { baseConfig } from './fixtures';
@@ -183,5 +184,36 @@ suite('providerRuntime 渠道与模型边界', () => {
 	test('未知 namingProviderId：requestTaskName 静默跳过（不成 unhandled rejection）', async () => {
 		const title = await requestTaskName({ ...baseConfig, namingProviderId: 'bogus' }, '画一只猫');
 		assert.strictEqual(title, undefined);
+	});
+
+	test('未配置自定义 chat 时命名回落 namingProviderId 渠道，grsai 用 config 的地址与密钥', () => {
+		// 测试进程从不调 reloadCustomProvider，自定义缓存必为空 → 走内置回落分支
+		const call = resolveChatCall(baseConfig);
+		assert.strictEqual(call?.model, 'gemini-3.5-flash');
+		assert.strictEqual(call?.ctx.baseUrl, 'https://example.com');
+		assert.strictEqual(call?.ctx.apiKey, 'k');
+	});
+
+	test('自定义 chat 无条件优先：绕过 namingProviderId，凭据取自自定义模型自身', () => {
+		const custom: RuntimeProvider = {
+			id: 'custom',
+			label: '自定义',
+			image: [],
+			chat: [
+				// 首项凭据不全：须被跳过，绝不与 config 里的内置凭据拼凑
+				{ model: 'no-key', label: 'no-key', adapter: 'openai-chat', baseUrl: 'https://c1.example' },
+				// 可用但非目标的干扰项：若接线忽略 namingModel 只取首个可用项，会错选它、测试即失败
+				{ model: 'decoy', label: 'decoy', adapter: 'openai-chat', baseUrl: 'https://c3.example', apiKey: 'dk' },
+				{ model: 'deepseek-v4-flash', label: 'ds', adapter: 'openai-chat', baseUrl: 'https://c2.example', apiKey: 'ck' },
+			],
+		};
+		// namingProviderId 传未知值：走到内置回落会抛「未知渠道」，能走通即证明自定义优先绕过了它
+		const call = resolveChatCall(
+			{ ...baseConfig, namingProviderId: 'bogus', namingModel: 'deepseek-v4-flash' },
+			custom
+		);
+		assert.strictEqual(call?.model, 'deepseek-v4-flash');
+		assert.strictEqual(call?.ctx.baseUrl, 'https://c2.example');
+		assert.strictEqual(call?.ctx.apiKey, 'ck');
 	});
 });

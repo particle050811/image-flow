@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { log } from './log';
 
 /**
  * 弹一条会自动消失的 toast（右下角通知，`timeoutMs` 后自动关闭）。
@@ -17,12 +18,15 @@ function showTransient(title: string, timeoutMs: number): void {
 	);
 }
 
-/** 自动消失的轻警告（withProgress 通知没有警告图标，加 ⚠️ 前缀弥补丢失的警告语义） */
+/** 自动消失的轻警告（withProgress 通知没有警告图标，加 ⚠️ 前缀弥补丢失的警告语义）。
+ *  toast 几秒即逝，同步记台账日志留痕，用户没看清时可在输出通道回查 */
 export function showTransientWarning(message: string, timeoutMs = 4000): void {
+	log(`警告：${message}`);
 	showTransient(`⚠️ ${message}`, timeoutMs);
 }
 
-/** 自动消失的轻提示（成功/完成等，无图标前缀） */
+/** 自动消失的轻提示（成功/完成等，无图标前缀）。同样记台账日志留痕 */
 export function showTransientInfo(message: string, timeoutMs = 4000): void {
+	log(`提示：${message}`);
 	showTransient(message, timeoutMs);
 }

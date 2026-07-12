@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { Task, TaskImage } from '../shared';
 import { fetchWithTimeout, readBodyLimited } from '../backend/api';
-import { isImageExt, isMediaFileName, mediaTypeOfFileName, extFromMime } from '../util/images';
+import { isImageExt, isMediaExt, isMediaFileName, mediaTypeOfFileName, extFromMime } from '../util/images';
 import type { ResultItem } from '../backend/adapters/types';
 import { uriStem } from '../storage/paths';
 import { tasksRoot } from '../storage/storage';
@@ -40,7 +40,8 @@ export async function createTaskFolder(): Promise<[string, vscode.Uri]> {
 
 /**
  * 把一批产出结果落盘到任务文件夹，文件名为 {前缀}-{起始序号..}，返回新增的图片引用。
- * 统一处理两类结果：url 下载、base64 解码写文件——async（grsai）与 sync（openai/gemini）adapter 共用。
+ * 统一处理三类结果：url 下载、base64 解码写文件、file（CLI 已下载的本地临时文件）移入并重命名——
+ * async（grsai/jimeng）与 sync（openai/gemini）adapter 共用。
  * @param startIndex 已有图片数，用于接续编号，避免不同 job 的图片重名
  */
 export async function saveResults(
@@ -52,6 +53,27 @@ export async function saveResults(
 	const images: TaskImage[] = [];
 	for (let i = 0; i < items.length; i++) {
 		const item = items[i];
+		if (item.kind === 'file') {
+			// CLI 型结果：临时目录里的成品移入任务文件夹并按统一规则重命名（保留原扩展名，视频 .mp4 同样落盘）
+			const rawExt = '.' + (item.path.split(/[\\/]/).pop()?.split('.').pop()?.toLowerCase() ?? '');
+			const ext = isMediaExt(rawExt) ? rawExt.slice(1) : 'png';
+			const name = `${prefix}-${startIndex + i + 1}.${ext}`;
+			const fileUri = vscode.Uri.joinPath(taskDir, name);
+			const src = vscode.Uri.file(item.path);
+			try {
+				await vscode.workspace.fs.rename(src, fileUri, { overwrite: true });
+			} catch {
+				// 临时目录与工作区可能跨盘（rename 失败）：退回复制 + 尽力删源
+				await vscode.workspace.fs.copy(src, fileUri, { overwrite: true });
+				try {
+					await vscode.workspace.fs.delete(src);
+				} catch {
+					/* 源清理失败无害，系统临时目录自然回收 */
+				}
+			}
+			images.push({ name, uri: fileUri.toString(), media: mediaTypeOfFileName(name) });
+			continue;
+		}
 		let data: Uint8Array;
 		let ext: string;
 		if (item.kind === 'url') {

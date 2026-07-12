@@ -65,9 +65,17 @@ export async function toWebviewPendingTask(
 	task: PendingTask,
 	favSet: Set<string>
 ): Promise<WebviewPendingTask> {
-	const done = task.jobs.filter((j) => j.status === 'succeeded').length;
-	const failed = task.jobs.filter((j) => j.status === 'failed' || j.status === 'violation').length;
-	const submitting = task.jobs.filter((j) => j.status === 'submitting').length;
+	// 计数统一按「张数」而非 job 数：批量 adapter（即梦 generate_num）单 job 出 N 张，
+	// total 取 meta.requested 兜底、done 取已落盘张数，避免 10 张任务显示成 0/1。
+	// 非批量任务 jobs.length === requested 且每 job 落 1 张，口径不变。
+	const total = Math.max(task.jobs.length, task.meta.requested);
+	const done = task.images.length;
+	const failedJobs = task.jobs.filter((j) => j.status === 'failed' || j.status === 'violation').length;
+	// 批量 job 失败即整批失败：失败张数按每 job 均摊张数换算（非批量时恰为失败 job 数）
+	const failed = Math.min(total - done, Math.round((failedJobs * total) / task.jobs.length));
+	// submitting 同样换算成张数（前端用 total - submitting 显示已提交数），批量单 job 提交中 = 整批提交中
+	const submittingJobs = task.jobs.filter((j) => j.status === 'submitting').length;
+	const submitting = Math.min(total, Math.round((submittingJobs * total) / task.jobs.length));
 	const errors = task.jobs.map((j) => j.error).filter((e): e is string => !!e);
 	return {
 		id: task.id,
@@ -77,9 +85,10 @@ export async function toWebviewPendingTask(
 		imageSize: task.meta.imageSize,
 		title: task.title,
 		promptName: task.prefix,
-		total: task.jobs.length,
+		total,
 		done,
 		failed,
+		creating: task.creating,
 		submitting,
 		sync: task.sync,
 		progress: aggregateProgress(task.jobs),

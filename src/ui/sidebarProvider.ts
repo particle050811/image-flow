@@ -4,6 +4,7 @@ import { mediaTypeOfFileName } from '../util/images';
 import { readConfig, writeConfig } from './config';
 import { configOptions, ensureSettingsFile, reloadCustomProvider } from '../backend/providerRuntime';
 import { CUSTOM_PROVIDER_ID } from '../backend/providers';
+import { jimengLogin } from '../backend/jimengGuide';
 import { listHistory } from '../task/history';
 import { isPreviewDoc, PREVIEW_DOC_NAME } from '../task/preview';
 import { TaskManager } from '../task/tasks';
@@ -43,7 +44,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private view?: vscode.WebviewView;
 	/** 当前侧栏关联的 Markdown（跟随当前活动编辑器；切到非 .md 标签时保留上一个，不清空） */
 	private currentMd?: vscode.Uri;
-	/** 工作台页相关消息处理（生成/构建并复制/预览请求），「当前 MD」与视图推送经回调回到本类 */
+	/** 工作台页相关消息处理（生成/预览请求），「当前 MD」与视图推送经回调回到本类 */
 	private readonly workbench: WorkbenchController;
 	/** 编辑页相关消息处理（上传/生成/预览/缩略图），自持 EditSession，视图推送经回调回到本类 */
 	private readonly editCtrl: EditController;
@@ -62,12 +63,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	) {
 		this.workbench = new WorkbenchController(context, tasks, {
 			post: (msg) => this.post(msg),
-			refreshHistory: () => this.pushHistory(),
 			currentMd: () => this.currentMd,
 		});
 		this.editCtrl = new EditController(context, tasks, {
 			post: (msg) => this.post(msg),
-			refreshHistory: () => this.pushHistory(),
 		});
 		this.materials = new MaterialsController(context, {
 			post: (msg) => this.post(msg),
@@ -186,11 +185,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			case 'openProviderSettings':
 				await this.openProviderSettings();
 				break;
+			case 'jimengLogin':
+				await jimengLogin();
+				break;
 			case 'generate':
 				await this.workbench.generate();
-				break;
-			case 'buildAndCopy':
-				await this.workbench.buildAndCopy();
 				break;
 			case 'previewRequest':
 				await this.workbench.previewRequest();
@@ -206,6 +205,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'refreshHistory':
 				await this.pushHistory();
+				break;
+			case 'refreshAutoLibraries':
+				await this.materials.pushAutoLibraries();
 				break;
 			case 'addLibrary':
 				await this.materials.addLibrary();
@@ -233,9 +235,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'editGenerate':
 				await this.editCtrl.generate(msg.prompt);
-				break;
-			case 'editBuildAndCopy':
-				await this.editCtrl.buildAndCopy(msg.prompt);
 				break;
 			case 'editPreviewRequest':
 				await this.editCtrl.preview(msg.prompt);

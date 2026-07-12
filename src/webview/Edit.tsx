@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
 	vscode,
 	type Config,
@@ -7,11 +7,11 @@ import {
 	type PromptTemplate,
 	type StatusState,
 } from './vscode';
-import { Stepper, Field, ParamsSelect, ModelSelect } from './fields';
+import { ConcurrencySelect, Field, ParamsSelect, ModelSelect } from './fields';
 import { Thumb } from './Thumb';
 import { useCooldown } from './useCooldown';
 import { namedRefSnippet } from '../refs';
-import { modelSizeControl } from '../modelOptions';
+import { modelSizeControl, qualifiedModel } from '../modelOptions';
 
 /** 编辑页：图片区（上传/拖入/点击插入引用）+ 模板 + 提示词 + 编辑专属参数 + 生成 */
 export function Edit({
@@ -114,13 +114,28 @@ export function Edit({
 		});
 	};
 
-	// 档位/比例/自定义参数随模型变化 + 切模型按各模型独立记忆恢复档位、播种参数默认值（编辑页用 editModel 组）；与工作台共用 modelSizeControl
+	// 编辑页不支持视频模型（图生视频昂贵且不属编辑场景）：模型列表与回落解析都用滤掉视频后的选项
+	const editOptions = { imageModels: options.imageModels.filter((m) => !m.video) };
+
+	// 档位/比例/并发/自定义参数随模型变化 + 切模型按各模型独立记忆恢复档位、播种参数默认值（编辑页用 editModel 组）；与工作台共用 modelSizeControl
 	const { current, changeModel } = modelSizeControl(
 		config,
-		options,
-		{ provider: 'editProviderId', model: 'editModel', size: 'editImageSize', ratio: 'editAspectRatio', memory: 'editImageSizeMemory', params: 'editParams' },
+		editOptions,
+		{ provider: 'editProviderId', model: 'editModel', size: 'editImageSize', ratio: 'editAspectRatio', concurrency: 'editConcurrency', memory: 'editImageSizeMemory', params: 'editParams' },
 		onChangeMany
 	);
+
+	// 旧配置可能残留本页已不提供的模型（如视频模型）：current 只是显示回落，config 仍是旧值，
+	// 生成会被后端拦截、参数面板也会显示不属于回落模型的档位。检测到即把回落结果整套写回配置
+	const staleModel = !editOptions.imageModels.some(
+		(m) => m.provider === config.editProviderId && m.model === config.editModel
+	);
+	// 依赖只跟 staleModel：changeModel 每次渲染都是新引用，入依赖会让 effect 每帧重跑
+	useEffect(() => {
+		if (staleModel && current) {
+			changeModel(qualifiedModel(current.provider, current.model));
+		}
+	}, [staleModel]);
 
 	// 选中模板：追加到提示词末尾（不覆盖已有内容）
 	const applyTemplate = (name: string) => {
@@ -138,15 +153,6 @@ export function Edit({
 		}
 		cool();
 		vscode.postMessage({ type: 'editGenerate', prompt });
-	};
-
-	// 构建并复制：与生成同享 0.5s 冷却防连点（建夹+读媒体也有耗时）
-	const buildCopy = () => {
-		if (busy || cooling) {
-			return;
-		}
-		cool();
-		vscode.postMessage({ type: 'editBuildAndCopy', prompt });
 	};
 
 	// 一键清空：编辑区图片（扩展侧持有）+ 提示词（本地 state）。提交后两者均保留以支持迭代编辑，需要时清空
@@ -239,7 +245,7 @@ export function Edit({
 					label="模型"
 					provider={current?.provider ?? config.editProviderId}
 					model={current?.model ?? config.editModel}
-					models={options.imageModels}
+					models={editOptions.imageModels}
 					onChange={changeModel}
 				/>
 				<ParamsSelect
@@ -254,11 +260,10 @@ export function Edit({
 					onChangeSize={(v) => onChange('editImageSize', v)}
 					onChangeParam={(key, v) => onChange('editParams', { ...config.editParams, [key]: v })}
 				/>
-				<Stepper
+				<ConcurrencySelect
 					label="并发数"
 					value={config.editConcurrency}
-					min={1}
-					max={10}
+					max={current?.maxConcurrency ?? 10}
 					onChange={(v) => onChange('editConcurrency', v)}
 				/>
 			</div>
@@ -279,14 +284,6 @@ export function Edit({
 				</button>
 				<button className="gen-btn" disabled={busy || cooling} onClick={generate}>
 					{busy ? '生成中…' : '生成'}
-				</button>
-				<button
-					className="build-btn"
-					disabled={busy || cooling}
-					title="不调用 API：建好任务并把替换后的提示词复制到剪贴板，参考媒体按顺序导出到 input/，供外部网页/APP 视频后端上传"
-					onClick={buildCopy}
-				>
-					构建并复制
 				</button>
 			</div>
 

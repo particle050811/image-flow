@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { vscode, type Config, type ConfigOptions } from './vscode';
-import { Select, TextArea, Stepper, Checkbox } from './fields';
+import { PanelSelect, TextArea, Stepper, Checkbox } from './fields';
 
 const GET_KEY_URL = 'https://grsai.ai/zh/dashboard/api-keys';
 
@@ -52,6 +52,19 @@ export function ApiConfig({
 					value={config.apiKey}
 					onChange={(e) => onChange('apiKey', e.target.value)}
 				/>
+			</div>
+			{/* 即梦渠道走本机 dreamina CLI 登录态：按钮让扩展在终端自动执行登录（未安装则先弹安装引导） */}
+			<div className="field">
+				<div className="field-head field-head-inline">
+					<label>即梦 CLI（dreamina）</label>
+					<button
+						type="button"
+						className="link link-inline"
+						onClick={() => vscode.postMessage({ type: 'jimengLogin' })}
+					>
+						登录
+					</button>
+				</div>
 			</div>
 			<div className="row">
 				<Stepper
@@ -128,7 +141,12 @@ export function ApiConfig({
 				checked={config.cleanEmptyTasksOnStartup}
 				onChange={(v) => onChange('cleanEmptyTasksOnStartup', v)}
 			/>
-			<Select
+			<Checkbox
+				label="视频模型仅允许文件名以 v.md 结尾的 Markdown 生成（防误触发付费视频任务）"
+				checked={config.videoOnlyVmd}
+				onChange={(v) => onChange('videoOnlyVmd', v)}
+			/>
+			<PanelSelect
 				label="模型注入提示词 — 选择模型"
 				value={injectModel}
 				options={injectModels}

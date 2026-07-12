@@ -2,14 +2,12 @@ import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
 import { EditSession } from './editSession';
-import { buildEditFinalPrompt, buildEditExportPrompt } from './edit';
+import { buildEditFinalPrompt } from './edit';
 import { readConfig } from '../ui/config';
-import { GRSAI_PROVIDER_ID } from '../backend/providers';
+import { GRSAI_PROVIDER_ID, JIMENG_PROVIDER_ID, isJimengVideoModel } from '../backend/providers';
 import { openTextPreview } from '../task/preview';
-import { writeBuildAndCopyTask, nameBuildAndCopyTask } from '../task/buildAndCopy';
 import { TaskManager } from '../task/tasks';
 import { errMsg } from '../util/errors';
-import { showTransientInfo } from '../util/notify';
 import { openImageInEditor } from '../util/openImage';
 import { mediaTypeOfFileName, MEDIA_EXTS } from '../util/images';
 import type { InboundMessage } from '../shared';
@@ -17,8 +15,6 @@ import type { InboundMessage } from '../shared';
 /** 编辑控制器依赖：错误/状态/视图推送仍由 SidebarProvider 持有，经回调回去 */
 export interface EditDeps {
 	post(msg: InboundMessage): void;
-	/** 刷新历史列表（「构建并复制」建出已完成任务卡后调用） */
-	refreshHistory(): Promise<void>;
 }
 
 /**
@@ -131,45 +127,14 @@ export class EditController {
 			this.deps.post({ type: 'error', message: '尚未配置 API Key，请在设置页填写。' });
 			return;
 		}
-		this.deps.post({ type: 'busy', busy: true });
-		try {
-			await this.tasks.submitEdit(prompt, this.edit.list());
-		} catch (err: unknown) {
-			this.deps.post({ type: 'error', message: errMsg(err) });
-		} finally {
-			this.deps.post({ type: 'busy', busy: false });
-		}
-	}
-
-	/**
-	 * 编辑页「构建并复制」：与工作台共用 writeBuildAndCopyTask，只是参考媒体来自编辑区（内存 data URI）。
-	 * 本地/云端视频 API 用不起，故只建任务不提交、不调生图 API（仅后台调一次对话模型给任务命名）。
-	 */
-	async buildAndCopy(rawPrompt: string): Promise<void> {
-		if (!rawPrompt.trim()) {
-			this.deps.post({ type: 'error', message: '提示词为空，无法构建。' });
+		// 编辑页不支持视频模型（前端模型列表已滤掉；旧配置可能残留选中值，这里兜底拦截）
+		if (config.editProviderId === JIMENG_PROVIDER_ID && isJimengVideoModel(config.editModel)) {
+			this.deps.post({ type: 'error', message: '编辑页不支持视频模型，请先切换为生图模型。' });
 			return;
 		}
 		this.deps.post({ type: 'busy', busy: true });
 		try {
-			const refs = this.edit.list();
-			const { prompt, archivePrompt, fileNames } = buildEditExportPrompt(rawPrompt, refs.map((r) => r.name));
-			const dir = await writeBuildAndCopyTask({
-				prompt,
-				archivePrompt,
-				promptFileName: 'edit.md',
-				names: fileNames,
-				images: refs.map((r) => r.data),
-				source: '（编辑任务）',
-				title: 'edit',
-			});
-			await this.deps.refreshHistory();
-			showTransientInfo('已构建任务并复制提示词，参考媒体已按顺序导出到 input/。');
-			// 不提交也 AI 命名：后台非阻塞、用全局配置（namingModel/key），失败静默回退 edit 占位
-			const config = await readConfig(this.context);
-			if (config.autoName) {
-				void nameBuildAndCopyTask(dir, config, rawPrompt, () => this.deps.refreshHistory());
-			}
+			await this.tasks.submitEdit(prompt, this.edit.list());
 		} catch (err: unknown) {
 			this.deps.post({ type: 'error', message: errMsg(err) });
 		} finally {

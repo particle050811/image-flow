@@ -187,15 +187,6 @@ export function App() {
 		vscode.postMessage({ type: 'generate' });
 	};
 
-	// 构建并复制：与生成同享 0.5s 冷却防连点（建夹+读媒体也有耗时）
-	const buildCopy = () => {
-		if (!genCool()) {
-			return;
-		}
-		setStatus({ text: '', error: false });
-		vscode.postMessage({ type: 'buildAndCopy' });
-	};
-
 	const previewRequest = () => {
 		setStatus({ text: '', error: false });
 		vscode.postMessage({ type: 'previewRequest' });
@@ -268,7 +259,6 @@ export function App() {
 					onChange={saveField}
 					onChangeMany={saveFields}
 					onGenerate={generate}
-					onBuildCopy={buildCopy}
 					onPreview={previewRequest}
 					onAddLibrary={addLibrary}
 					onRemoveLibrary={removeLibrary}

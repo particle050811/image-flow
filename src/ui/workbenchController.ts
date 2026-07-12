@@ -1,28 +1,22 @@
 import * as vscode from 'vscode';
 import { uriBaseName } from '../storage/paths';
 import { readConfig } from './config';
-import { GRSAI_PROVIDER_ID } from '../backend/providers';
+import { GRSAI_PROVIDER_ID, JIMENG_PROVIDER_ID, isJimengVideoModel } from '../backend/providers';
 import { TaskManager } from '../task/tasks';
-import { buildExportPrompt } from '../prompt/buildPrompt';
 import { openRequestPreview } from '../task/preview';
-import { writeBuildAndCopyTask, nameBuildAndCopyTask } from '../task/buildAndCopy';
-import { mdBaseName } from '../task/history';
 import { errMsg } from '../util/errors';
-import { showTransientInfo } from '../util/notify';
 import type { InboundMessage } from '../shared';
 
 /** 工作台控制器依赖：错误/状态/视图推送与「当前 MD」仍由 SidebarProvider 持有，经回调取用 */
 export interface WorkbenchDeps {
 	post(msg: InboundMessage): void;
-	/** 刷新历史列表（构建并复制建出已完成任务卡后调用） */
-	refreshHistory(): Promise<void>;
 	/** 当前侧栏关联的 MD（由宿主跟随活动编辑器维护，工作台无独立状态） */
 	currentMd(): vscode.Uri | undefined;
 }
 
 /**
- * 工作台页的消息处理：生成 / 构建并复制 / 预览请求，与编辑页的 EditController 对称。
- * 三件套的编排（busy 包裹、apiKey 校验、错误收敛）原内联在 SidebarProvider，析出本类后
+ * 工作台页的消息处理：生成 / 预览请求，与编辑页的 EditController 对称。
+ * 编排（busy 包裹、apiKey 校验、错误收敛）原内联在 SidebarProvider，析出本类后
  * Provider 回归「webview 宿主 + 消息路由」单一职责。工作台无 EditSession 那样的常驻状态，
  * 「当前 MD」与视图推送经 deps 回调取用。
  */
@@ -82,51 +76,22 @@ export class WorkbenchController {
 			this.deps.post({ type: 'error', message: '尚未配置 API Key，请在设置页填写。' });
 			return;
 		}
-		this.deps.post({ type: 'busy', busy: true });
-		try {
-			await this.tasks.submit(mdUri);
-		} catch (err: unknown) {
-			this.deps.post({ type: 'error', message: errMsg(err) });
-		} finally {
-			this.deps.post({ type: 'busy', busy: false });
-		}
-	}
-
-	/**
-	 * 「构建并复制」：本地/云端视频 API 用不起，故只在本地把任务建好但不提交——
-	 * 建任务夹 → 写归档式 `<md名>.md`（可渲染参考图、历史「打开提示词」指向它）+ 可复制的 preview.md →
-	 * 按顺序归档参考媒体到 input/ → 复制发送正文并打开 preview.md + 资源管理器定位 input/。不调 API、不轮询。
-	 */
-	async buildAndCopy(): Promise<void> {
-		const md = this.requireActiveMd('构建并复制');
-		if (!md) {
+		// 视频生成昂贵，默认只放行文件名以 v.md 结尾的 Markdown，防止对生图提示词误点视频模型
+		if (
+			config.videoOnlyVmd &&
+			config.providerId === JIMENG_PROVIDER_ID &&
+			isJimengVideoModel(config.model) &&
+			!uriBaseName(mdUri).toLowerCase().endsWith('v.md')
+		) {
+			this.deps.post({
+				type: 'error',
+				message: '视频模型仅允许文件名以 v.md 结尾的 Markdown 生成（防误触发付费视频任务）。可在设置页关闭此限制。',
+			});
 			return;
 		}
 		this.deps.post({ type: 'busy', busy: true });
 		try {
-			const bytes = await vscode.workspace.fs.readFile(md);
-			const content = Buffer.from(bytes).toString('utf8').trim();
-			if (!content) {
-				throw new Error('Markdown 文件内容为空，无法构建。');
-			}
-			const { prompt, images, names, archivePrompt } = await buildExportPrompt(md, content);
-			const prefix = mdBaseName(md);
-			const dir = await writeBuildAndCopyTask({
-				prompt,
-				archivePrompt,
-				promptFileName: `${prefix}.md`,
-				names,
-				images,
-				source: vscode.workspace.asRelativePath(md),
-				title: prefix,
-			});
-			await this.deps.refreshHistory();
-			showTransientInfo('已构建任务并复制提示词，参考媒体已按顺序导出到 input/。');
-			// 不提交也 AI 命名：后台非阻塞，失败静默回退 md 名占位
-			const config = await readConfig(this.context);
-			if (config.autoName) {
-				void nameBuildAndCopyTask(dir, config, prompt, () => this.deps.refreshHistory());
-			}
+			await this.tasks.submit(mdUri);
 		} catch (err: unknown) {
 			this.deps.post({ type: 'error', message: errMsg(err) });
 		} finally {

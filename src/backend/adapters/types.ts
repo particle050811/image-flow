@@ -5,18 +5,33 @@
 import type { ImageFlowConfig } from '../../shared';
 
 /**
- * 单个产出结果项：要么是待下载的图片 url，要么是已内联的 base64（含 mime）。
- * 落盘统一处理：url 下载、base64 解码写文件（见 task/history.ts 的 saveResults）。
+ * 单个产出结果项：待下载的图片 url、已内联的 base64（含 mime），
+ * 或 CLI 型 adapter 已下载到本地临时目录的文件绝对路径（file）。
+ * 落盘统一处理：url 下载、base64 解码写文件、file 移动进任务文件夹并按统一规则重命名
+ * （见 task/history.ts 的 saveResults）。
  */
 export type ResultItem =
 	| { kind: 'url'; url: string }
-	| { kind: 'base64'; data: string; mime: string };
+	| { kind: 'base64'; data: string; mime: string }
+	| { kind: 'file'; path: string };
 
 /** 图片 adapter 调用上下文：该模型自带的 baseUrl/apiKey + 本次生效配置（尺寸/比例/自定义参数） */
 export interface CallContext {
 	baseUrl: string;
 	apiKey: string;
 	config: ImageFlowConfig;
+	/**
+	 * 与 refs（base64 data URI）一一对应的任务文件夹 input/ 已归档参考素材绝对路径。
+	 * 归档时序先于提交，天然可用。CLI 型 adapter（如 jimeng-cli）吃文件路径而非 base64，
+	 * 只用此字段；HTTP 型 adapter 忽略。提交链路填充，轮询链路缺省。
+	 */
+	refPaths?: string[];
+	/**
+	 * 任务文件夹绝对路径（fsPath）。CLI 型 adapter 把成品下载到其 download/<jobId>/ 子目录：
+	 * 与最终落盘同盘（rename 原子）、残片随任务夹生命周期回收、不污染顶层产物扫描。
+	 * 轮询链路填充；缺省时 adapter 回落系统临时目录。HTTP 型 adapter 忽略。
+	 */
+	taskDir?: string;
 }
 
 /** async adapter 提交结果：拿到 jobId 后凭它轮询 */

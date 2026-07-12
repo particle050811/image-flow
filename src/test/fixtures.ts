@@ -19,6 +19,10 @@ export const baseConfig: ImageFlowConfig = {
 	templateCols: 4,
 	modelInjections: {},
 	workbenchTemplate: '',
+	workbenchVideoTemplate: '',
+	workbenchImageTemplate: '',
+	lastVideoModel: '',
+	lastImageModel: '',
 	editModel: 'gpt-image-2',
 	editProviderId: 'grsai',
 	editAspectRatio: '16:9',
@@ -31,5 +35,6 @@ export const baseConfig: ImageFlowConfig = {
 	autoName: true,
 	showThumbActions: true,
 	showAudioVideo: true,
+	videoOnlyVmd: true,
 	cleanEmptyTasksOnStartup: true,
 };

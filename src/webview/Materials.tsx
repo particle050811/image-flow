@@ -1,7 +1,22 @@
-import type { WebviewLibrary, WebviewCollection } from './vscode';
+import { useState } from 'react';
+import type { WebviewImage, WebviewLibrary, WebviewCollection } from './vscode';
 import { vscode } from './vscode';
 import { Thumb, openImageClick } from './Thumb';
 import { usePicker } from './usePicker';
+
+/** 已测得的宽高比缓存（uri → w/h，取到百分位归并近似比例）。
+ *  模块级持久：切库/重渲染不重测，同会话内网格不反复洗牌 */
+const ratioCache = new Map<string, number>();
+
+/** 排序键：比例（w/h）为第一关键词、从扁到长即降序；音频瓦片按 CSS 固定 16:9；
+ *  尚未加载出尺寸的图暂记 0 排在末尾，测得后归位。
+ *  同比例靠 sort 稳定性保持后端下发的原有顺序（带描述图优先 + 文件名序） */
+function ratioKey(img: WebviewImage): number {
+	if (img.media === 'audio') {
+		return Math.round((16 / 9) * 100) / 100;
+	}
+	return ratioCache.get(img.uri) ?? 0;
+}
 
 /** 选中素材库的缩略图网格：左键打开 / 右键插入引用 / 可拖入编辑区 */
 function LibThumbs({
@@ -13,12 +28,15 @@ function LibThumbs({
 	collections: WebviewCollection[];
 	onSendToEdit: (uri: string) => void;
 }) {
+	// 缩略图陆续加载出尺寸时触发重排（缓存命中则整批一次到位，不闪动）
+	const [, setTick] = useState(0);
 	if (lib.images.length === 0) {
 		return <div className="empty">这个素材库没有图片。</div>;
 	}
+	const sorted = [...lib.images].sort((a, b) => ratioKey(b) - ratioKey(a));
 	return (
 		<div className="thumbs">
-			{lib.images.map((img) => (
+			{sorted.map((img) => (
 				<Thumb
 					key={img.uri}
 					src={img.src}
@@ -27,6 +45,13 @@ function LibThumbs({
 					title={`${img.name}（左键打开 · 右键插入引用 · 可拖入编辑区）`}
 					uri={img.uri}
 					draggable
+					onRatio={(ratio) => {
+						const rounded = Math.round(ratio * 100) / 100;
+						if (ratioCache.get(img.uri) !== rounded) {
+							ratioCache.set(img.uri, rounded);
+							setTick((t) => t + 1);
+						}
+					}}
 					onClick={openImageClick(img.uri)}
 					onContextMenu={(e) => {
 						e.preventDefault();
@@ -107,7 +132,11 @@ export function Materials({
 							key={lib.folder}
 							className="picker-chip"
 							data-active={current?.key === `auto:${lib.folder}`}
-							onClick={() => setSelected(`auto:${lib.folder}`)}
+							onClick={() => {
+								setSelected(`auto:${lib.folder}`);
+								// 点标签即重扫当前路径各层目录：新增图片不用切走 MD 再切回来才出现
+								vscode.postMessage({ type: 'refreshAutoLibraries' });
+							}}
 						>
 							<span className="chip-name">{lib.name}</span>
 							<span className="chip-sub">{lib.images.length}</span>

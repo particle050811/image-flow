@@ -432,23 +432,25 @@ textarea::placeholder {
 	flex: 2 1 0;
 }
 
-/* 参数行：并发数仅 1 位数字，收窄输入框给模型名腾位（加减按钮各 34px 固定不缩）；
-   按 stepper 精确命中，避免自定义参数并入本行后错位到末列 */
-.dock .row > .field:has(.stepper),
-[data-page='edit'] .row > .field:has(.stepper) {
+/* 参数行：并发数触发器仅 1~2 位数字，收窄给模型名腾位。
+   .concurrency-select 兼具 .ratio-select，本条在上一条之后声明以覆盖其 flex:2 */
+.dock .row > .field:has(.concurrency-select),
+[data-page='edit'] .row > .field:has(.concurrency-select) {
 	flex: 1.3 1 0;
 }
 
 /* dock 较窄放不下一整行时换行：各列约 1/4 宽、模型列更宽，每行凑 3 个
-   （含「输出质量」的 5 列即拆成上 3 下 2）。需连 :has(.stepper) 一起覆盖，
-   否则并发列保留窄屏外的 basis:0 不参与按比例换行 */
+   （含「输出质量」的 5 列即拆成上 3 下 2）。并发列需再覆盖一次，
+   否则命中 :has(.ratio-select) 的 38% 不参与按比例换行 */
 @container (max-width: 420px) {
-	.dock .row > .field,
-	.dock .row > .field:has(.stepper) {
+	.dock .row > .field {
 		flex: 1 1 27%;
 	}
 	.dock .row > .field:has(.ratio-select) {
 		flex: 1 1 38%;
+	}
+	.dock .row > .field:has(.concurrency-select) {
+		flex: 1 1 27%;
 	}
 }
 
@@ -521,6 +523,12 @@ textarea::placeholder {
 	border: 1px solid var(--vscode-dropdown-border, var(--field-border));
 	border-radius: var(--radius);
 	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.32);
+}
+
+/* 右对齐变体：触发框在行尾（如并发数）时用，面板右缘对齐触发框右缘、向左延伸，避免伸出侧栏被裁 */
+.ratio-pop.pop-right {
+	left: auto;
+	right: calc(-1 * (var(--sp-2) + 1px));
 }
 
 .ratio-grid {
@@ -616,6 +624,13 @@ textarea::placeholder {
 	gap: var(--sp-2);
 }
 
+/* 并发数弹层：数字 chips 固定 4 列网格（1~10 排成 4/4/2 三行），
+   比 flex 换行的 6+4 更整齐；视频模型仅 1~4 时恰好一行 */
+.concurrency-select .param-chips {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+}
+
 /* 档位 chip：轻量描边小按钮，选中态与比例卡片一致 */
 .param-chip {
 	width: auto;
@@ -699,22 +714,30 @@ button:disabled:active {
 	transform: none;
 }
 
-/* 生成行：文件名 + 双按钮，三者垂直居中对齐 */
+/* 生成行：预设模板下拉 + 文件名 + 双按钮，四者垂直居中对齐；
+   空间不足时下拉与文件名先收缩，仍放不下（极窄侧栏）允许换行，防止溢出 */
 .gen-row {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	justify-content: center;
 	gap: var(--sp-3);
 	margin-top: var(--sp-3);
 }
 
-/* 行内的激活文件名：wrapper 承担 flex 收缩与 tooltip 定位，内层 .active-md 负责省略号 */
-.tpl-row .tip {
+.gen-row .tpl-select-wrap {
+	flex: 0 1 auto;
+	min-width: 100px;
+}
+
+/* 行内的激活文件名：wrapper 承担 flex 收缩与 tooltip 定位，内层 .active-md 负责省略号。
+   限定 .md-tip：模板下拉 wrapper 也挂 .tip（同款 hover），不能被这里的 min-width:0 覆盖 */
+.gen-row .md-tip {
 	flex: 0 1 auto;
 	min-width: 0;
 }
 
-.tpl-row .active-md {
+.gen-row .active-md {
 	display: block;
 	margin-bottom: 0;
 	min-width: 0;
@@ -740,24 +763,6 @@ button:disabled:active {
 .preview-btn:hover {
 	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-secondaryBackground));
 	opacity: 0.85;
-}
-
-/* 「构建并复制」：与生成并排的次要按钮（不调用 API，导出给外部后端） */
-.build-btn {
-	width: auto;
-	flex: 0 0 auto;
-	padding: 6px 16px;
-	background: var(--vscode-button-secondaryBackground);
-	color: var(--vscode-button-secondaryForeground);
-}
-
-.build-btn:hover:not(:disabled) {
-	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-secondaryBackground));
-	opacity: 0.85;
-}
-
-.build-btn:disabled {
-	opacity: 0.4;
 }
 
 /* 编辑页「清空图片」：次要按钮样式，无图时禁用 */
@@ -797,7 +802,9 @@ button.secondary {
 	bottom: calc(100% + var(--sp-1));
 	z-index: 10;
 	padding: var(--sp-1) var(--sp-2);
-	max-width: 200px;
+	/* 宽度按内容自适应（max-content 脱离窄容器的包含块约束，向右伸展），上限防超长文案铺满整栏 */
+	width: max-content;
+	max-width: 260px;
 	white-space: normal;
 	border-radius: var(--radius-sm);
 	background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #1e1e1e));
@@ -1054,30 +1061,13 @@ button.secondary {
 	margin-top: var(--sp-1);
 }
 
-/* 工作台预设模板：标签 + 自适应下拉 + 当前文件名整组居中，与下方按钮行对齐 */
-.tpl-row {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	gap: var(--sp-2);
-	margin-top: var(--sp-2);
-}
-
-.tpl-row .tpl-label {
-	flex: 0 0 auto;
-	font-size: var(--fs-body);
-	opacity: 0.75;
-}
-
-.tpl-row .tpl-select-wrap {
-	flex: 0 1 auto;
-	min-width: 120px;
-}
-
 /* ---------- 缩略图包裹层与角标（编辑区 + 任务页共用） ---------- */
 .thumb-wrap {
 	position: relative;
 	min-width: 0;
+	/* 网格默认把行内项拉伸到同行最高：矮瓦片（如 16:9 视频）的包裹层被撑高后，
+	   绝对定位在包裹层底部的文件名标签就与画面脱开。顶端对齐让包裹层紧贴内容高度 */
+	align-self: start;
 }
 
 .thumb-index {

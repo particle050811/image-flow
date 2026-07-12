@@ -5,7 +5,9 @@ import type { ImageFlowConfig } from '../shared';
 import { readConfig } from '../ui/config';
 import { buildInjectedPrompt } from '../prompt/inject';
 import { buildPrompt } from '../prompt/buildPrompt';
+import { isJimengVideoModel, JIMENG_PROVIDER_ID } from '../backend/providers';
 import { errMsg } from '../util/errors';
+import { log } from '../util/log';
 import { showTransientWarning } from '../util/notify';
 
 /**
@@ -21,7 +23,9 @@ export async function openRequestPreview(
 	if (!content) {
 		throw new Error('Markdown 文件内容为空。');
 	}
-	const { prompt: basePrompt } = await buildPrompt(mdUri, content);
+	// 与提交链路同口径：即梦视频（全能参考）允许音/视频参考，预览不误报
+	const allowNonImage = config.providerId === JIMENG_PROVIDER_ID && isJimengVideoModel(config.model);
+	const { prompt: basePrompt } = await buildPrompt(mdUri, content, allowNonImage);
 	const prompt = await buildInjectedPrompt(config, basePrompt);
 	await openTextPreview(prompt);
 }
@@ -64,6 +68,8 @@ export async function previewRequestCommand(
 		const config = await readConfig(context);
 		await openRequestPreview(config, target);
 	} catch (err: unknown) {
+		// 与 sidebarProvider.post 的错误收口同口径：弹窗 + 记台账日志（此路径不经 webview，需自行记）
+		log(`错误：预览请求失败：${errMsg(err)}`);
 		vscode.window.showErrorMessage(`Image Flow：${errMsg(err)}`);
 	}
 }

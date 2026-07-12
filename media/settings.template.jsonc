@@ -1,28 +1,20 @@
 {
   // ===== image-flow 自定义 API 配置（JSONC，可写注释）=====
+  // · 内置渠道（grsai / 即梦）的模型已自动出现在模型下拉里，无需在这里配置；
+  //   grsai 的 key 在扩展「设置」页填，即梦鉴权走本机 dreamina CLI 登录态。
   // · baseUrl 填到根地址即可，带不带 /v1 都行（程序自动规整，不会拼成 /v1/v1）。
-  // · apiKey 每个模型各自填；内置 grsai 的 key 在扩展「设置」页填，不在这里。
+  // · apiKey 每个模型各自填。
   // · 改完本文件需重载窗口（Ctrl+R）生效（无文件监听）。
 
   // 图片生成模型：工作台 / 编辑页的「模型」下拉从这里来
   "image": [
     {
-      "model": "nano-banana-2",          // API 调用名（发给后端的模型标识）
-      "label": "Nano Banana 2",          // 下拉里显示的名字
+      "model": "gpt-image-2",            // API 调用名（发给后端的模型标识）
+      "label": "GPT Image 2",            // 下拉里显示的名字
       // adapter 调用协议三选一：
-      //   grsai-async     = grsai 异步（秒回 id 后轮询；连接短，扛窗口重载 / 代理短连接，推荐）
+      //   grsai-async     = grsai 异步（秒回 id 后轮询；连接短，扛窗口重载 / 代理短连接）
       //   openai-images   = OpenAI 兼容同步（文生图 /v1/images/generations、有参考图 /v1/images/edits）
       //   gemini-generate = Gemini 原生 generateContent（Bearer 鉴权；OpenAI 兼容渠道请用 openai-images）
-      "adapter": "grsai-async",
-      "baseUrl": "https://grsai.dakka.com.cn",
-      "apiKey": "在此填写你的_API_Key",
-      "aspectRatios": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4"],
-      "imageSizes": ["1K", "2K", "4K"],
-      "custom": []                        // 该模型额外可调参数，无则空数组
-    },
-    {
-      "model": "gpt-image-2",
-      "label": "GPT Image 2",
       "adapter": "openai-images",
       // ⚠ openai-images 是同步协议：整张图在一次连接里生成完才返回，慢模型常需 1~3 分钟。
       //   若挂了系统代理（如 Clash 默认 60 秒断开空闲连接）会被掐断且仍扣费——
@@ -38,13 +30,13 @@
     }
   ],
 
-  // 对话模型：用于给任务 AI 命名（设置页可关；留空则不自动命名）
+  // 对话模型：用于给任务 AI 命名（设置页可关）。这里配置后优先于内置渠道用于命名。
   "chat": [
     {
-      "model": "gemini-3.1-flash-lite",
-      "label": "Gemini 3.1 Flash Lite",
+      "model": "deepseek-v4-flash",      // 按你所用渠道的实际模型名填写
+      "label": "DeepSeek V4 Flash",
       "adapter": "openai-chat",
-      "baseUrl": "https://grsai.dakka.com.cn",
+      "baseUrl": "https://api.deepseek.com",
       "apiKey": "在此填写你的_API_Key"
     }
   ]

@@ -1,10 +1,4 @@
-import {
-	parseMediaDecls,
-	buildNameTable,
-	replaceMediaRefs,
-	orderPrefixNames,
-	dedupeArchiveNames,
-} from './buildPrompt';
+import { parseMediaDecls, buildNameTable, replaceMediaRefs } from './buildPrompt';
 import { editConfigView } from '../ui/config';
 import { joinPrompt, modelInjection } from './inject';
 import { mediaDeclSnippet, namedRefSnippet } from '../refs';
@@ -41,37 +35,10 @@ export function buildEditArchivePrompt(rawPrompt: string, names: string[], fileN
 	return prependDecls(rawPrompt, names, (_n, i) => `input/${fileNames[i]}`);
 }
 
-/** 编辑「构建并复制」的导出结果：发送正文 + 归档正文 + 有序落盘名（与编辑区图一一对应） */
-export interface EditExportResult {
-	/** 发送给外部后端的可复制正文：命名引用替换为 `【@图片N】`/`【@视频N】`，不含注入句/模板 */
-	prompt: string;
-	/** 归档正文（`![名](input/类型N-原名)`）：与生成/编辑任务一致，历史可渲染参考媒体 */
-	archivePrompt: string;
-	/** 参考媒体落盘名（类型序号前缀 + 重名去重），按编辑区顺序与图一一对应 */
-	fileNames: string[];
-}
-
-/**
- * 编辑区「构建并复制」：把编辑区全部图（含音/视频）+ 用户正文导出，供粘贴到外部网页/APP 后端。
- * 不调用 API、不拼注入句。复用生成链路的声明解析/编号/替换，编号规则与生成一致；
- * 落盘名加「类型N-」前缀与发送正文的 `【@类型N】` 对齐，外部按文件名顺序上传不错位。
- * 与 buildEditFinalPrompt 的区别：不限图片（允许音视频）、不拼注入句、文件名带顺序前缀。
- */
-export function buildEditExportPrompt(rawPrompt: string, names: string[]): EditExportResult {
-	const content = prependDecls(rawPrompt, names);
-	const parsed = parseMediaDecls(content);
-	const table = buildNameTable(parsed);
-	// 编辑区不校验声明是否都被引用（不拦截也不警告）
-	const prompt = replaceMediaRefs(content, table);
-	const fileNames = dedupeArchiveNames(orderPrefixNames(names));
-	const archivePrompt = buildEditArchivePrompt(rawPrompt, names, fileNames);
-	return { prompt, archivePrompt, fileNames };
-}
-
 /**
  * 把编辑区图按序拼成顶部声明块 `![名](路径)` 前置到正文之上（无图则原样返回正文）。
  * pathOf 默认取文件名（提交/发送场景，路径即落盘名）；归档场景传 `(_, i) => input/${fileNames[i]}` 指向 input/。
- * 提交（buildEditFinalPrompt）、归档（buildEditArchivePrompt）、导出（buildEditExportPrompt）共用此拼装，避免漂移。
+ * 提交（buildEditFinalPrompt）与归档（buildEditArchivePrompt）共用此拼装，避免漂移。
  */
 function prependDecls(rawPrompt: string, names: string[], pathOf: (name: string, i: number) => string = (n) => n): string {
 	const decls = names.map((n, i) => mediaDeclSnippet(stemOf(n), pathOf(n, i))).join('\n');

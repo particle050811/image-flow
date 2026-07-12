@@ -1,5 +1,4 @@
 import { type ReactNode, useState, useRef, useEffect } from 'react';
-import { NativeSelect } from './primitives';
 import type { CustomParam, WebviewImageModel } from '../shared';
 import { qualifiedModel } from '../modelOptions';
 
@@ -21,23 +20,57 @@ export function Field({
 	);
 }
 
-/** 下拉选择，选项可为字符串或 {value,label}；底层用 Radix Select（可访问、键盘可达） */
-export function Select({
+/**
+ * 卡片弹层单选：与工作台「模型」弹层同风格的上弹面板（两列卡片、选中蓝框），
+ * 点选后关闭（单选一次完成）。设置页「模型注入提示词」的模型选择用。
+ */
+export function PanelSelect({
 	label,
 	value,
 	options,
 	onChange,
-	className,
 }: {
 	label: string;
 	value: string;
-	options: readonly (string | { value: string; label: string })[];
+	options: readonly string[];
 	onChange: (value: string) => void;
-	className?: string;
 }) {
+	const { open, setOpen, ref } = usePopover();
 	return (
-		<Field label={label} className={className}>
-			<NativeSelect value={value} options={options} onChange={onChange} ariaLabel={label} />
+		<Field label={label}>
+			<div className="ratio-select" ref={ref}>
+				<button
+					type="button"
+					className="rx-select-trigger"
+					aria-haspopup="dialog"
+					aria-expanded={open}
+					onClick={() => setOpen((o) => !o)}
+				>
+					<span>{value}</span>
+				</button>
+				{open && (
+					<div className="ratio-pop param-pop model-pop" role="dialog" aria-label={label}>
+						<div className="param-section">
+							<div className="model-grid">
+								{options.map((opt) => (
+									<button
+										key={opt}
+										type="button"
+										aria-pressed={opt === value}
+										className={`param-chip model-item${opt === value ? ' selected' : ''}`}
+										onClick={() => {
+											onChange(opt);
+											setOpen(false);
+										}}
+									>
+										{opt}
+									</button>
+								))}
+							</div>
+						</div>
+					</div>
+				)}
+			</div>
 		</Field>
 	);
 }
@@ -277,6 +310,63 @@ export function ParamsSelect({
 								</div>
 							</div>
 						))}
+					</div>
+				)}
+			</div>
+		</Field>
+	);
+}
+
+/**
+ * 「并发数」弹层：与模型/参数弹层同风格的上弹面板，chips 列出 1..max（随当前模型变化，
+ * 如视频模型仅 1~4），点选即关（单选一次完成）。
+ */
+export function ConcurrencySelect({
+	label,
+	value,
+	max,
+	onChange,
+}: {
+	label: string;
+	value: number;
+	max: number;
+	onChange: (value: number) => void;
+}) {
+	const { open, setOpen, ref } = usePopover();
+	return (
+		<Field label={label}>
+			<div className="ratio-select concurrency-select" ref={ref}>
+				<button
+					type="button"
+					className="rx-select-trigger"
+					aria-haspopup="dialog"
+					aria-expanded={open}
+					onClick={() => setOpen((o) => !o)}
+				>
+					<span>{value}</span>
+				</button>
+				{open && (
+					// pop-right：并发框在行尾，弹层右对齐向左伸，避免超出侧栏右缘被裁剪
+					<div className="ratio-pop param-pop pop-right" role="dialog" aria-label={label}>
+						<div className="param-section">
+							<div className="param-title">并发数</div>
+							<div className="param-chips">
+								{Array.from({ length: max }, (_, i) => i + 1).map((n) => (
+									<button
+										key={n}
+										type="button"
+										aria-pressed={n === value}
+										className={`param-chip${n === value ? ' selected' : ''}`}
+										onClick={() => {
+											onChange(n);
+											setOpen(false);
+										}}
+									>
+										{n}
+									</button>
+								))}
+							</div>
+						</div>
 					</div>
 				)}
 			</div>

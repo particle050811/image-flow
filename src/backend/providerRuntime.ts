@@ -8,11 +8,14 @@ import { getImageAdapter, getChatAdapter } from './adapters';
 import type { ImageAdapter, ChatAdapter, CallContext, ChatContext } from './adapters';
 import {
 	BUILTIN_GRSAI,
+	BUILTIN_JIMENG,
 	GRSAI_PROVIDER_ID,
+	JIMENG_PROVIDER_ID,
 	CUSTOM_PROVIDER_ID,
 	parseCustomProvider,
 	parseJsonc,
 	buildOptions,
+	pickNamingChat,
 } from './providers';
 import type { RuntimeProvider } from './providers';
 import { settingsFile } from '../storage/storage';
@@ -37,9 +40,11 @@ export async function reloadCustomProvider(): Promise<void> {
 	try {
 		// settings.json 是 JSONC（可含注释/尾逗号），用 jsonc-parser 解析
 		cachedCustom = parseCustomProvider(parseJsonc(Buffer.from(bytes).toString('utf8')));
-	} catch {
-		// 文件存在但写坏（非法 JSONC）：显式提示，否则会静默以 grsai 模型冒充「自定义」，配置被吞掉无感知
+	} catch (err) {
+		// 文件存在但写坏（非法 JSONC）：显式提示，否则会静默以 grsai 模型冒充「自定义」，配置被吞掉无感知。
+		// 弹窗放不下解析错误详情，记进台账日志供定位
 		cachedCustom = undefined;
+		log(`错误：settings.json 解析失败：${err instanceof Error ? err.message : String(err)}`);
 		void vscode.window.showErrorMessage(
 			'Image Flow：settings.json 解析失败（非法 JSONC），已临时回落内置 grsai。请修正后重载窗口生效。'
 		);
@@ -67,6 +72,9 @@ function requiredProvider(providerId: string): RuntimeProvider {
 	if (providerId === GRSAI_PROVIDER_ID) {
 		return BUILTIN_GRSAI;
 	}
+	if (providerId === JIMENG_PROVIDER_ID) {
+		return BUILTIN_JIMENG;
+	}
 	if (providerId === CUSTOM_PROVIDER_ID) {
 		if (!cachedCustom) {
 			throw new Error('当前模型属于自定义 API，但 settings.json 未加载或解析失败，请修正后重载窗口。');
@@ -78,7 +86,9 @@ function requiredProvider(providerId: string): RuntimeProvider {
 
 /** 合并全部可用渠道，构建发往 webview 的 ConfigOptions（不含 url/key） */
 export function configOptions(): ConfigOptions {
-	return buildOptions(cachedCustom ? [BUILTIN_GRSAI, cachedCustom] : [BUILTIN_GRSAI]);
+	return buildOptions(
+		cachedCustom ? [BUILTIN_GRSAI, BUILTIN_JIMENG, cachedCustom] : [BUILTIN_GRSAI, BUILTIN_JIMENG]
+	);
 }
 
 /** 一次图片调用的落点：用哪个 adapter + 调用上下文（地址/密钥/配置） */
@@ -109,13 +119,21 @@ export function resolveImageCall(config: ImageFlowConfig, opts?: { requireModel?
 	// 自定义模型必须自带 apiKey 与 baseUrl：缺 apiKey 报错，绝不回落 config.apiKey（那是 grsai 的 secret，
 	// 否则会把 grsai 密钥静默发往该模型的第三方 baseUrl）；缺 baseUrl 也报错，绝不回落 config.baseUrl
 	// （那是 grsai 默认地址，否则会把自定义密钥静默发往 grsai）。内置 grsai 模型不带 url/key，按设计回落 config。
-	if (provider.id !== GRSAI_PROVIDER_ID) {
+	if (provider.id === CUSTOM_PROVIDER_ID) {
 		if (!m.apiKey) {
 			throw new Error(`自定义模型「${m.model}」未配置 apiKey，请在 settings.json 中填写后重载窗口。`);
 		}
 		if (!m.baseUrl) {
 			throw new Error(`自定义模型「${m.model}」未配置 baseUrl，请在 settings.json 中填写后重载窗口。`);
 		}
+	}
+	// 内置即梦鉴权在 dreamina CLI 侧：ctx 不携带任何 url/key——连 ctx.config 里的
+	// grsai 密钥/地址也一并剥掉，密钥绝不跨入 jimeng 调用边界（即使 adapter 当前不用）
+	if (provider.id === JIMENG_PROVIDER_ID) {
+		return {
+			adapter: getImageAdapter(m.adapter),
+			ctx: { baseUrl: '', apiKey: '', config: { ...config, apiKey: '', baseUrl: '' } },
+		};
 	}
 	return {
 		adapter: getImageAdapter(m.adapter),
@@ -131,10 +149,25 @@ export interface ChatCall {
 }
 
 /**
- * 解析对话调用（AI 命名用）：config.namingProviderId 渠道内按 config.namingModel 找（找不到回落首个）。
+ * 解析对话调用（AI 命名用）：优先 settings.json 里的 chat 模型——配置文件是用户显式写的配置，
+ * 配了可用项（含 apiKey 与 baseUrl）就用它（namingModel 命中则精确用，否则取首个可用项）；
+ * 未配置才回落 config.namingProviderId 渠道内按 config.namingModel 找（找不到回落首个）。
  * Provider 无对话模型 → 返回 undefined，由调用方静默跳过命名（chat[] 可选，缺则不自动命名）。
+ * custom 参数是测试 seam（注入假自定义 Provider），生产调用一律走默认的缓存。
  */
-export function resolveChatCall(config: ImageFlowConfig): ChatCall | undefined {
+export function resolveChatCall(
+	config: ImageFlowConfig,
+	custom: RuntimeProvider | undefined = cachedCustom
+): ChatCall | undefined {
+	const preferred = custom ? pickNamingChat(custom.chat, config.namingModel) : undefined;
+	if (preferred) {
+		return {
+			adapter: getChatAdapter(preferred.adapter),
+			// pickNamingChat 已保证 apiKey/baseUrl 齐全，?? '' 仅为类型收窄，不会真回落
+			ctx: { baseUrl: preferred.baseUrl ?? '', apiKey: preferred.apiKey ?? '' },
+			model: preferred.model,
+		};
+	}
 	const provider = requiredProvider(config.namingProviderId);
 	const c = provider.chat.find((x) => x.model === config.namingModel) ?? provider.chat[0];
 	if (!c) {
@@ -152,9 +185,10 @@ export function resolveChatCall(config: ImageFlowConfig): ChatCall | undefined {
 	};
 }
 
-/** 命名输出上限：短名不需要长文，用 max_tokens 硬卡，避免模型啰嗦。
- *  中文每字常占 1~3 token，留 32 以免 10 字短名被提前截断 */
-const NAMING_MAX_TOKENS = 32;
+/** 命名输出上限：思考型模型（如 deepseek-v4-flash）的 reasoning token 也计入 max_tokens，
+ *  上限太小会被思考全部吃掉、content 恒为空串（实测该任务思考约 200 token）。
+ *  留 1024 让思考 + 短名都放得下；展示长度由 cleanTitle 截断兜底，不靠这里卡短。 */
+const NAMING_MAX_TOKENS = 1024;
 /** 命名短名展示长度兜底：模型可能无视指令多吐，截断到可读长度 */
 const NAMING_MAX_CHARS = 20;
 
@@ -213,5 +247,6 @@ export async function requestTaskName(config: ImageFlowConfig, rawPrompt: string
 			await new Promise((resolve) => setTimeout(resolve, NAMING_RETRY_DELAY_MS));
 		}
 	}
+	log(`任务命名失败：${NAMING_MAX_ATTEMPTS} 次尝试均未获得有效短名（模型 ${call.model}），回退占位名`);
 	return undefined;
 }
