@@ -32,6 +32,22 @@ const TABS: { id: TabId; label: string }[] = [
 	{ id: 'api', label: '设置' },
 ];
 
+/** 未读悬空条目的剪枝保护期：不满此年龄一律不剪，挡并发刷新的过期快照竞态 */
+const UNREAD_PRUNE_MIN_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 解析任务文件夹标识（yyMMdd/HHmmssSSS，createTaskFolder 的两级格式）为创建时刻 epoch ms；
+ * 非该格式返回 null。条目均来自真实任务夹，无需再做月/日越界回环校验。
+ */
+function folderEpoch(folder: string): number | null {
+	if (!/^\d{6}\/\d{9}$/.test(folder)) {
+		return null;
+	}
+	const digits = folder.replace('/', '');
+	const n = (a: number, b: number) => Number(digits.slice(a, b));
+	return new Date(2000 + n(0, 2), n(2, 4) - 1, n(4, 6), n(6, 8), n(8, 10), n(10, 12), n(12, 15)).getTime();
+}
+
 export function App() {
 	const [tab, setTab] = useState<TabId>('workbench');
 	const [config, setConfig] = useState<Config | null>(null);
@@ -50,28 +66,50 @@ export function App() {
 	const [reveal, setReveal] = useState<{ folder: string; nonce: number } | null>(null);
 	const [genCooling, genCool] = useCooldown(500);
 	const [status, setStatus] = useState<StatusState>({ text: '', error: false });
-	// 已点开看过的「已完成任务」文件夹集合：任务页据此给未读任务加特效，任务标签角标计数同一集合。
+	// 未读任务的文件夹标识集合：任务创建（pendingTasks 推送）即登记，点开即删，常态接近空。
 	// 持久化进 webview state（getState/setState），跨重载/重启保留。
-	const [viewedTasks, setViewedTasks] = useState<Set<string>>(
-		() => new Set(vscode.getState()?.viewedTasks ?? [])
+	// 登记依赖 webview 活着，而所有生成入口（工作台/编辑页按钮、右键命令、通知「查看」）都先聚焦侧栏；
+	// 仅剩「重启后 resume 续拉完成且期间侧栏未打开」会漏标，漏标方向是不亮未读，按产品决策接受。
+	const [unreadTasks, setUnreadTasks] = useState<Set<string>>(
+		() => new Set(vscode.getState()?.unreadTasks ?? [])
 	);
-	// 是否已建立基线：首次启用本功能时把当前全部历史视作「已看过」，避免旧历史一次性全亮角标。
-	// getState 已有记录（含空数组）即视为已基线，重载/重启不再重置。
-	const seededRef = useRef(vscode.getState()?.viewedTasks !== undefined);
+	// 当前进行中任务的文件夹集合：history 推送剪枝未读集合时参照，别把刚创建还没进历史的任务剪掉
+	const pendingFoldersRef = useRef<Set<string>>(new Set());
+	// 已应用的 history 推送序号：丢弃晚到的旧扫描快照（并发刷新完成顺序不定）
+	const historySeqRef = useRef(0);
+	// 已应用的进行中快照序号（unreadFolders / pendingTasks 共用）：按捕获时刻排序应用，丢弃更旧的
+	const pendingSnapSeqRef = useRef(0);
 
-	// 写回 webview 持久化状态（合并已有字段，避免覆盖其他键）
-	const persistViewed = (set: Set<string>) => {
-		vscode.setState({ ...vscode.getState(), viewedTasks: [...set] });
+	// 写回 webview 持久化状态（state 目前仅此一键，整体覆写）
+	const persistUnread = (set: Set<string>) => {
+		vscode.setState({ unreadTasks: [...set] });
 	};
 
-	// 点开已完成任务卡片：记为已看过，清掉其未读特效并让角标减一
+	// 点开已完成任务卡片：消掉未读，清除特效并让角标减一
 	const markTaskViewed = (folder: string) => {
-		setViewedTasks((prev) => {
-			if (prev.has(folder)) {
+		setUnreadTasks((prev) => {
+			if (!prev.has(folder)) {
 				return prev;
 			}
-			const next = new Set(prev).add(folder);
-			persistViewed(next);
+			const next = new Set(prev);
+			next.delete(folder);
+			persistUnread(next);
+			return next;
+		});
+	};
+
+	// 登记未读（幂等）：不在集合的 folder 加入并持久化
+	const registerUnread = (folders: string[]) => {
+		setUnreadTasks((prev) => {
+			const fresh = folders.filter((f) => !prev.has(f));
+			if (!fresh.length) {
+				return prev;
+			}
+			const next = new Set(prev);
+			for (const f of fresh) {
+				next.add(f);
+			}
+			persistUnread(next);
 			return next;
 		});
 	};
@@ -89,16 +127,30 @@ export function App() {
 					setActiveMd(msg.name);
 					break;
 				case 'history':
+					// 晚到的旧扫描快照直接丢弃：应用它会回退任务列表、还可能把新登记的未读剪掉
+					if (msg.seq < historySeqRef.current) {
+						break;
+					}
+					historySeqRef.current = msg.seq;
 					setTasks(msg.tasks);
-					// 同步「已看过」集合：首屏建基线（旧历史全标已看），其后仅保留仍在历史中的（防无限增长），
-					// 新出现的完成任务不在集合中 → 任务页亮未读特效、角标计数。
-					setViewedTasks((prev) => {
-						const folders = msg.tasks.map((t) => t.folder);
-						const next = seededRef.current
-							? new Set(folders.filter((f) => prev.has(f)))
-							: new Set(folders);
-						seededRef.current = true;
-						persistViewed(next);
+					// 剪枝未读集合：既不在历史也不在进行中的条目（创建失败撤卡、文件夹被清理/手删）移除，防悬空堆积。
+					// 年龄护栏挡并发刷新竞态：历史扫盘慢且多次刷新不串行，过期快照可能不含刚创建/刚转历史的任务，
+					// 不满 1 天的条目一律保留（悬空至多滞留 1 天，无害），只有陈旧悬空条目才真正剪掉
+					setUnreadTasks((prev) => {
+						const alive = new Set(msg.tasks.map((t) => t.folder));
+						const next = new Set(
+							[...prev].filter((f) => {
+								if (alive.has(f) || pendingFoldersRef.current.has(f)) {
+									return true;
+								}
+								const created = folderEpoch(f);
+								return created !== null && Date.now() - created < UNREAD_PRUNE_MIN_AGE_MS;
+							})
+						);
+						if (next.size === prev.size) {
+							return prev;
+						}
+						persistUnread(next);
 						return next;
 					});
 					// 缺缩略图的大图（带 thumbKey）入队生成回传，下次推送即可用缩略图
@@ -107,8 +159,27 @@ export function App() {
 					clearResourceCachesThrottled();
 					break;
 				case 'pendingTasks':
+					// 晚到的旧快照丢弃：旧 pending 卡片复活会把已完成任务重新登记未读
+					if (msg.seq < pendingSnapSeqRef.current) {
+						break;
+					}
+					pendingSnapSeqRef.current = msg.seq;
 					setPendingTasks(msg.tasks);
+					pendingFoldersRef.current = new Set(msg.tasks.map((t) => t.folder));
+					// 登记未读的主路径是 unreadFolders 消息（变更瞬间先行送达），这里兜底 init 重放
+					registerUnread(msg.tasks.map((t) => t.folder));
 					requestThumbs(msg.tasks.flatMap((t) => t.images));
+					break;
+				case 'unreadFolders':
+					// 任务创建/变更瞬间的进行中快照：登记未读（幂等）。进行中卡片本身不亮未读特效，
+					// 任务完成落进历史后特效才生效，点开即消。
+					// 它比同一轮刷新的 pendingTasks 先送达，顺带刷新剪枝参照的进行中集合
+					if (msg.seq < pendingSnapSeqRef.current) {
+						break;
+					}
+					pendingSnapSeqRef.current = msg.seq;
+					pendingFoldersRef.current = new Set(msg.folders);
+					registerUnread(msg.folders);
 					break;
 				case 'libraries':
 					setLibraries(msg.libraries);
@@ -206,12 +277,9 @@ export function App() {
 		return <div className="page">加载中…</div>;
 	}
 
-	// 任务标签角标数：进行中任务 + 历史中未看过的任务。
-	// 「构建并复制」任务（requested=0，只建不提交）是用户主动导出，不算待看，不计入角标。
-	const unseenCount = tasks.reduce(
-		(n, t) => (t.meta?.requested === 0 || viewedTasks.has(t.folder) ? n : n + 1),
-		0
-	);
+	// 任务标签角标数：进行中任务 + 历史中未读的任务。
+	// 未读集合只经 pendingTasks 推送登记，「构建并复制」（requested=0）等旧口径任务不会在其中。
+	const unseenCount = tasks.reduce((n, t) => (unreadTasks.has(t.folder) ? n + 1 : n), 0);
 	const taskBadge = pendingTasks.length + unseenCount;
 
 	return (
@@ -287,7 +355,7 @@ export function App() {
 					collections={collections}
 					cols={config.tasksCols}
 					tabCols={config.tasksTabCols}
-					viewedTasks={viewedTasks}
+					unreadTasks={unreadTasks}
 					onViewed={markTaskViewed}
 					onSendToEdit={sendToEdit}
 					reveal={reveal}

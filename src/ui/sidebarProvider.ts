@@ -50,6 +50,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private readonly editCtrl: EditController;
 	/** 素材库相关消息处理（库增删/资源根/自动库/插入引用），view 与 currentMd 经 getter 回调取 */
 	private readonly materials: MaterialsController;
+	/** 历史推送的单调序号：每次 pushHistory 扫描开始时自增，前端据此丢弃晚到的旧快照 */
+	private historySeq = 0;
+	/** 进行中快照（unreadFolders / pendingTasks 共用）的单调序号：两类消息是同一列表的快照，共用序号让前端按捕获时刻排序应用 */
+	private pendingSnapSeq = 0;
 	/** 收藏夹相关消息处理（CRUD/导出/切换），视图推送经回调回到本类 */
 	private readonly favorites = new FavoritesController({
 		post: (msg) => this.post(msg),
@@ -87,6 +91,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		// 新生成的图要等下次 init/增删库才反映——这是为省掉每 4s 一次递归扫盘而接受的取舍，勿因此重加轮询扫描。
 		context.subscriptions.push(
 			this.tasks.onChange(async () => {
+				// 未读登记先行（内存直出、同步 post）：秒败任务可能在下面慢的历史扫盘期间就移出
+				// 进行中列表，等 pushPendingTasks 再读快照已看不到它，前端将永远登记不上未读
+				this.post({
+					type: 'unreadFolders',
+					seq: ++this.pendingSnapSeq,
+					folders: this.tasks.list().map((t) => t.folder),
+				});
 				await this.pushHistory();
 				await this.pushPendingTasks();
 			})
@@ -365,22 +376,33 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async pushHistory(): Promise<void> {
+		// 扫描开始即取号：并发的多次刷新（onChange 不串行 + init/refreshHistory/收藏变更各自触发）
+		// 完成顺序不定，旧扫描可能晚到；前端按 seq 丢弃更旧的快照，防止覆盖新状态/误剪未读
+		const seq = ++this.historySeq;
 		const favSet = favoriteUriSet(await readFavorites());
 		const tasks: Task[] = await listHistory(this.tasks.activeFolders());
-		this.post({
-			type: 'history',
-			tasks: await Promise.all(tasks.map((t) => toWebviewTask(this.view?.webview, t, favSet))),
-		});
+		const payload = await Promise.all(tasks.map((t) => toWebviewTask(this.view?.webview, t, favSet)));
+		// 发送前复核取号仍是最新：期间有更新的扫描启动即说明本快照已过期，直接不发——
+		// 只靠前端丢弃防不住「旧快照先于新快照送达」（此时前端还没有更大序号可比）
+		if (seq !== this.historySeq) {
+			return;
+		}
+		this.post({ type: 'history', seq, tasks: payload });
 	}
 
 	/** 推送进行中任务（聚合进度 + 已存缩略图）给前端；全部进行中任务，不按 MD 过滤 */
 	private async pushPendingTasks(): Promise<void> {
-		const favSet = favoriteUriSet(await readFavorites());
+		// 取号与快照捕获同步相邻：seq 代表 list() 的捕获时刻，前端据此与 unreadFolders 统一排序应用
+		const seq = ++this.pendingSnapSeq;
 		const tasks = this.tasks.list();
-		this.post({
-			type: 'pendingTasks',
-			tasks: await Promise.all(tasks.map((t) => toWebviewPendingTask(this.view?.webview, t, favSet))),
-		});
+		const favSet = favoriteUriSet(await readFavorites());
+		const payload = await Promise.all(tasks.map((t) => toWebviewPendingTask(this.view?.webview, t, favSet)));
+		// 缩略图转换耗时，期间可能已有更新的快照（unreadFolders 或下一轮 pendingTasks）取号：
+		// 本快照已过期则不发，防止旧 pending 卡片复活、已完成任务被重新登记未读
+		if (seq !== this.pendingSnapSeq) {
+			return;
+		}
+		this.post({ type: 'pendingTasks', seq, tasks: payload });
 	}
 
 	private post(msg: InboundMessage): void {

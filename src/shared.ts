@@ -344,8 +344,12 @@ export interface WebviewCollection {
 export type InboundMessage =
 	| { type: 'config'; config: ImageFlowConfig; options: ConfigOptions }
 	| { type: 'activeMd'; name: string | null }
-	| { type: 'history'; tasks: WebviewTask[] }
-	| { type: 'pendingTasks'; tasks: WebviewPendingTask[] }
+	/** seq：扫描开始时刻的单调递增序号。历史扫盘慢且多次刷新不串行，旧扫描可能晚到；前端丢弃 seq 更小的推送 */
+	| { type: 'history'; tasks: WebviewTask[]; seq: number }
+	/** seq：与 unreadFolders 共用一个序号（两者是同一进行中列表的快照），按捕获时刻排序应用、丢弃更旧的 */
+	| { type: 'pendingTasks'; tasks: WebviewPendingTask[]; seq: number }
+	/** 进行中任务的 folder 快照（任务变更瞬间内存直出、抢在慢的历史扫盘前送达），前端据此登记未读 */
+	| { type: 'unreadFolders'; folders: string[]; seq: number }
 	| { type: 'status'; message: string }
 	| { type: 'error'; message: string }
 	| { type: 'busy'; busy: boolean }

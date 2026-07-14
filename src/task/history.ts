@@ -28,11 +28,13 @@ export function mdBaseName(mdUri: vscode.Uri): string {
 }
 
 /**
- * 在 .image-flow/tasks/ 下创建任务文件夹，返回 [文件夹名, 目录 Uri]。
- * 文件夹名 = 毫秒级时间戳；createDirectory 会递归补建父目录。
+ * 在 .image-flow/tasks/ 下创建任务文件夹，返回 [文件夹标识, 目录 Uri]。
+ * 两级结构 <yyMMdd>/<HHmmssSSS>（按天分组便于人工浏览），标识 = "天/时刻"（含斜杠，
+ * 全库唯一、等长字段字典序即时间序）；createDirectory 会递归补建父目录。
  */
 export async function createTaskFolder(): Promise<[string, vscode.Uri]> {
-	const folder = formatStamp(new Date());
+	const stamp = formatStamp(new Date());
+	const folder = `${stamp.slice(0, 6)}/${stamp.slice(6)}`;
 	const dir = vscode.Uri.joinPath(tasksRoot(), folder);
 	await vscode.workspace.fs.createDirectory(dir);
 	return [folder, dir];
@@ -100,10 +102,10 @@ export async function saveResults(
 }
 
 /**
- * 扫描 .image-flow/tasks/ 下所有任务文件夹，读取其中图片为缩略图，
- * 按文件夹名（毫秒时间戳）倒序返回——较新的任务在前。
- * 非递归、仅收图片文件：提示词 .md 与 input/ 归档子目录天然被忽略。
- * @param exclude 进行中任务的文件夹名集合，这些由顶部待办卡片实时展示，历史里跳过避免重复。
+ * 扫描 .image-flow/tasks/<天>/<时刻> 两级结构下所有任务文件夹，读取其中图片为缩略图，
+ * 按文件夹标识（"天/时刻"）倒序返回——较新的任务在前。
+ * 任务夹内非递归、仅收图片文件：提示词 .md 与 input/ 归档子目录天然被忽略。
+ * @param exclude 进行中任务的文件夹标识集合，这些由顶部待办卡片实时展示，历史里跳过避免重复。
  */
 export async function listHistory(exclude?: Set<string>): Promise<Task[]> {
 	let root: vscode.Uri;
@@ -112,19 +114,37 @@ export async function listHistory(exclude?: Set<string>): Promise<Task[]> {
 	} catch {
 		return []; // 无工作区：无历史可言
 	}
-	let entries: [string, vscode.FileType][];
+	let dayEntries: [string, vscode.FileType][];
 	try {
-		entries = await vscode.workspace.fs.readDirectory(root);
+		dayEntries = await vscode.workspace.fs.readDirectory(root);
 	} catch {
 		return [];
 	}
 
-	const folders = entries
-		.filter(([, type]) => type === vscode.FileType.Directory)
-		.map(([name]) => name)
-		.filter((name) => !exclude?.has(name))
-		.sort()
-		.reverse();
+	const folders: string[] = [];
+	for (const [day, type] of dayEntries) {
+		// 只认 6 位日期夹：用户手工放进 tasks/ 的目录不当任务层级扫描
+		if (type !== vscode.FileType.Directory || !/^\d{6}$/.test(day)) {
+			continue;
+		}
+		let subs: [string, vscode.FileType][];
+		try {
+			subs = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(root, day));
+		} catch {
+			continue;
+		}
+		for (const [sub, subType] of subs) {
+			// 只认 9 位时刻夹：日期夹里混入的备份/手工目录不误收为任务
+			if (subType !== vscode.FileType.Directory || !/^\d{9}$/.test(sub)) {
+				continue;
+			}
+			const folder = `${day}/${sub}`;
+			if (!exclude?.has(folder)) {
+				folders.push(folder);
+			}
+		}
+	}
+	folders.sort().reverse();
 
 	const tasks: Task[] = [];
 	for (const folder of folders) {
@@ -168,14 +188,15 @@ export async function listHistory(exclude?: Set<string>): Promise<Task[]> {
 const CLEAN_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * 解析任务文件夹名（formatStamp 的 yyMMddHHmmssSSS）为创建时刻 epoch ms；非该格式返回 null。
+ * 解析任务文件夹标识（"yyMMdd/HHmmssSSS"）为创建时刻 epoch ms；非该格式返回 null。
  * 用于清理时按文件夹年龄判定，而非依赖各平台不一的 mtime。
  */
 function folderCreatedAt(folder: string): number | null {
-	if (!/^\d{15}$/.test(folder)) {
+	if (!/^\d{6}\/\d{9}$/.test(folder)) {
 		return null;
 	}
-	const n = (a: number, b: number) => Number(folder.slice(a, b));
+	const digits = folder.replace('/', '');
+	const n = (a: number, b: number) => Number(digits.slice(a, b));
 	const year = 2000 + n(0, 2);
 	const month = n(2, 4);
 	const day = n(4, 6);
@@ -190,11 +211,12 @@ function folderCreatedAt(folder: string): number | null {
 /**
  * 启动时清理「无产物」任务文件夹：顶层无图/音/视频文件、且创建满 minAgeMs（默认 1 天）的整夹删除。
  * 覆盖两类：「构建并复制」后外部视频未下载回来的空壳、以及生成失败（0 成图）的留痕夹。
- * 非递归只看顶层——input/ 归档子目录里的参考媒体不计数，避免把还没回收成片的视频任务误判为有产物。
- * 时间戳解析不出（非任务文件夹名）或还不够老的一律保留，宁可少清不误删。
- * @param exclude 进行中（持久化待续拉）任务的文件夹名集合，正在下载中不能删。
+ * 任务夹内非递归只看顶层——input/ 归档子目录里的参考媒体不计数，避免把还没回收成片的视频任务误判为有产物。
+ * 时间戳解析不出（非任务文件夹标识）或还不够老的一律保留，宁可少清不误删。
+ * 任务夹清完后顺带删掉被清空的日期夹（仅限 6 位日期命名的，其余目录不碰）。
+ * @param exclude 进行中（持久化待续拉）任务的文件夹标识集合，正在下载中不能删。
  * @param minAgeMs 文件夹至少存在多久才允许清理，默认 1 天。
- * @returns 实际删除的文件夹数。
+ * @returns 实际删除的任务文件夹数（不含日期夹）。
  */
 export async function cleanEmptyTaskFolders(
 	exclude: Set<string>,
@@ -206,38 +228,62 @@ export async function cleanEmptyTaskFolders(
 	} catch {
 		return 0; // 无工作区：无任务可清
 	}
-	let entries: [string, vscode.FileType][];
+	let dayEntries: [string, vscode.FileType][];
 	try {
-		entries = await vscode.workspace.fs.readDirectory(root);
+		dayEntries = await vscode.workspace.fs.readDirectory(root);
 	} catch {
 		return 0;
 	}
 	let removed = 0;
-	for (const [folder, type] of entries) {
-		if (type !== vscode.FileType.Directory || exclude.has(folder)) {
+	for (const [day, type] of dayEntries) {
+		if (type !== vscode.FileType.Directory) {
 			continue;
 		}
-		// 只清够老的：时间戳解析不出或还不满保留期的一律保留，给外部出片留足时间
-		const createdAt = folderCreatedAt(folder);
-		if (createdAt === null || Date.now() - createdAt < minAgeMs) {
-			continue;
-		}
-		const dir = vscode.Uri.joinPath(root, folder);
-		let files: [string, vscode.FileType][];
+		const dayDir = vscode.Uri.joinPath(root, day);
+		let subs: [string, vscode.FileType][];
 		try {
-			files = await vscode.workspace.fs.readDirectory(dir);
+			subs = await vscode.workspace.fs.readDirectory(dayDir);
 		} catch {
 			continue;
 		}
-		const hasMedia = files.some(([name, t]) => t === vscode.FileType.File && isMediaFileName(name));
-		if (hasMedia) {
-			continue;
+		for (const [sub, subType] of subs) {
+			const folder = `${day}/${sub}`;
+			if (subType !== vscode.FileType.Directory || exclude.has(folder)) {
+				continue;
+			}
+			// 只清够老的：时间戳解析不出或还不满保留期的一律保留，给外部出片留足时间
+			const createdAt = folderCreatedAt(folder);
+			if (createdAt === null || Date.now() - createdAt < minAgeMs) {
+				continue;
+			}
+			const dir = vscode.Uri.joinPath(dayDir, sub);
+			let files: [string, vscode.FileType][];
+			try {
+				files = await vscode.workspace.fs.readDirectory(dir);
+			} catch {
+				continue;
+			}
+			const hasMedia = files.some(([name, t]) => t === vscode.FileType.File && isMediaFileName(name));
+			if (hasMedia) {
+				continue;
+			}
+			try {
+				await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
+				removed++;
+			} catch {
+				/* 删除失败（占用/权限）跳过，不阻断启动 */
+			}
 		}
-		try {
-			await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
-			removed++;
-		} catch {
-			/* 删除失败（占用/权限）跳过，不阻断启动 */
+		// 日期夹被清空则顺带删除；只删 6 位日期命名的，避免误删用户手工放进 tasks/ 的目录
+		if (/^\d{6}$/.test(day)) {
+			try {
+				const remain = await vscode.workspace.fs.readDirectory(dayDir);
+				if (!remain.length) {
+					await vscode.workspace.fs.delete(dayDir, { recursive: false, useTrash: false });
+				}
+			} catch {
+				/* 读取/删除失败无害，留待下次启动再清 */
+			}
 		}
 	}
 	return removed;

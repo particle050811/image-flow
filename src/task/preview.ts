@@ -11,13 +11,14 @@ import { log } from '../util/log';
 import { showTransientWarning } from '../util/notify';
 
 /**
- * 解析指定 Markdown 并把「替换后的最终提示词正文」打开成预览文档。供右键命令与侧栏按钮共用。
- * 只展示发送给后端的提示词正文，不附请求参数与参考图概览。不调用 API、不消耗额度。
+ * 解析指定 Markdown，构建「替换后的最终提示词正文」（发给后端的 prompt，不含请求参数与参考图概览）。
+ * 不调用 API、不消耗额度。引用解析失败（如图片引用找不到文件）时抛错，供调用方决定如何呈现。
+ * 供 openRequestPreview（打开编辑器预览）与 CLI 桥 preview 命令共用，保证两处口径不漂移。
  */
-export async function openRequestPreview(
+export async function buildRequestPreviewText(
 	config: ImageFlowConfig,
 	mdUri: vscode.Uri
-): Promise<void> {
+): Promise<string> {
 	const bytes = await vscode.workspace.fs.readFile(mdUri);
 	const content = Buffer.from(bytes).toString('utf8').trim();
 	if (!content) {
@@ -26,7 +27,17 @@ export async function openRequestPreview(
 	// 与提交链路同口径：即梦视频（全能参考）允许音/视频参考，预览不误报
 	const allowNonImage = config.providerId === JIMENG_PROVIDER_ID && isJimengVideoModel(config.model);
 	const { prompt: basePrompt } = await buildPrompt(mdUri, content, allowNonImage);
-	const prompt = await buildInjectedPrompt(config, basePrompt);
+	return buildInjectedPrompt(config, basePrompt);
+}
+
+/**
+ * 解析指定 Markdown 并把「替换后的最终提示词正文」打开成预览文档。供右键命令与侧栏按钮共用。
+ */
+export async function openRequestPreview(
+	config: ImageFlowConfig,
+	mdUri: vscode.Uri
+): Promise<void> {
+	const prompt = await buildRequestPreviewText(config, mdUri);
 	await openTextPreview(prompt);
 }
 

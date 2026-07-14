@@ -18,10 +18,10 @@ export type {
 	OutboundMessage,
 } from '../shared';
 
-/** 持久化在 webview 内的本地状态（跨重载/重启保留），目前仅记已看过的完成任务文件夹 */
+/** 持久化在 webview 内的本地状态（跨重载/重启保留），目前仅记未读任务集合 */
 export interface WebviewState {
-	/** 已点开看过的「已完成任务」文件夹名集合，用于任务页未读特效与标签角标计数 */
-	viewedTasks?: string[];
+	/** 未读任务的文件夹标识集合：创建时登记、点开即删，用于任务页未读特效与标签角标计数 */
+	unreadTasks?: string[];
 }
 
 interface VsCodeApi {

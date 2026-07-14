@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
+import * as http from 'http';
+import * as crypto from 'crypto';
 import * as path from 'path';
-import * as os from 'os';
 import {
 	listLibraries,
 	listAutoLibraries,
@@ -9,49 +10,157 @@ import {
 	scanDirImages,
 } from '../storage/materials';
 import type { TaskImage } from '../shared';
+import { tokenFile } from '../storage/storage';
 import { parseImageRefs, IMAGE_REGEX, refPath } from '../prompt/buildPrompt';
 import { type Decision, decideRef, buildFixReport } from './cliBridgeLogic';
+import { buildRequestPreviewText } from '../task/preview';
+import { readConfig } from './config';
 import { log } from '../util/log';
 import { errMsg } from '../util/errors';
 
 /**
  * 「给 AI 自动调用」的命令入口：因库列表存在扩展主进程的 workspaceState、独立进程读不到，
- * 改由 scripts/imgflow.mjs 这层 CLI 壳走「文件请求」桥接——壳往工作区根
- * `.image-flow/requests/` 写一个请求 json（{op, md, out}），这里用 FileSystemWatcher 收到后
- * 在扩展主进程内跑逻辑（有 vscode API + workspaceState），结果原子写进 out 文件供壳轮询读回。
+ * 改由 scripts/imgflow.mjs 这层 CLI 壳桥接——扩展激活时在 127.0.0.1 的固定候选端口段
+ * （47870~47879）依次试绑 HTTP 服务，壳按同一顺序扫描端口直连 POST {token, op, md}，
+ * 这里在扩展主进程内跑逻辑（有 vscode API + workspaceState），响应体即结果。
+ * md 不在本窗口工作区时回 421，壳据此换下一个端口找目标窗口——端口发现零落盘，
+ * 工作区内不再写任何文件（曾用工作区根 bridge.json 传端口，导致光打开文件夹就拉出 .image-flow）。
  *
- * 选文件监听而非 vscode:// URI：URI 由外部进程触发会弹「是否允许扩展打开此 URI」安全确认，
- * 与「零点击自动调用」冲突；写文件不触发任何确认，也省去 shell/编码转义。请求目录在工作区内，
- * 故监听可靠、且天然按工作区隔离（只有打开该工作区的窗口会处理自己根下的请求）。
+ * 选回环 HTTP 而非 vscode:// URI：URI 由外部进程触发会弹「是否允许扩展打开此 URI」安全确认，
+ * 与「零点击自动调用」冲突。相比早期的「文件请求 + 轮询」桥，直连是真同步请求/响应：
+ * VS Code 没开时连接立刻被拒（壳侧秒级报错而非干等超时），也没有 watcher 漏事件、残留请求文件的问题。
+ * 服务只绑 127.0.0.1，请求须带 token（用户级稳定值，存 ~/.image-flow/token、跨激活复用，
+ * 不进任何仓库；本机单用户场景不做挑战-响应等更重的防护）。
  */
 
-/** 请求目录（相对工作区根），与 scripts/imgflow.mjs 约定一致 */
-const REQUESTS_GLOB = '.image-flow/requests/req-*.json';
-
-interface CliRequest {
-	op: string;
-	md: string;
-	out: string;
-}
+/** 候选端口段（与 scripts/imgflow.mjs 约定一致）：依次试绑，绑上哪个用哪个 */
+const PORT_START = 47870;
+const PORT_COUNT = 10;
+/** 响应标识头：壳凭此区分「本扩展的服务」与「端口被复用后的陌生进程」 */
+const MARKER_HEADER = 'x-image-flow';
+/** 请求体上限：请求只含 token/op/md 三个短字段，64KB 给足余量 */
+const MAX_BODY = 64 * 1024;
 
 export function registerCliBridge(context: vscode.ExtensionContext): vscode.Disposable {
 	const folder = vscode.workspace.workspaceFolders?.[0];
 	if (!folder) {
-		// 无工作区：没有库可查也无处放请求，返回空 Disposable
+		// 无工作区：没有库可查、也没有归属校验的基准，返回空 Disposable
 		return new vscode.Disposable(() => undefined);
 	}
-	// 激活即建好请求目录：壳靠「向上找 .image-flow」定位工作区根，预先建好让全新项目
-	// （还没跑过任务/收藏、.image-flow 尚不存在）也能直接用。createDirectory 递归且幂等。
-	void vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, '.image-flow', 'requests'));
-	// 仅监听新建：壳「写 .tmp 再 rename 成 req-*.json」，故 create 即完整文件
-	const watcher = vscode.workspace.createFileSystemWatcher(
-		new vscode.RelativePattern(folder, REQUESTS_GLOB),
-		false, // 不忽略 create
-		true, // 忽略 change
-		true // 忽略 delete
-	);
-	watcher.onDidCreate((uri) => handleRequest(context, folder.uri, uri));
-	return watcher;
+	// 读 token 与逐端口试绑都是异步的，先同步返回 Disposable、后台完成初始化；
+	// disposed 标记防「窗口已停用、初始化随后又开始监听」的竞态
+	let disposed = false;
+	let server: http.Server | undefined;
+	void cleanupLegacyBridgeFile(folder.uri);
+	void (async () => {
+		const token = await loadToken();
+		if (!token || disposed) {
+			return;
+		}
+		const srv = http.createServer((req, res) => {
+			void handleRequest(context, folder.uri, token, req, res);
+		});
+		const port = await listenOnFreePort(srv, PORT_START, PORT_COUNT);
+		if (port === null) {
+			log(`CLI 桥候选端口 ${PORT_START}~${PORT_START + PORT_COUNT - 1} 全不可用，桥不可用`);
+			return;
+		}
+		if (disposed) {
+			srv.close();
+			return;
+		}
+		srv.on('error', (err) => {
+			log(`CLI 桥服务异常：${errMsg(err)}`);
+		});
+		server = srv;
+		log(`CLI 桥已就绪：127.0.0.1:${port}`);
+	})();
+	return new vscode.Disposable(() => {
+		disposed = true;
+		server?.close();
+	});
+}
+
+/**
+ * 读用户级稳定 token（~/.image-flow/token，纯文本一行）；不存在则生成随机值写入。
+ * 跨激活/跨窗口复用、不轮换：文件在用户主目录、不进任何仓库；删除后重载窗口即换新值。
+ */
+async function loadToken(): Promise<string | null> {
+	const file = tokenFile();
+	try {
+		const raw = Buffer.from(await vscode.workspace.fs.readFile(file)).toString('utf8').trim();
+		if (raw) {
+			return raw;
+		}
+	} catch {
+		/* 不存在或读失败，走新建 */
+	}
+	try {
+		const fresh = crypto.randomUUID();
+		await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(file, '..'));
+		await vscode.workspace.fs.writeFile(file, Buffer.from(fresh + '\n', 'utf8'));
+		return fresh;
+	} catch (e) {
+		log(`CLI 桥 token 文件写入失败，桥不可用：${errMsg(e)}`);
+		return null;
+	}
+}
+
+/**
+ * 清理旧机制残留：曾把 {port, token} 写进工作区根 .image-flow/bridge.json（导致光打开
+ * 文件夹就创建 .image-flow），现已零落盘。存在即删；目录随之变空则一并移除，
+ * 有真实数据（tasks/prompts 等）的目录先查空再删、不受影响。
+ */
+async function cleanupLegacyBridgeFile(wsFolder: vscode.Uri): Promise<void> {
+	const dir = vscode.Uri.joinPath(wsFolder, '.image-flow');
+	for (const name of ['bridge.json', 'bridge.json.tmp']) {
+		try {
+			await vscode.workspace.fs.delete(vscode.Uri.joinPath(dir, name), { useTrash: false });
+		} catch {
+			/* 不存在即略过 */
+		}
+	}
+	try {
+		if ((await vscode.workspace.fs.readDirectory(dir)).length === 0) {
+			await vscode.workspace.fs.delete(dir, { recursive: false, useTrash: false });
+		}
+	} catch {
+		/* 目录不存在等，略过 */
+	}
+}
+
+/**
+ * 在候选端口段 [startPort, startPort + count) 内依次试绑：占用/权限类错误换下一个，全失败返回 null。
+ * 多窗口各绑各的端口互不冲突（壳靠 421 找到目标窗口），超出端口池的窗口桥不可用。
+ * 每次尝试的 error/listening 两个监听器成对挂、成对摘：listen(port, cb) 的 cb 挂在 'listening' 上，
+ * 绑定失败时若不摘掉，残留回调会在后续端口绑定成功时抢先触发、把 Promise resolve 到失败端口号。
+ */
+export function listenOnFreePort(
+	server: http.Server,
+	startPort: number,
+	count: number
+): Promise<number | null> {
+	return new Promise((resolve) => {
+		let i = 0;
+		const tryNext = () => {
+			if (i >= count) {
+				resolve(null);
+				return;
+			}
+			const port = startPort + i++;
+			const onListening = () => {
+				server.removeListener('error', onError);
+				resolve(port);
+			};
+			const onError = () => {
+				server.removeListener('listening', onListening);
+				tryNext();
+			};
+			server.once('error', onError);
+			server.listen(port, '127.0.0.1', onListening);
+		};
+		tryNext();
+	});
 }
 
 /** 非空字符串守卫：请求字段来自外部进程，逐项校验类型而非裸信任 */
@@ -60,97 +169,130 @@ function isNonEmptyString(v: unknown): v is string {
 }
 
 /**
- * child 是否落在 parent 目录内（含子目录）。用于把外部请求的 out/md 路径锁在白名单目录里，
- * 不让「投递请求文件」变成往任意路径写盘的原语。Windows 文件系统大小写不敏感，统一小写比较。
+ * child 是否落在 parent 目录内（含子目录）。fix 会回写 md，把外部请求的 md 路径锁在
+ * 工作区内，不让「本机任意进程发请求」变成改写任意文件的原语。Windows 大小写不敏感，统一小写比较。
  */
 function isInside(parent: string, child: string): boolean {
 	const rel = path.relative(parent.toLowerCase(), child.toLowerCase());
 	return rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-/** 处理一个请求文件：原子认领 → 校验 → 跑 op → 写 out → 删认领文件 */
+/** 超限错误标记：让处理层能回 413 而非当作普通 400 */
+const BODY_TOO_LARGE = 'BODY_TOO_LARGE';
+
+/** 读请求体（带大小上限）。超限时停止收集并以 BODY_TOO_LARGE reject——
+ *  不在这里 destroy 连接，留给处理层先回 413 响应（直接断开会让壳误判「扩展未运行」） */
+function readBody(req: http.IncomingMessage): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		let size = 0;
+		req.on('data', (chunk: Buffer) => {
+			size += chunk.length;
+			if (size > MAX_BODY) {
+				req.removeAllListeners('data');
+				req.removeAllListeners('end');
+				reject(Object.assign(new Error('请求体超限'), { code: BODY_TOO_LARGE }));
+				return;
+			}
+			chunks.push(chunk);
+		});
+		req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+		req.on('error', reject);
+	});
+}
+
+/** 恒定时间比较 token：先各自 sha256 摘要等长化，再 timingSafeEqual */
+function tokenMatches(expected: string, got: unknown): boolean {
+	if (typeof got !== 'string') {
+		return false;
+	}
+	const a = crypto.createHash('sha256').update(expected).digest();
+	const b = crypto.createHash('sha256').update(got).digest();
+	return crypto.timingSafeEqual(a, b);
+}
+
+/** 统一回包：所有响应（含错误）都带标识头，供壳识别「确实是本扩展在应答」 */
+function respond(res: http.ServerResponse, status: number, text: string): void {
+	res.writeHead(status, {
+		'content-type': 'text/plain; charset=utf-8',
+		[MARKER_HEADER]: '1',
+	});
+	res.end(text);
+}
+
+/** 处理一个请求：读体 → 验 token → 校验字段 → 跑 op → 响应体即结果 */
 async function handleRequest(
 	context: vscode.ExtensionContext,
 	wsFolder: vscode.Uri,
-	reqUri: vscode.Uri
+	token: string,
+	req: http.IncomingMessage,
+	res: http.ServerResponse
 ): Promise<void> {
-	// 认领：把 req-*.json 原子 rename 成 .lock（不匹配 watcher 的 req-*.json，不会再触发 create）。
-	// 同工作区双开时两个窗口都会收到 create，rename 失败（源已被另一窗口认领、不存在）者直接退出，
-	// 避免双跑：尤其 fix 会被重复回写、且后写的「修正 0」报告覆盖真实报告误导调用方。
-	const lockUri = reqUri.with({ path: reqUri.path + '.lock' });
 	try {
-		await vscode.workspace.fs.rename(reqUri, lockUri, { overwrite: false });
-	} catch {
-		return;
-	}
-	let req: CliRequest;
-	try {
-		req = JSON.parse(Buffer.from(await vscode.workspace.fs.readFile(lockUri)).toString('utf8'));
-	} catch {
-		// 内容损坏：删掉认领文件避免残留，壳侧会超时报错
-		await deleteQuietly(lockUri);
-		return;
-	}
-	const { op, md, out } = req;
-	// 字段类型校验 + out 路径白名单：在向 out 写任何东西（含错误回写）之前完成。
-	// out 限定在系统临时目录内（壳就写在 os.tmpdir()），不让外部请求把扩展变成「投递文件即往任意路径写盘」。
-	// out 非法时只能记日志、不回写（无可信落点），壳侧超时报错。
-	if (!isNonEmptyString(op) || !isNonEmptyString(md) || !isNonEmptyString(out)) {
-		log('CLI 请求字段缺失或类型非法（op/md/out 需为非空字符串），已忽略');
-		await deleteQuietly(lockUri);
-		return;
-	}
-	if (!isInside(os.tmpdir(), out)) {
-		log(`CLI 请求被拒：out 不在系统临时目录内（${out}）`);
-		await deleteQuietly(lockUri);
-		return;
-	}
-	try {
-		// md 限定在当前工作区内：fix 会回写 md，不允许改写工作区外的任意文件
-		if (!isInside(wsFolder.fsPath, md)) {
-			throw new Error('md 不在当前工作区内，已拒绝处理');
+		if (req.method !== 'POST' || req.url !== '/') {
+			respond(res, 404, 'ERROR 未知路径\n');
+			return;
 		}
-		const mdUri = vscode.Uri.file(md);
-		let text: string;
-		if (op === 'list') {
-			text = await runList(context, mdUri);
-		} else if (op === 'fix') {
-			text = await runFix(context, mdUri);
-		} else {
-			throw new Error(`未知操作：${op}（仅支持 list / fix）`);
-		}
-		await writeOut(out, text);
-		log(`CLI ${op} 完成：${md} → ${out}`);
-	} catch (e) {
-		const msg = `ERROR ${op}: ${errMsg(e)}`;
-		log(msg);
-		// out 已校验在白名单内，把错误写回去让轮询的壳拿到非零结果而非干等超时
+		// readBody 单独 await：超限的 BODY_TOO_LARGE 要直达外层 catch 回 413，
+		// 不能被下面「JSON 解析失败」的 catch 吞成 400
+		const body = await readBody(req);
+		let parsed: unknown;
 		try {
-			await writeOut(out, msg + '\n');
+			parsed = JSON.parse(body);
 		} catch {
-			/* out 写不了只能放弃，壳侧会超时 */
+			respond(res, 400, 'ERROR 请求体不是合法 JSON\n');
+			return;
 		}
-	} finally {
-		// 处理完删认领文件
-		await deleteQuietly(lockUri);
+		const { token: reqToken, op, md } = (parsed ?? {}) as Record<string, unknown>;
+		// token 先于一切业务校验：不给无凭据请求任何字段级错误信息
+		if (!tokenMatches(token, reqToken)) {
+			respond(res, 403, 'ERROR token 校验失败（~/.image-flow/token 与扩展加载值不一致，重载窗口后重试）\n');
+			return;
+		}
+		if (!isNonEmptyString(op) || !isNonEmptyString(md)) {
+			respond(res, 400, 'ERROR 请求字段缺失或类型非法（op/md 需为非空字符串）\n');
+			return;
+		}
+		// 归属校验先于 op 执行：md 不在本窗口工作区回 421，壳据此换下一个端口找目标窗口；
+		// 也把 fix 的回写能力锁在本工作区内（不让本机任意进程借请求改写任意文件），
+		// 且保证非目标窗口对真实 op 零副作用
+		if (!isInside(wsFolder.fsPath, md)) {
+			respond(res, 421, 'ERROR md 不在当前窗口的工作区内\n');
+			return;
+		}
+		try {
+			const mdUri = vscode.Uri.file(md);
+			let text: string;
+			if (op === 'list') {
+				text = await runList(context, mdUri);
+			} else if (op === 'fix') {
+				text = await runFix(context, mdUri);
+			} else if (op === 'preview') {
+				text = await runPreview(context, mdUri);
+			} else {
+				throw new Error(`未知操作：${op}（仅支持 list / fix / preview）`);
+			}
+			respond(res, 200, text);
+			log(`CLI ${op} 完成：${md}`);
+		} catch (e) {
+			const msg = `ERROR ${op}: ${errMsg(e)}`;
+			log(msg);
+			respond(res, 500, msg + '\n');
+		}
+	} catch (e) {
+		// 读体失败（超限/连接中断）等：尽力回包，连接已断则忽略
+		log(`CLI 桥请求处理失败：${errMsg(e)}`);
+		try {
+			const tooLarge = (e as NodeJS.ErrnoException | null)?.code === BODY_TOO_LARGE;
+			respond(res, tooLarge ? 413 : 400, `ERROR ${errMsg(e)}\n`);
+			if (tooLarge) {
+				// 排空剩余请求体让连接正常收尾，客户端才能读到 413 而非半途断连
+				req.resume();
+			}
+		} catch {
+			/* 连接已断，无处回包 */
+		}
 	}
-}
-
-/** 删文件、吞掉「不存在」之类的错误（认领文件清理用） */
-async function deleteQuietly(uri: vscode.Uri): Promise<void> {
-	try {
-		await vscode.workspace.fs.delete(uri);
-	} catch {
-		/* 已被删/不存在，忽略 */
-	}
-}
-
-/** 原子写出：先写 .tmp 再 rename，避免壳轮询时读到半截内容 */
-async function writeOut(outPath: string, text: string): Promise<void> {
-	const out = vscode.Uri.file(outPath);
-	const tmp = vscode.Uri.file(outPath + '.tmp');
-	await vscode.workspace.fs.writeFile(tmp, Buffer.from(text, 'utf8'));
-	await vscode.workspace.fs.rename(tmp, out, { overwrite: true });
 }
 
 /** 收集结果项：图片 + 是否来自配置素材库（list 据此对大素材库只挑写了描述的，fix 全取） */
@@ -198,17 +340,13 @@ async function collectMdImages(
 /**
  * list：列出可用参考图，每条为「描述（若有）+ `![别名或主名](文件名)`」（只给文件名、不给路径）。
  * 描述在前、引用紧随，与右键插入引用同格式，可直接粘进正文。
- * 范围取 collectMdImages（与工作台同源）：md 目录与自动库全列；配置素材库可能很大、递归扫，
- * 故只列写了描述的（fromLibrary 且无描述则跳过）。按文件名去重。
+ * 范围取 collectMdImages（与工作台同源）：md 目录、自动库、配置素材库全列（不筛描述，全量占用的上下文有限）。
+ * 按文件名去重。
  */
 async function runList(context: vscode.ExtensionContext, mdUri: vscode.Uri): Promise<string> {
 	const seen = new Set<string>();
 	const lines: string[] = [];
 	for (const img of await collectMdImages(context, mdUri)) {
-		// 大素材库只列写了描述的；md 目录与自动库（上级各层）全列
-		if (img.fromLibrary && !img.hasDesc) {
-			continue;
-		}
 		const key = img.name.toLowerCase();
 		if (seen.has(key)) {
 			continue;
@@ -220,6 +358,16 @@ async function runList(context: vscode.ExtensionContext, mdUri: vscode.Uri): Pro
 		lines.push(desc + `![${alt}](${img.name})`);
 	}
 	return lines.join('\n') + '\n';
+}
+
+/**
+ * preview：解析 md 并构建替换后的最终提示词正文（与侧栏「预览」按钮同一份逻辑，不调用 API、不消耗额度）。
+ * 引用解析失败（如图片引用找不到文件）时抛错，交给外层 catch 统一回 `ERROR preview: ...`——
+ * AI 据此自行判断参考图是否填对，无需再解析人类可读的 UI 提示。
+ */
+async function runPreview(context: vscode.ExtensionContext, mdUri: vscode.Uri): Promise<string> {
+	const config = await readConfig(context);
+	return buildRequestPreviewText(config, mdUri);
 }
 
 /** 路径是否存在 */

@@ -58,7 +58,7 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('image-flow.previewRequest', (uri?: vscode.Uri) =>
 			previewRequestCommand(context, uri)
 		),
-		// 给 AI 自动调用的文件请求桥：监听 .image-flow/requests/ 下的 list|fix 请求
+		// 给 AI 自动调用的回环 HTTP 桥：固定候选端口段依次试绑（工作区零落盘），处理 list|fix|preview 请求
 		registerCliBridge(context)
 	);
 

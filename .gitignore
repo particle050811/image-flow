@@ -8,3 +8,5 @@ media/sidebar.js.map
 .vscode/*.png
 .claude/
 docs/
+# 扩展在工作区根写入的运行时状态（CLI 桥端口发现文件、任务/缩略图等），不进仓库
+.image-flow/

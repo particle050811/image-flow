@@ -80,15 +80,16 @@ function formatElapsed(ms: number): string {
 }
 
 /**
- * 任务创建时间：解析文件夹名 yyMMddHHmmssSSS（formatStamp 的格式）为本地时间。
+ * 任务创建时间：解析文件夹标识 yyMMdd/HHmmssSSS（createTaskFolder 的两级格式）为本地时间。
  * 同年省略年份、跨年带年（例：6月27日 19:15 / 2025年12月27日 19:15）。
  * 旧项目等非该格式的文件夹解析不出有效时间，返回 null —— 上层据此不显示。
  */
 function formatCreated(folder: string): string | null {
-	if (!/^\d{15}$/.test(folder)) {
+	if (!/^\d{6}\/\d{9}$/.test(folder)) {
 		return null;
 	}
-	const num = (a: number, b: number) => Number(folder.slice(a, b));
+	const digits = folder.replace('/', '');
+	const num = (a: number, b: number) => Number(digits.slice(a, b));
 	const year = 2000 + num(0, 2);
 	const month = num(2, 4);
 	const day = num(4, 6);
@@ -243,7 +244,7 @@ export function Tasks({
 	collections,
 	cols,
 	tabCols,
-	viewedTasks,
+	unreadTasks,
 	onViewed,
 	onSendToEdit,
 	reveal,
@@ -254,15 +255,15 @@ export function Tasks({
 	collections: WebviewCollection[];
 	cols: number;
 	tabCols: number;
-	/** 已点开看过的完成任务文件夹集合：不在其中的历史任务亮未读特效 */
-	viewedTasks: Set<string>;
-	/** 点开完成任务卡片时回调，标记为已看过 */
+	/** 未读任务的文件夹标识集合：在其中的历史任务亮未读特效 */
+	unreadTasks: Set<string>;
+	/** 点开完成任务卡片时回调，消掉未读 */
 	onViewed: (folder: string) => void;
 	onSendToEdit: (uri: string) => void;
 	/** 完成通知点「查看」要定位的任务：folder + nonce（同任务可重复触发） */
 	reveal?: { folder: string; nonce: number } | null;
 }) {
-	// 进行中与历史按文件夹名（毫秒时间戳）倒序合并，新任务在前
+	// 进行中与历史按文件夹标识（天/时刻）倒序合并，新任务在前
 	const items = [
 		...pendingTasks.map((t) => ({ key: `p:${t.id}`, folder: t.folder, kind: 'pending' as const, task: t })),
 		...tasks.map((t) => ({ key: `h:${t.folder}`, folder: t.folder, kind: 'history' as const, task: t })),
@@ -271,20 +272,23 @@ export function Tasks({
 	// 选中失效（任务完成转历史 / 列表刷新）回落到第一个
 	const { current, setSelected } = usePicker(items, (i) => i.key);
 
-	// 收到 reveal（点完成通知「查看」）：按 folder 选中对应条目；已完成的顺带标记已看过
+	// 收到 reveal（点完成通知「查看」）：按 folder 选中对应条目。
+	// 通知先于完成刷新弹出，点得快时该任务可能仍是进行中：其转历史时 key 从 p: 变 h:、
+	// kind 变化让本效果补跑一次重新选中（每个 reveal 至多补跑一次，不随列表刷新反复抢占手动选择）。
+	const revealTarget = reveal ? items.find((i) => i.folder === reveal.folder) : undefined;
 	useEffect(() => {
-		if (!reveal) {
-			return;
+		if (revealTarget) {
+			setSelected(revealTarget.key);
 		}
-		const item = items.find((i) => i.folder === reveal.folder);
-		if (item) {
-			setSelected(item.key);
-			if (item.kind === 'history') {
-				onViewed(item.folder);
-			}
+	}, [reveal?.nonce, revealTarget?.kind]);
+
+	// 详情已展示即已读：任务页可见且选中的是历史任务时消其未读（点击卡片、reveal 定位、
+	// 盯着进行中卡片看它完成——所有让详情呈现在眼前的路径都统一走这里）
+	useEffect(() => {
+		if (!hidden && current?.kind === 'history' && unreadTasks.has(current.folder)) {
+			onViewed(current.folder);
 		}
-		// 仅在 nonce 变化时触发定位，不随列表刷新反复抢占用户的手动选择
-	}, [reveal?.nonce]);
+	});
 
 	return (
 		<div
@@ -321,11 +325,8 @@ export function Tasks({
 										? rateClass(item.task.meta.succeeded, item.task.meta.requested)
 										: '';
 							// 已完成但未点开看过的任务亮未读特效（进行中任务恒亮 data-pending）。
-							// 「构建并复制」任务（requested=0）是用户主动导出，不亮未读特效。
-							const unseen =
-								item.kind === 'history' &&
-								item.task.meta?.requested !== 0 &&
-								!viewedTasks.has(item.folder);
+							// 未读集合只在任务创建时登记，「构建并复制」（requested=0）等旧任务不会在其中。
+							const unseen = item.kind === 'history' && unreadTasks.has(item.folder);
 							return (
 								<button
 									key={item.key}
@@ -333,13 +334,8 @@ export function Tasks({
 									data-active={current?.key === item.key}
 									data-pending={item.kind === 'pending' || undefined}
 									data-unseen={unseen || undefined}
-									onClick={() => {
-										setSelected(item.key);
-										// 点开完成任务即记为已看过，清掉特效与角标计数
-										if (item.kind === 'history') {
-											onViewed(item.folder);
-										}
-									}}
+									// 消未读不在此处理：选中后由「详情已展示即已读」效果统一消除
+									onClick={() => setSelected(item.key)}
 								>
 									<span className="chip-name">{title}</span>
 									{tabCols <= 1 && model && <span className="chip-sub">{model}</span>}

@@ -268,6 +268,8 @@ export function mutateFavorites(fn: (d: FavoritesData) => FavoritesData): Promis
 		const file = favoritesFile();
 		const next = fn(await readFavorites());
 		if (file) {
+			// 自建父目录（幂等）：.image-flow 不再由激活期预建（CLI 桥已零落盘），首次收藏时可能还不存在
+			await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(file, '..'));
 			await vscode.workspace.fs.writeFile(
 				file,
 				Buffer.from(JSON.stringify(next, null, 2), 'utf8')

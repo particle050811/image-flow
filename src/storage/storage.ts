@@ -9,6 +9,14 @@ export function settingsFile(): vscode.Uri {
 	return vscode.Uri.joinPath(vscode.Uri.file(os.homedir()), '.image-flow', 'settings.json');
 }
 
+/**
+ * CLI 桥 token 文件：~/.image-flow/token（跨工作区全局，纯文本一行）。
+ * 首次激活由 cliBridge 生成；壳脚本 scripts/imgflow.mjs 读同一文件。删除该文件后重载窗口即轮换。
+ */
+export function tokenFile(): vscode.Uri {
+	return vscode.Uri.joinPath(vscode.Uri.file(os.homedir()), '.image-flow', 'token');
+}
+
 /** 第一个工作区文件夹的 Uri；无工作区返回 undefined */
 export function workspaceRoot(): vscode.Uri | undefined {
 	return vscode.workspace.workspaceFolders?.[0]?.uri;

@@ -6,6 +6,7 @@ node_modules/**
 src/**
 docs/**
 CLAUDE.md
+CONTEXT.md
 TECH_DEBT_*.md
 .gitignore
 .yarnrc

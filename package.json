@@ -2,7 +2,7 @@
   "name": "image-flow",
   "displayName": "image flow",
   "description": "在 VS Code 中构建和管理 AI 绘图",
-  "version": "0.0.2",
+  "version": "1.0.0",
   "publisher": "particle050811",
   "repository": {
     "type": "git",
