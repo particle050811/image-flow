@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目目标
 
-image-flow 是一个 VS Code 扩展，在编辑器内对 Markdown 调用 AI 绘图后端生成图片。后端不再写死 Grsai：经 **adapter 调用协议层 + Provider 数据模型** 解耦，内置 grsai 之外还支持用户在 `~/.image-flow/settings.json`（用户主目录单文件 JSON）自定义任意 OpenAI 兼容 / Gemini 原生模型（设置页「API」下拉切换）。核心能力已实现：活动栏侧栏（Webview + React 前端）四标签页（工作台/编辑/任务/设置）承载配置、生成与编辑入口、结果/历史/素材库；右键 Markdown 触发生成；解析正文图片语法为有序参考图做图生图；编辑页对上传/拖入的图片做图生图改写（独立参数 + 提示词模板）；**异步提交 + 后台轮询 + 重启续拉**的任务机制；任务统一落盘 `.image-flow/tasks/`（含提示词与参考图归档）；可调缩略图尺寸的素材库与按 MD 路径自动生成的素材库。
+image-flow 是一个 VS Code 扩展，在编辑器内对 Markdown 调用 AI 绘图后端生成图片。后端经 **adapter 调用协议层 + Provider 数据模型** 解耦，内置 grsai 之外还支持用户在 `~/.image-flow/settings.json` 自定义任意 OpenAI 兼容 / Gemini 原生模型。核心能力：活动栏侧栏（Webview + React 前端）多标签页（工作台/编辑/任务/收藏/设置）；右键 Markdown 触发生成；解析正文图片语法为有序参考图做图生图；编辑页对上传/拖入的图片做图生图改写；**异步提交 + 后台轮询 + 重启续拉**的任务机制；任务统一落盘 `.image-flow/tasks/`；素材库与收藏夹。
 
 ## 常用命令
 
@@ -19,45 +19,39 @@ npm test               # 运行扩展测试（vscode-test，会下载并启动 V
 
 调试扩展：按 `F5` 启动加载了扩展的新 VS Code 窗口，断点设在 `src/extension.ts`。改代码后从调试工具栏重启，或 `Ctrl+R` 重载窗口。
 
-运行单个测试：测试通过 `.vscode-test.mjs` 匹配 `out/test/**/*.test.js`。要跑单个测试，先 `npm run compile-tests` 编译到 `out/`，再用 mocha 的 `--grep` 过滤（vscode-test 透传 mocha 参数），例如 `npx vscode-test --grep "测试名称"`。注意测试运行的是 `out/` 下的 JS，不是 `src/` 的 TS，改完测试需重新编译。
+运行单个测试：测试通过 `.vscode-test.mjs` 匹配 `out/test/**/*.test.js`。先 `npm run compile-tests` 编译到 `out/`，再用 mocha 的 `--grep` 过滤（vscode-test 透传 mocha 参数），例如 `npx vscode-test --grep "测试名称"`。测试运行的是 `out/` 下的 JS，改完测试需重新编译。
 
 ## 架构要点
 
 扩展有两条独立的构建产物，不要混淆：
 
-- **`dist/extension.js`** — esbuild 打包的扩展主进程产物（`esbuild.js` 的 extension 入口 `src/extension.ts`），是 `package.json` 的 `main` 入口。CommonJS，`vscode` 模块标记为 external（由宿主在运行时注入）。这是真正被 VS Code 加载的代码。
-- **`media/sidebar.js`** — esbuild 打包的 Webview 前端产物（webview 入口 `src/webview/index.tsx`），React + IIFE、platform=browser，由侧栏 HTML 的 `<script>` 加载。`esbuild.js` 同时构建这两个入口。
-- **`out/`** — tsc 编译产物，仅供测试运行器（vscode-test）使用。生产打包不经过这里。
+- **`dist/extension.js`** — esbuild 打包的扩展主进程产物（入口 `src/extension.ts`），是 `package.json` 的 `main` 入口。CommonJS，`vscode` 模块标记为 external。这是真正被 VS Code 加载的代码。
+- **`media/sidebar.js`** — esbuild 打包的 Webview 前端产物（入口 `src/webview/index.tsx`），React + IIFE、platform=browser。`esbuild.js` 同时构建这两个入口。新增 webview 组件 import 进入口即可，无需改 `esbuild.js`。
+- **`out/`** — tsc 编译产物，仅供测试运行器使用，生产打包不经过这里。
 
-两套类型检查：`check-types` 跑两次 `tsc --noEmit`——一次走根 `tsconfig.json`（扩展主进程），一次走 `tsconfig.webview.json`（webview 前端，含 React/DOM 类型）。esbuild 不做类型检查，所以 `compile`/`package` 脚本都先跑 `check-types` 再打包。
+两套类型检查：`check-types` 跑两次 `tsc --noEmit`——根 `tsconfig.json`（扩展主进程）+ `tsconfig.webview.json`（webview，含 React/DOM 类型）。esbuild 不做类型检查，所以 `compile`/`package` 都先跑 `check-types`。
 
 `src/` 按域分目录：`backend/`（api + adapters + providers/providerRuntime 后端调用层）、`prompt/`（buildPrompt/inject/edit/editSession/prompts/editController 提示词与编辑）、`task/`（tasks/taskFiles/history/preview 任务）、`ui/`（sidebarProvider/config/materialsController/cliBridge/toWebview/sidebarHtml 宿主层）、`storage/`（storage/paths/materials/thumbs 落盘）、`favorites/`、`util/`（images/log/errors/notify 工具）、`webview/`（React 前端）。`src/extension.ts`、`src/shared.ts`、`src/refs.ts`、`src/modelOptions.ts` 在 src 根（前后端共用或入口）。
 
 ### 扩展生命周期
 
-`src/extension.ts` 导出 `activate(context)` 与 `deactivate()`。`activate` 里做四件事：种入模型注入句（`seedModelInjections`，await 确保侧栏首读 config 时默认句已就位）、创建 `TaskManager`（异步任务管理器）、注册 `SidebarProvider`（侧栏 Webview）与命令、最后调 `taskManager.resume()` 续拉重启前未完成的任务。命令在 `package.json` 的 `contributes.commands` 中声明，并在 `activate` 内用 `vscode.commands.registerCommand` 注册——两处命令 ID（`image-flow.generateImage`、`image-flow.previewRequest`）必须完全一致。所有可释放对象（命令、监听器、TaskManager 等）都要 push 进 `context.subscriptions`，由宿主在停用时统一释放。
-
-`activationEvents` 配置了 `onStartupFinished`：VS Code 启动完成即激活扩展，无需用户展开侧栏，`resume()` 因此能在开机后立即续拉重启前未完成的任务。扩展同时也会在用户打开活动栏图标、加载 `contributes.views` 贡献的侧栏视图时激活。
-
-新增命令的标准流程：(1) 在 `package.json` 的 `contributes.commands` 声明；(2) 在 `activate` 中注册同 ID 的实现；(3) 如需特定时机激活，配置 `activationEvents`。
+`activate`（`src/extension.ts`）做四件事：种入模型注入句（`seedModelInjections`，await 确保侧栏首读 config 时默认句已就位）→ 创建 `TaskManager` → 注册 `SidebarProvider` 与命令 → `taskManager.resume()` 续拉重启前未完成任务。`activationEvents: onStartupFinished` 保证开机即激活、无需展开侧栏。新增命令：`package.json` 的 `contributes.commands` 声明 + `activate` 内注册**同 ID** 实现，两处必须一致；所有可释放对象 push 进 `context.subscriptions`。
 
 ### 前后端通信与异步任务
 
-侧栏前端（`src/webview/`，React）与扩展主进程通过 `postMessage` 通信，消息协议与共享类型集中在 `src/shared.ts`（唯一定义处，前后端都从这里取，避免漂移）。`SidebarProvider`（`src/ui/sidebarProvider.ts`）持有 Webview、转发消息、把文件 Uri 经 `asWebviewUri` 转成前端可加载的 `src`，并把工作台页消息（生成/预览请求）委派给 `src/ui/workbenchController.ts`、素材库消息委派给 `src/ui/materialsController.ts`、编辑页消息委派给 `src/prompt/editController.ts`、收藏委派给 `src/favorites/favoritesController.ts`。`WorkbenchController` 与 `EditController` 对称（前者无 EditSession 那样的常驻状态，「当前 MD」经回调取自 Provider）。Webview 静态资源（`media/sidebar.js`、`media/sidebar.css`）走 `asWebviewUri` + CSP nonce 加载。
+侧栏前端与扩展主进程经 `postMessage` 通信，消息协议与共享类型集中在 `src/shared.ts`（唯一定义处，避免漂移）。`SidebarProvider`（`src/ui/sidebarProvider.ts`）持有 Webview、把文件 Uri 经 `asWebviewUri` 转成前端可加载的 `src`，并按页委派消息：工作台→`workbenchController`、素材库→`materialsController`、编辑页→`prompt/editController`、收藏→`favorites/favoritesController`。静态资源走 `asWebviewUri` + CSP nonce 加载。
 
-**给 AI 零点击调用的 CLI 回环 HTTP 桥**（`src/ui/cliBridge.ts` + `scripts/imgflow.mjs`）：扩展激活时在 127.0.0.1 的固定候选端口段（47870~47879）依次试绑 HTTP 服务（绑上哪个用哪个，全占则桥不可用仅记日志）；壳进程按同一顺序扫描端口直连 `POST {token, op:list|fix|preview, md}`，扩展在主进程内跑（list 列可用参考图、fix 修正失效图片引用路径、preview 返回最终提示词正文），响应体即结果——真同步请求/响应，VS Code 没开时连接立刻被拒、壳秒级报错（壳侧带短重试跨过窗口重载空档）。**端口发现零落盘**：工作区内不写任何桥接文件（曾用工作区根 `bridge.json` 传端口，导致光打开文件夹就创建 `.image-flow`，已废弃）；md 不在本窗口工作区时回 421，壳据此换下一个端口找目标窗口（归属校验先于 op 执行，非目标窗口零副作用）。选回环 HTTP 而非 vscode:// URI 是为绕开安全确认实现零点击；token 是用户级稳定值（存 `~/.image-flow/token`、首次激活生成、跨窗口复用，删除后重载窗口即轮换；恒定时间比较）、服务只绑回环，所有响应带 `x-image-flow` 标识头供壳识别端口被陌生进程占用；请求字段类型与 `md` 路径在处理前校验（`md` 限工作区内）。引用决策/报告的纯逻辑在 `src/ui/cliBridgeLogic.ts`（有直测），目录扫描复用 `src/storage/materials.ts` 的 `scanDirImages`。
+**CLI 回环 HTTP 桥**（`src/ui/cliBridge.ts` + `scripts/imgflow.mjs`）：扩展激活时在 127.0.0.1:47870~47879 依次试绑 HTTP 服务，壳进程按同序扫描端口直连 `POST {token, op, md|cwd, args}`，同步拿结果。op 分两类：md 类 `list|fix|preview|submit`（md 兼作 421 窗口路由与安全边界）、cwd 类 `edit|query_result|list_task|list_model|favorite`（带 `cwd` 路由；favorite 把产物路径收进当前收藏夹并即时刷新侧栏，path 限工作区内）。模型调用类命令输出 JSON、成败看 `gen_status` 不看退出码（照抄即梦 dreamina CLI 约定）；submit/edit 按次覆盖参数的取值复用侧栏切模型逻辑（纯逻辑在 `src/ui/cliOpsLogic.ts`，有直测）。`edit` 是编辑模式（图生图，不经 md）：`--prompt` + 可重复 `--image`，一次调用 = 一个任务（多图 = 同一次编辑的多张参考图，批量套同一提示词由调用方循环），基线取编辑页配置（`editSubmitConfig`）、参考图路径按产品决策不限工作区（与编辑页可上传任意目录一致）。用户级 token 存 `~/.image-flow/token`，工作区零落盘。设计细节与安全约定见项目记忆 `cli-bridge-design`、命令面设计见 `cli-model-commands-plan`。
 
-**单根工作区是明确的产品决策**：`.image-flow` 存储目录（`src/storage/storage.ts`，预设模板亦在 `.image-flow/prompts/` 下）都取 `workspaceFolders[0]`，不支持多根工作区下按 md 归属分别落盘。多根场景不在支持范围内，无需为此加按 md 取根的逻辑。（自动素材库 `listAutoLibraries` 用 `getWorkspaceFolder(mdUri)` 是为定位 md 所属层级，与此不冲突。）
+**异步任务机制**（`src/task/tasks.ts` 的 `TaskManager`，公共提交流程 `start()`）：点生成 → 在工作区根 `.image-flow/tasks/<yyMMdd>/<HHmmssSSS>/` 建任务文件夹（任务标识 = `天/时刻` 含斜杠）并归档提示词 `.md` 与 `input/` 参考图 → 按并发数提交（**async adapter 串行提交、sync adapter 并行提交，策略相反各有原因，勿改**，理由见项目记忆 `task-submit-details`）→ 任务记录持久化进 `globalState` → 单定时器 4s 轮询 → 成图下载进任务文件夹，全部终结后移除记录。重启由 `resume()` 续拉。并发/比例/分辨率随模型联动（`src/modelOptions.ts`）与视频模型防误触（`videoOnlyVmd`）细节同见该记忆。
 
-生成与编辑共用**异步任务机制**（`src/task/tasks.ts` 的 `TaskManager`，公共提交流程 `start()`）：点生成 → 在工作区根 `.image-flow/tasks/<yyMMdd>/<HHmmssSSS>/` 建任务文件夹（按天两级分组，任务标识 = `天/时刻` 含斜杠）并归档提示词 `.md` 与 `input/` 参考图（`src/storage/storage.ts` 定根、`src/task/taskFiles.ts` 写文件、`src/task/history.ts` 建文件夹/落盘结果/扫历史）→ 按并发数（同一任务要几张图）提交：**async adapter（grsai）逐个串行错开提交**拿 job id（提交用专属 120s 超时；并发会让多份大图 base64 抢同一上行带宽、超时计时同时起跑而整批 abort，故串行让每份独占带宽、超时窗口只覆盖自身——submit 只上传、服务端生成仍并行）；**sync adapter（openai-images/gemini）并行提交**（submit 阻塞到整图生成完、300s 窗口，串行会让并发数退化为串行生成，故 `Promise.allSettled` 并发、再按序落盘避免 `task.images.length` 计数重名）→ 任务记录持久化进 `globalState` → 单个定时器（4s）轮询 `GET /v1/api/result`，某 job 成功就把图下载进任务文件夹 → 全部 job 终结后从持久化移除（无成图则连空文件夹一并删除）。重启时 `resume()` 续拉未完成任务。「任务」标签页把进行中卡片与历史按文件夹标识（`天/时刻`）倒序合并展示，`listHistory` 用 `activeFolders()` 排除进行中文件夹避免与待办重复。（旧「构建并复制」功能已随即梦 CLI 接入删除；历史遗留的 requested=0 任务卡与 preview.md 仍按旧口径渲染/跳过。）
+**单根工作区、单窗口是明确的产品决策**：`.image-flow` 存储都取 `workspaceFolders[0]`，不做多根/多窗口支持，相关审计发现一律按已接受取舍处理（见项目记忆 `no-multi-window-lock-support`）。
 
-**并发/比例/分辨率随模型联动**（`src/modelOptions.ts` 的 `switchModelParams`）：三者连同自定义参数一起记入每模型参数快照（`imageSizeMemory`），切模型时按「记忆 → 模型默认值（`WebviewImageModel.defaults`，如即梦视频 16:9/720p/并发1）→ 沿用当前 → 首项」恢复；并发上限按模型下发（`maxConcurrency`，视频 4、其余 10），前端「并发数」是与模型/参数同款的上弹面板。**视频模型防误触**：默认仅文件名以 `v.md` 结尾的 Markdown 可用视频模型生成（`config.videoOnlyVmd`，设置页可关）；编辑页彻底不提供视频模型（前端滤掉 `video` 标记模型 + `editController.generate` 兜底拦截）。
+### 后端与提示词链路
 
-后端调用分三层：`src/backend/api.ts` 是 HTTP 底层（`fetchWithTimeout` 带超时、`parseGenerateResponse` 响应形状校验、`normalizeBase` 规整 baseUrl、`toVipPixels`/`resolveImageSize` 尺寸换算），不反向依赖 adapter；`src/backend/adapters/*` 是各家调用协议（`grsai-async` 异步、`openai-images`/`gemini-generate` 同步、`openai-chat` 命名，凭 id 在 `src/backend/adapters/index.ts` 注册，新协议加一个文件 + 登记一行）；`src/backend/providers.ts`（纯逻辑：内置 grsai 写死 + settings.json→自定义 Provider 解析 + 发往 webview 的 `ConfigOptions` 剥掉 url/key + 切 Provider 时模型对齐）与 `src/backend/providerRuntime.ts`（node 侧 IO：settings.json 读缓存/脚手架、`resolveImageCall`/`resolveChatCall` 按当前配置解析「用哪个 adapter + baseUrl/apiKey」、AI 命名）合起来是 Provider 层。**密钥边界**：grsai 的 apiKey 走 secrets、ConfigOptions 绝不下发 url/key；自定义模型各自带 baseUrl/apiKey（落主目录明文 JSON），缺 apiKey 时报错而非回落 grsai 密钥。Markdown 正文解析与参考图处理在 `src/prompt/buildPrompt.ts`（`buildPrompt` 把 `![](路径)` 解析为有序参考图 base64 + 替换为 `[imageN]` 引用），素材库扫描在 `src/storage/materials.ts`。提示词注入在 `src/prompt/inject.ts`（`buildInjectedPrompt` 把「模型注入句 + 工作台预设模板 + 正文」拼成最终 prompt，模型注入句按模型内置兜底、可在侧栏覆盖；预设模板由 `config.workbenchTemplate` 指定、内容经 `src/prompt/prompts.ts` 的 `readTemplateContent` 从 `.image-flow/prompts/<名>.md` 读取，未选/缺失则为空段），提交（`src/task/tasks.ts`）与预览（`src/task/preview.ts`）两处都在 `buildPrompt` 之后各调一次。新增 webview 前端代码无需改 `esbuild.js`（webview 入口已是 `src/webview/index.tsx` 单 bundle，新组件 import 进去即可）。
+后端调用分三层：`src/backend/api.ts` HTTP 底层（`fetchWithTimeout`/`parseGenerateResponse`/`normalizeBase`/`toVipPixels` 尺寸换算，不反向依赖 adapter）→ `src/backend/adapters/*` 各家调用协议（`grsai-async` 异步、`openai-images`/`gemini-generate` 同步、`openai-chat` 命名；凭 id 在 `index.ts` 注册，新协议加一个文件 + 登记一行）→ `providers.ts`（纯逻辑）+ `providerRuntime.ts`（node 侧 IO）合成 Provider 层，按当前配置解析「用哪个 adapter + baseUrl/apiKey」。**密钥边界：grsai 的 apiKey 走 secrets、发往 webview 的 `ConfigOptions` 绝不下发 url/key；自定义模型各自带 baseUrl/apiKey，缺 apiKey 时报错而非回落 grsai 密钥。** 架构详情与历史返工教训见项目记忆 `multi-api-adapter-architecture`。
 
-编辑链路的模块分工：`src/prompt/editSession.ts`（编辑区图片列表，主进程持有、统一存 data URI，webview 重建不丢）、`src/prompt/edit.ts`（`buildEditFinalPrompt` 复用生成链路的引用替换、再拼编辑模型注入句，提交与预览共用、不拼工作台预设模板；`buildEditArchivePrompt` 归档正文）、`src/prompt/editController.ts`（编辑页消息处理：上传/生成/预览/缩略图）、`src/prompt/prompts.ts`（扫描 `.image-flow/prompts/` 下的 `.md` 模板）、`src/refs.ts`（前后端共用的引用片段纯函数，禁止引入 vscode/node 模块）。编辑页参数（模型/比例/分辨率/并发）经 `editConfigView`（`src/ui/config.ts`）覆盖主参数后走同一套 api 层。
-
-收藏链路：收藏数据落工作区根 `.image-flow/favorites.json`（`collections[]` + 顶层 `activeCollectionId`，绝对 file Uri 字符串，不进 vscode state、天然按工作区隔离）。`src/favorites/favorites.ts` 分两层——无副作用纯逻辑（`migrateFavorites`/`toggleFavorite`/`moveFavorite`/分组 CRUD/`favoriteUriSet`/`dedupeName`，在 `src/test/favorites.test.ts` 直测）与 IO（`readFavorites`/串行化 `mutateFavorites` 防连点丢更新/`pruneMissing` 悬空过滤）；CRUD/导出经 `src/favorites/favoritesController.ts` 处理。`SidebarProvider` 构造各 webview 视图时给 `WebviewImage` 打 `favorited` 标记下发（前端只读不比对），收藏变更后经 `pushAfterFavoritesChange` 重推带星标的列表，`exportCollection` 用 `showOpenDialog` 选目录后只复制图片、重名追加序号。前端 `StarButton.tsx`（左键 toggle 进当前夹、右键菜单移动到指定夹）叠加在任务/素材缩略图上，`Favorites.tsx` 是独立「收藏」标签页（收藏夹栏切换浏览 + 显式「设为当前」+ 新建/重命名/删除 + 一键导出）。
+提示词链路：`src/prompt/buildPrompt.ts` 把正文 `![](路径)` 解析为有序参考图 base64 + 替换为 `[imageN]` 引用；`src/prompt/inject.ts` 的 `buildInjectedPrompt` 拼「模型注入句 + 工作台预设模板（`.image-flow/prompts/<名>.md`）+ 正文」；提交（`task/tasks.ts`）与预览（`task/preview.ts`）都在 `buildPrompt` 之后各调一次。编辑链路模块分工见项目记忆 `edit-chain-modules`，收藏链路见 `favorites-architecture`。
 
 ## 代码约定
 
@@ -71,7 +65,6 @@ Webview 侧栏样式在 `media/sidebar.css`（静态文件，不经 esbuild，�
 
 `docs/images/` 是「展示图片」文件夹：用户每次往里放截图给我看需求/效果。用完后清掉里面多余的展示图片，但保留该文件夹本身，不要删除文件夹。
 
-## 参考文档
+## 参考资料
 
-`docs/grsai-api.md` — Grsai 接口整理：nano-banana / gpt-image-2 生成（`POST /v1/api/generate`）、异步结果查询（`GET /v1/api/result`）、OpenAI 兼容的对话与图片生成接口。含节点地址、鉴权、请求体字段与返回结构。需要调用或改动 API 时先查这里。
-
+Grsai 接口完整参考（generate/result/chat/images 请求体、返回结构、vip 像素表）已迁入项目记忆 `grsai-api`。需要调用或改动后端 API 时先查那份记忆。

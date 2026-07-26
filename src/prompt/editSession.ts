@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { isMediaFileName, mimeOf } from '../util/images';
 import { uriBaseName } from '../storage/paths';
+import { checkMediaBytes, approxDataUriBytes, REF_MEDIA_LIMITS } from '../util/mediaBytes';
 
 /** 编辑区一张图：name 为引用名（文件名），data 为 base64 data URI（统一驻内存，提交直接用） */
 export interface EditImage {
@@ -36,6 +37,11 @@ export class EditSession {
 			return invalid;
 		}
 		try {
+			// 先 stat 后读：超大文件在读进内存之前就拦掉
+			const tooBig = this.checkBytes(name, (await vscode.workspace.fs.stat(uri)).size);
+			if (tooBig) {
+				return tooBig;
+			}
 			const bytes = await vscode.workspace.fs.readFile(uri);
 			const data = `data:${mimeOf(path.extname(name))};base64,${Buffer.from(bytes).toString('base64')}`;
 			this.images.push({ name, data });
@@ -53,6 +59,10 @@ export class EditSession {
 		}
 		if (!/^data:(image|audio|video)\//.test(data)) {
 			return `媒体数据异常：${name}`;
+		}
+		const tooBig = this.checkBytes(name, approxDataUriBytes(data));
+		if (tooBig) {
+			return tooBig;
 		}
 		this.images.push({ name, data });
 		return null;
@@ -100,5 +110,12 @@ export class EditSession {
 			return `已存在同主名图片（命名引用会冲突），请改名后再添加：${name}`;
 		}
 		return null;
+	}
+
+	/** 新增一张 bytes 字节的图后，编辑区单个/合计字节是否仍在宽松档上限内。
+	 *  编辑区全部图以 base64 常驻内存，故已入列的按 data URI 折算后计入合计（只作基数、不再复检单个上限）。 */
+	private checkBytes(name: string, bytes: number): string | null {
+		const loaded = this.images.reduce((sum, i) => sum + approxDataUriBytes(i.data), 0);
+		return checkMediaBytes([{ name, size: bytes }], REF_MEDIA_LIMITS, loaded);
 	}
 }

@@ -5,6 +5,7 @@ import {
 	migrateFavorites,
 	favoriteUriSet,
 	toggleFavorite,
+	addFavorite,
 	moveFavorite,
 	renameFavoriteUri,
 	createCollection,
@@ -77,6 +78,45 @@ suite('favorites', () => {
 		let d = toggleFavorite(emptyFavorites(now), u('a'), now);
 		d = toggleFavorite(d, u('a'), now);
 		assert.ok(!favoriteUriSet(d).has(u('a')));
+	});
+
+	test('addFavorite 未收藏则带备注加入当前夹', () => {
+		const r = addFavorite(emptyFavorites(now), u('a'), '第 3 张，画风合格', now);
+		assert.strictEqual(r.already, false);
+		assert.strictEqual(r.collectionId, DEFAULT_COLLECTION_ID);
+		assert.deepStrictEqual(r.data.collections[0].items, [
+			{ uri: u('a'), note: '第 3 张，画风合格', addedAt: now },
+		]);
+	});
+
+	test('addFavorite 已收藏则不重复、不移动（与 toggle 的取消行为区分）', () => {
+		let d = createCollection(emptyFavorites(now), 'A', now);
+		const id = d.collections[1].id;
+		d = moveFavorite(d, u('a'), id, now);
+		const r = addFavorite(d, u('a'), undefined, now + 1);
+		assert.strictEqual(r.already, true);
+		assert.strictEqual(r.collectionId, id);
+		assert.strictEqual(r.data, d); // 无 note 时数据原样
+	});
+
+	test('addFavorite 已收藏且带 note 时更新原项备注、保留 addedAt', () => {
+		let d = addFavorite(emptyFavorites(now), u('a'), '旧备注', now).data;
+		const r = addFavorite(d, u('a'), '新备注', now + 1);
+		assert.strictEqual(r.already, true);
+		d = r.data;
+		assert.strictEqual(d.collections[0].items.length, 1);
+		assert.strictEqual(d.collections[0].items[0].note, '新备注');
+		assert.strictEqual(d.collections[0].items[0].addedAt, now);
+	});
+
+	test('addFavorite 加入的是当前夹（activeCollectionId）', () => {
+		let d = createCollection(emptyFavorites(now), 'A', now);
+		const id = d.collections[1].id;
+		d = setActiveCollection(d, id);
+		const r = addFavorite(d, u('a'), undefined, now);
+		assert.strictEqual(r.collectionId, id);
+		assert.strictEqual(r.data.collections[1].items.length, 1);
+		assert.strictEqual(r.data.collections[0].items.length, 0);
 	});
 
 	test('moveFavorite 从原夹移到目标夹（一图归一组）', () => {

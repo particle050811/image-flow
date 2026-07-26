@@ -2,25 +2,41 @@ import * as assert from 'assert';
 import { buildEditFinalPrompt, buildEditArchivePrompt } from '../prompt/edit';
 import { EditSession } from '../prompt/editSession';
 import { dedupeArchiveNames } from '../prompt/buildPrompt';
+import { editConfigView } from '../ui/config';
 import { baseConfig } from './fixtures';
 
 suite('buildEditFinalPrompt', () => {
 	test('全部图拼成顶部声明，命名引用替换为【@图片N】，前置注入句', () => {
 		const config = { ...baseConfig, modelInjections: { 'gpt-image-2': '注入句' } };
-		// editConfigView 默认 model = gpt-image-2，取该注入句
-		const out = buildEditFinalPrompt(config, '把[狗]放进[猫]的场景', ['猫.png', '狗.png']);
+		// 入参须为编辑视图（editModel = gpt-image-2），注入句按其中生效的模型取
+		const out = buildEditFinalPrompt(editConfigView(config), '把[狗]放进[猫]的场景', ['猫.png', '狗.png']);
 		assert.strictEqual(out, '注入句\n\n把【@图片2】放进【@图片1】的场景');
 	});
+	test('CLI 按次覆盖模型后，注入句跟着切到覆盖后的模型', () => {
+		const config = {
+			...baseConfig,
+			modelInjections: { 'gpt-image-2': '编辑页模型注入句', 'nano-banana-2': '覆盖后模型注入句' },
+		};
+		// 模拟 tasks.submitEdit 的合成：编辑视图（editModel = gpt-image-2）再叠 CLI 的 --model 覆盖
+		const overridden = { ...editConfigView(config), model: 'nano-banana-2' };
+		const out = buildEditFinalPrompt(overridden, '看[猫]', ['猫.png']);
+		assert.strictEqual(out, '覆盖后模型注入句\n\n看【@图片1】');
+		// 不覆盖时仍取编辑页模型的注入句
+		assert.strictEqual(
+			buildEditFinalPrompt(editConfigView(config), '看[猫]', ['猫.png']),
+			'编辑页模型注入句\n\n看【@图片1】'
+		);
+	});
 	test('无注入句时只剩替换后的正文', () => {
-		const out = buildEditFinalPrompt(baseConfig, '看[猫]', ['猫.png']);
+		const out = buildEditFinalPrompt(editConfigView(baseConfig), '看[猫]', ['猫.png']);
 		assert.strictEqual(out, '看【@图片1】');
 	});
 	test('编辑区有图但正文一次都没引用 → 不拦截，声明被删后仅剩正文', () => {
-		const out = buildEditFinalPrompt(baseConfig, '纯文本', ['猫.png']);
+		const out = buildEditFinalPrompt(editConfigView(baseConfig), '纯文本', ['猫.png']);
 		assert.strictEqual(out, '纯文本');
 	});
 	test('含空格文件名的声明用尖括号包裹，引用按主名匹配', () => {
-		const out = buildEditFinalPrompt(baseConfig, '看[狗 (1)]', ['狗 (1).png']);
+		const out = buildEditFinalPrompt(editConfigView(baseConfig), '看[狗 (1)]', ['狗 (1).png']);
 		assert.strictEqual(out, '看【@图片1】');
 	});
 });

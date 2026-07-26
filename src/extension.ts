@@ -58,8 +58,10 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('image-flow.previewRequest', (uri?: vscode.Uri) =>
 			previewRequestCommand(context, uri)
 		),
-		// 给 AI 自动调用的回环 HTTP 桥：固定候选端口段依次试绑（工作区零落盘），处理 list|fix|preview 请求
-		registerCliBridge(context)
+		// 给 AI 自动调用的回环 HTTP 桥：固定候选端口段依次试绑（工作区零落盘），
+		// 处理 list|fix|preview|submit|query_result|list_task|list_model|favorite 请求
+		//（submit/查询需 TaskManager；favorite 落库后经回调让侧栏即时刷新收藏）
+		registerCliBridge(context, taskManager, () => sidebar.pushAfterFavoritesChange())
 	);
 
 	taskManager.resume();

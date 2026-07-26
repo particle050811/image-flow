@@ -15,6 +15,7 @@ import { log } from '../util/log';
 import { errMsg } from '../util/errors';
 import type { ImageFlowConfig, PendingTask, PendingJob, TaskMeta } from '../shared';
 import type { ResultItem } from '../backend/adapters';
+import type { SubmitOverrides } from '../ui/cliOpsLogic';
 
 /** TaskManager.start 的参数：与任务来源（生成/编辑）无关的公共提交要素 */
 interface StartOptions {
@@ -217,16 +218,23 @@ export class TaskManager {
 
 	/**
 	 * 提交一次 Markdown 生成：读文件校验非空 → 走公共提交流程（提示词解析在后台创建阶段执行）。
+	 * overrides 为 CLI 按次覆盖参数（模型/比例/分辨率/张数/自定义参数）：浅覆盖 readConfig 结果，
+	 * 不落盘、不影响工作台配置；UI 路径不传。
+	 * 返回创建的任务（folder 即 submit_id）与创建阶段结果 creation（resolve 为 null=成功 /
+	 * 错误文案=失败已撤卡删夹；恒不 reject）：CLI 等它拿同步失败原因，UI 路径可忽略（错误已弹通知）。
 	 */
-	async submit(mdUri: vscode.Uri): Promise<void> {
-		const config = await readConfig(this.context);
+	async submit(
+		mdUri: vscode.Uri,
+		overrides?: SubmitOverrides
+	): Promise<{ task: PendingTask; creation: Promise<string | null> }> {
+		const config = { ...(await readConfig(this.context)), ...overrides };
 		const bytes = await vscode.workspace.fs.readFile(mdUri);
 		const content = Buffer.from(bytes).toString('utf8').trim();
 		if (!content) {
 			throw new Error('Markdown 文件内容为空，无法生成。');
 		}
 		const prefix = mdBaseName(mdUri);
-		await this.start({
+		return this.start({
 			kind: 'generate',
 			prefix,
 			mdUri: mdUri.toString(),
@@ -255,19 +263,25 @@ export class TaskManager {
 	/**
 	 * 提交一次编辑任务：用编辑专属配置，引用按编辑区顺序替换为 [imageN]。
 	 * 注入仅拼模型注入句（按编辑模型取），不拼工作台预设模板——编辑场景与图册说明无关。
+	 * overrides 为 CLI 按次覆盖参数：浅覆盖编辑视图，不落盘、不影响编辑页配置；UI 路径不传。
+	 * 返回值与 submit 同形（folder 即 submit_id、creation 为创建阶段结果），UI 路径可忽略。
 	 */
-	async submitEdit(rawPrompt: string, refs: EditImage[]): Promise<void> {
+	async submitEdit(
+		rawPrompt: string,
+		refs: EditImage[],
+		overrides?: SubmitOverrides
+	): Promise<{ task: PendingTask; creation: Promise<string | null> }> {
 		const base = await readConfig(this.context);
-		const config = editConfigView(base);
+		const config = { ...editConfigView(base), ...overrides };
 		if (!rawPrompt.trim()) {
 			throw new Error('提示词为空，无法生成。');
 		}
 		const names = refs.map((r) => r.name);
-		const prompt = buildEditFinalPrompt(base, rawPrompt, names);
+		const prompt = buildEditFinalPrompt(config, rawPrompt, names);
 		// 归档落盘名保留原名、重名去重；发送提示词仍按编辑区原名编号 [imageN]
 		const fileNames = dedupeArchiveNames(names);
 		const archivePrompt = buildEditArchivePrompt(rawPrompt, names, fileNames);
-		await this.start({
+		return this.start({
 			kind: 'edit',
 			prefix: 'edit',
 			promptFileName: 'edit.md',
@@ -304,9 +318,9 @@ export class TaskManager {
 	/**
 	 * 公共提交流程（快路径）：建任务文件夹 → 「创建中」卡片入列 → 立即返回让调用方解除 busy。
 	 * 耗时的创建工作（即梦前置检查、提示词/参考图解析、归档落盘）转 createAndSubmit 后台执行，
-	 * 完成后转入提交；失败则撤卡删夹。
+	 * 完成后转入提交；失败则撤卡删夹。creation 即该后台创建的结果（见 submit 注释），恒不 reject。
 	 */
-	private async start(opts: StartOptions): Promise<PendingTask> {
+	private async start(opts: StartOptions): Promise<{ task: PendingTask; creation: Promise<string | null> }> {
 		const video = isJimengVideoCall(opts.config);
 		// 即梦条数钳制：视频耗积分大收紧到 4；生图对齐 generate_num 上限 10（台账与远端实际张数一致）
 		const cap = video
@@ -366,21 +380,22 @@ export class TaskManager {
 		this.emit();
 
 		log(`创建任务 ${folder}（${opts.kind}，${count} 张，模型 ${opts.config.model}）`);
-		void this.createAndSubmit(opts, task, dir, batch ? count : 1);
-		return task;
+		const creation = this.createAndSubmit(opts, task, dir, batch ? count : 1);
+		return { task, creation };
 	}
 
 	/**
 	 * 后台创建阶段：即梦前置检查（CLI 安装 / 登录态，未就绪弹引导）→ 解析提示词与参考图（build）→
 	 * 写提示词文件 + meta.json + 归档参考图 → 转入提交。任一步失败即撤卡、删除尚无远端订单的
 	 * 任务夹（不留痕不扣积分）并弹错——此时「生成」按钮早已释放，错误只能经通知呈现。
+	 * 返回 null=创建成功已转提交；错误文案=创建失败（恒不 reject，CLI 桥据此同步回 fail_reason）。
 	 */
 	private async createAndSubmit(
 		opts: StartOptions,
 		task: PendingTask,
 		dir: vscode.Uri,
 		perJobCount: number
-	): Promise<void> {
+	): Promise<string | null> {
 		let built: BuiltPrompt;
 		try {
 			await ensureJimengReady(opts.config);
@@ -396,7 +411,7 @@ export class TaskManager {
 			this.emit();
 			log(`任务 ${task.folder} 创建失败：${errMsg(err)}`);
 			void vscode.window.showErrorMessage(`Image Flow：任务创建失败：${errMsg(err)}`);
-			return;
+			return errMsg(err);
 		}
 		// 与 images/names 一一对应的 input/ 归档素材绝对路径，供 CLI 型 adapter（吃文件路径）使用
 		const refPaths = built.names.map((name) => vscode.Uri.joinPath(dir, 'input', name).fsPath);
@@ -416,6 +431,7 @@ export class TaskManager {
 		if (namingCfg.autoName) {
 			void this.nameTask(task, namingCfg, built.namingPrompt);
 		}
+		return null;
 	}
 
 	/**

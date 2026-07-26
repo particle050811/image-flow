@@ -9,21 +9,41 @@ import {
 	aliasFromDesc,
 	scanDirImages,
 } from '../storage/materials';
-import type { TaskImage } from '../shared';
-import { tokenFile } from '../storage/storage';
+import type { MediaType, PendingTask, TaskImage } from '../shared';
+import { tokenFile, tasksRoot } from '../storage/storage';
+import { uriBaseName } from '../storage/paths';
 import { parseImageRefs, IMAGE_REGEX, refPath } from '../prompt/buildPrompt';
 import { type Decision, decideRef, buildFixReport } from './cliBridgeLogic';
+import {
+	parseSubmitArgs,
+	parseEditArgs,
+	resolveSubmitPlan,
+	editSubmitConfig,
+	normalizeSubmitId,
+	taskGenStatus,
+	type CliSubmitPlan,
+} from './cliOpsLogic';
+import { EditSession } from '../prompt/editSession';
 import { buildRequestPreviewText } from '../task/preview';
+import { aggregateProgress, isTaskActive, type TaskManager } from '../task/tasks';
+import { listHistory } from '../task/history';
+import { readTaskMeta } from '../task/taskFiles';
+import { configOptions } from '../backend/providerRuntime';
+import { GRSAI_PROVIDER_ID } from '../backend/providers';
+import { isMediaFileName, mediaTypeOfFileName } from '../util/images';
+import { checkMediaBytes, checkMediaCount, CLI_EDIT_LIMITS, type MediaSize } from '../util/mediaBytes';
+import { addFavorite, mutateFavorites } from '../favorites/favorites';
 import { readConfig } from './config';
 import { log } from '../util/log';
 import { errMsg } from '../util/errors';
 
 /**
- * 「给 AI 自动调用」的命令入口：因库列表存在扩展主进程的 workspaceState、独立进程读不到，
+ * 「给 AI 自动调用」的命令入口：因库列表/任务态存在扩展主进程、独立进程读不到，
  * 改由 scripts/imgflow.mjs 这层 CLI 壳桥接——扩展激活时在 127.0.0.1 的固定候选端口段
- * （47870~47879）依次试绑 HTTP 服务，壳按同一顺序扫描端口直连 POST {token, op, md}，
+ * （47870~47879）依次试绑 HTTP 服务，壳按同一顺序扫描端口直连 POST {token, op, md|cwd, args}，
  * 这里在扩展主进程内跑逻辑（有 vscode API + workspaceState），响应体即结果。
- * md 不在本窗口工作区时回 421，壳据此换下一个端口找目标窗口——端口发现零落盘，
+ * op 分两类：md 类（list/fix/preview/submit）与 cwd 类（edit/query_result/list_task/list_model/favorite）。
+ * md（或 cwd 类的 cwd）不在本窗口工作区时回 421，壳据此换下一个端口找目标窗口——端口发现零落盘，
  * 工作区内不再写任何文件（曾用工作区根 bridge.json 传端口，导致光打开文件夹就拉出 .image-flow）。
  *
  * 选回环 HTTP 而非 vscode:// URI：URI 由外部进程触发会弹「是否允许扩展打开此 URI」安全确认，
@@ -38,10 +58,21 @@ const PORT_START = 47870;
 const PORT_COUNT = 10;
 /** 响应标识头：壳凭此区分「本扩展的服务」与「端口被复用后的陌生进程」 */
 const MARKER_HEADER = 'x-image-flow';
-/** 请求体上限：请求只含 token/op/md 三个短字段，64KB 给足余量 */
+/** 请求体上限：请求只含 token/op/md|cwd/args 几个短字段，64KB 给足余量 */
 const MAX_BODY = 64 * 1024;
 
-export function registerCliBridge(context: vscode.ExtensionContext): vscode.Disposable {
+/** 必须带工作区内 md 的 op（md 兼作窗口归属路由）；submit 与 fix 同理有副作用，锁在本工作区内 */
+const MD_OPS = new Set(['list', 'fix', 'preview', 'submit']);
+/** 不吃 md 的 cwd 路由 op：payload 带 cwd 做窗口归属路由（421 换端口逻辑与 md 一致）。
+ *  favorite 有副作用（写工作区 favorites.json），其 path 参数在处理时另行校验限工作区内；
+ *  edit 也有副作用（建任务、调 API），但参考图按产品决策不限工作区（与编辑页可上传任意目录的图一致）*/
+const CWD_OPS = new Set(['query_result', 'list_task', 'list_model', 'favorite', 'edit']);
+
+export function registerCliBridge(
+	context: vscode.ExtensionContext,
+	tasks: TaskManager,
+	onFavoritesChanged: () => Promise<void>
+): vscode.Disposable {
 	const folder = vscode.workspace.workspaceFolders?.[0];
 	if (!folder) {
 		// 无工作区：没有库可查、也没有归属校验的基准，返回空 Disposable
@@ -58,7 +89,7 @@ export function registerCliBridge(context: vscode.ExtensionContext): vscode.Disp
 			return;
 		}
 		const srv = http.createServer((req, res) => {
-			void handleRequest(context, folder.uri, token, req, res);
+			void handleRequest(context, tasks, folder.uri, token, onFavoritesChanged, req, res);
 		});
 		const port = await listenOnFreePort(srv, PORT_START, PORT_COUNT);
 		if (port === null) {
@@ -177,6 +208,12 @@ function isInside(parent: string, child: string): boolean {
 	return rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
+/** child 等于 parent 或落在其内：cwd 窗口归属路由用（壳的 cwd 常就是工作区根本身） */
+function sameOrInside(parent: string, child: string): boolean {
+	const rel = path.relative(parent.toLowerCase(), child.toLowerCase());
+	return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 /** 超限错误标记：让处理层能回 413 而非当作普通 400 */
 const BODY_TOO_LARGE = 'BODY_TOO_LARGE';
 
@@ -220,11 +257,13 @@ function respond(res: http.ServerResponse, status: number, text: string): void {
 	res.end(text);
 }
 
-/** 处理一个请求：读体 → 验 token → 校验字段 → 跑 op → 响应体即结果 */
+/** 处理一个请求：读体 → 验 token → 校验字段（md/cwd 按 op 分流）→ 跑 op → 响应体即结果 */
 async function handleRequest(
 	context: vscode.ExtensionContext,
+	tasks: TaskManager,
 	wsFolder: vscode.Uri,
 	token: string,
+	onFavoritesChanged: () => Promise<void>,
 	req: http.IncomingMessage,
 	res: http.ServerResponse
 ): Promise<void> {
@@ -233,6 +272,15 @@ async function handleRequest(
 			respond(res, 404, 'ERROR 未知路径\n');
 			return;
 		}
+		// 客户端断连标记：壳侧超时（edit/submit 给 120s）会销毁连接，此后再建卡就成了
+		// 「调用方不知情的付费任务」——它只看到超时、拿不到 submit_id，重试即重复扣费。
+		// 挂在最早处，让长耗时 op（读参考图/归档）能在提交前查一次并放弃。
+		let clientGone = false;
+		res.on('close', () => {
+			if (!res.writableFinished) {
+				clientGone = true;
+			}
+		});
 		// readBody 单独 await：超限的 BODY_TOO_LARGE 要直达外层 catch 回 413，
 		// 不能被下面「JSON 解析失败」的 catch 吞成 400
 		const body = await readBody(req);
@@ -243,37 +291,68 @@ async function handleRequest(
 			respond(res, 400, 'ERROR 请求体不是合法 JSON\n');
 			return;
 		}
-		const { token: reqToken, op, md } = (parsed ?? {}) as Record<string, unknown>;
+		const { token: reqToken, op, md, cwd, args } = (parsed ?? {}) as Record<string, unknown>;
 		// token 先于一切业务校验：不给无凭据请求任何字段级错误信息
 		if (!tokenMatches(token, reqToken)) {
 			respond(res, 403, 'ERROR token 校验失败（~/.image-flow/token 与扩展加载值不一致，重载窗口后重试）\n');
 			return;
 		}
-		if (!isNonEmptyString(op) || !isNonEmptyString(md)) {
-			respond(res, 400, 'ERROR 请求字段缺失或类型非法（op/md 需为非空字符串）\n');
+		if (!isNonEmptyString(op) || (!MD_OPS.has(op) && !CWD_OPS.has(op))) {
+			respond(
+				res,
+				400,
+				'ERROR 未知操作（仅支持 list / fix / preview / submit / edit / query_result / list_task / list_model / favorite）\n'
+			);
 			return;
 		}
-		// 归属校验先于 op 执行：md 不在本窗口工作区回 421，壳据此换下一个端口找目标窗口；
-		// 也把 fix 的回写能力锁在本工作区内（不让本机任意进程借请求改写任意文件），
-		// 且保证非目标窗口对真实 op 零副作用
-		if (!isInside(wsFolder.fsPath, md)) {
-			respond(res, 421, 'ERROR md 不在当前窗口的工作区内\n');
-			return;
+		// 归属校验先于 op 执行：不在本窗口工作区回 421，壳据此换下一个端口找目标窗口，
+		// 保证非目标窗口对真实 op 零副作用。md 类 op 的 md 兼作路由与安全边界
+		//（fix 回写/submit 提交都锁在本工作区内，不让本机任意进程借请求碰任意文件）；
+		// 查询类 op 无 md，改用壳的 cwd 做同样的路由。
+		let mdUri: vscode.Uri | undefined;
+		if (MD_OPS.has(op)) {
+			if (!isNonEmptyString(md)) {
+				respond(res, 400, 'ERROR 请求字段缺失或类型非法（该操作的 md 需为非空字符串）\n');
+				return;
+			}
+			if (!isInside(wsFolder.fsPath, md)) {
+				respond(res, 421, 'ERROR md 不在当前窗口的工作区内\n');
+				return;
+			}
+			mdUri = vscode.Uri.file(md);
+		} else {
+			if (!isNonEmptyString(cwd)) {
+				respond(res, 400, 'ERROR 请求字段缺失或类型非法（该操作的 cwd 需为非空字符串）\n');
+				return;
+			}
+			if (!sameOrInside(wsFolder.fsPath, cwd)) {
+				respond(res, 421, 'ERROR cwd 不在当前窗口的工作区内\n');
+				return;
+			}
 		}
 		try {
-			const mdUri = vscode.Uri.file(md);
 			let text: string;
 			if (op === 'list') {
-				text = await runList(context, mdUri);
+				text = await runList(context, mdUri!);
 			} else if (op === 'fix') {
-				text = await runFix(context, mdUri);
+				text = await runFix(context, mdUri!);
 			} else if (op === 'preview') {
-				text = await runPreview(context, mdUri);
+				text = await runPreview(context, mdUri!);
+			} else if (op === 'submit') {
+				text = await runSubmit(context, tasks, mdUri!, args);
+			} else if (op === 'edit') {
+				text = await runEdit(context, tasks, args, () => clientGone);
+			} else if (op === 'query_result') {
+				text = await runQueryResult(tasks, args);
+			} else if (op === 'list_task') {
+				text = await runListTask(tasks, args);
+			} else if (op === 'favorite') {
+				text = await runFavorite(wsFolder, onFavoritesChanged, args);
 			} else {
-				throw new Error(`未知操作：${op}（仅支持 list / fix / preview）`);
+				text = await runListModel(context);
 			}
 			respond(res, 200, text);
-			log(`CLI ${op} 完成：${md}`);
+			log(`CLI ${op} 完成${mdUri ? `：${mdUri.fsPath}` : ''}`);
 		} catch (e) {
 			const msg = `ERROR ${op}: ${errMsg(e)}`;
 			log(msg);
@@ -422,4 +501,371 @@ async function runFix(context: vscode.ExtensionContext, mdUri: vscode.Uri): Prom
 		await vscode.workspace.fs.writeFile(mdUri, Buffer.from(fixed, 'utf8'));
 	}
 	return buildFixReport(order, decisions);
+}
+
+// —— 模型调用类 op（submit / query_result / list_task / list_model）——
+// 统一 JSON 输出、成败看 gen_status 不看 HTTP 状态（照抄即梦 dreamina CLI 约定）：
+// 参数/校验类失败回 200 + {gen_status:'fail', fail_reason}，非 200 只留给传输/鉴权层错误。
+
+/** 新命令统一的失败形态 */
+function failJson(reason: string): string {
+	return JSON.stringify({ gen_status: 'fail', fail_reason: reason }) + '\n';
+}
+
+/**
+ * submit/edit 建卡成功的统一响应：回显本次实际生效的参数，让调用方立刻发现是否误用默认值。
+ * 张数取台账值（start 内按模型钳制后的最终值），与远端实际提交一致。
+ */
+function submittedJson(task: PendingTask, plan: CliSubmitPlan): string {
+	return (
+		JSON.stringify({
+			submit_id: task.folder,
+			gen_status: 'querying',
+			params: {
+				provider: plan.overrides.providerId,
+				model: plan.overrides.model,
+				ratio: plan.overrides.aspectRatio,
+				resolution: plan.overrides.imageSize,
+				generate_num: task.meta.requested,
+				video: plan.video,
+				custom: plan.overrides.params,
+			},
+		}) + '\n'
+	);
+}
+
+/**
+ * submit：解析按次覆盖参数（--model 换模型时参数域随之切换，等价侧栏切模型）→
+ * 复用工作台前置校验（grsai 缺 Key / 视频模型 v.md 防误触）→ 提交并等创建阶段结束
+ * （提示词/参考图解析失败能同步回 fail_reason，而非给个查无此任务的 submit_id）→
+ * 回显本次实际生效的参数，让调用方立刻发现是否误用默认值。
+ */
+async function runSubmit(
+	context: vscode.ExtensionContext,
+	tasks: TaskManager,
+	mdUri: vscode.Uri,
+	rawArgs: unknown
+): Promise<string> {
+	try {
+		const config = await readConfig(context);
+		const plan = resolveSubmitPlan(configOptions(), config, parseSubmitArgs(rawArgs));
+		// 与工作台 doGenerate 同一套闸门：密钥检查按目标渠道分流（自定义模型缺 Key 由 resolveImageCall 报错）
+		if (plan.overrides.providerId === GRSAI_PROVIDER_ID && !config.apiKey) {
+			return failJson('尚未配置 API Key，请在侧栏设置页填写。');
+		}
+		// 视频昂贵：--model 覆盖成视频模型同样只放行 *v.md 文件名（设置页可关）
+		if (plan.video && config.videoOnlyVmd && !uriBaseName(mdUri).toLowerCase().endsWith('v.md')) {
+			return failJson(
+				'视频模型仅允许文件名以 v.md 结尾的 Markdown 生成（防误触发付费视频任务）。可在设置页关闭此限制。'
+			);
+		}
+		const { task, creation } = await tasks.submit(mdUri, plan.overrides);
+		const creationError = await creation;
+		if (creationError !== null) {
+			return failJson(creationError);
+		}
+		return submittedJson(task, plan);
+	} catch (e) {
+		return failJson(errMsg(e));
+	}
+}
+
+/**
+ * 读盘前对全部参考图做一遍轻量预检（只 stat、不读内容）：绝对路径、必须是图片扩展名、
+ * 必须是存在的普通文件、张数与单张/合计字节都在上限内（CLI_EDIT_LIMITS 严格档）。
+ * 独立一遍先扫完再读，是为了「传了 10 张、第 10 张超限」时一张都不白读。
+ * 返回错误文案，null 表示通过。
+ */
+async function precheckEditImages(images: string[]): Promise<string | null> {
+	// 张数超标先拒，一个路径都不碰：慢盘/网络盘上「传了几百张」不该先耗几百次 stat 才报错
+	const overCount = checkMediaCount(images.length, CLI_EDIT_LIMITS);
+	if (overCount) {
+		return overCount;
+	}
+	const sizes: MediaSize[] = [];
+	for (const p of images) {
+		if (!path.isAbsolute(p)) {
+			return `参考图路径须为绝对路径：${p}`;
+		}
+		// 音视频在这里先拦：EditSession 收得下（编辑区支持音视频），但编辑链路只能生成图片，
+		// 放过去只会拿到一句提「编辑区」的错（CLI 调用方没有编辑区，看不懂）
+		if (mediaTypeOfFileName(path.basename(p)) !== 'image') {
+			return `编辑模式只支持图片参考图，不支持音视频：${p}`;
+		}
+		let stat: vscode.FileStat;
+		try {
+			stat = await vscode.workspace.fs.stat(vscode.Uri.file(p));
+		} catch {
+			return `参考图不存在：${p}`;
+		}
+		if (stat.type !== vscode.FileType.File) {
+			return `参考图不是普通文件：${p}`;
+		}
+		sizes.push({ name: p, size: stat.size });
+		// 每 stat 一张就判一次：超限当场返回，不让后面某张「不存在」的错误盖过真正的大小问题
+		const overSize = checkMediaBytes(sizes, CLI_EDIT_LIMITS);
+		if (overSize) {
+			return overSize;
+		}
+	}
+	return null;
+}
+
+/** 调用方已断开时的统一返回：明确「没建任务」，让重试不必担心重复扣费 */
+function abandoned(): string {
+	log('CLI edit 放弃提交：调用方已断开连接（壳超时或被中断），未创建任务');
+	return failJson('调用方已断开连接（壳超时或被中断），已放弃提交，未创建任务');
+}
+
+/**
+ * edit：编辑模式（图生图，不经 md）——一段提示词 + 若干张参考图路径，等价「编辑页拖图进编辑区点生成」。
+ * 一次调用 = 一个任务：多张 --image 是同一次编辑的多张参考图（顺序即 【@图片N】 编号）；
+ * 「同一提示词批量套到 N 张图」由调用方循环调 N 次，语义不在这里合并。
+ * 参数基线取编辑页配置（editSubmitConfig），--model 等按次覆盖等价「编辑页切模型点生成」。
+ * 参考图路径按产品决策不限工作区（编辑页本就能上传任意目录的图），但要求绝对路径——
+ * 相对路径由壳按 cwd 解析，到这里仍是相对说明调用方绕过了壳，直接拒掉而非按扩展进程 cwd 瞎猜。
+ */
+async function runEdit(
+	context: vscode.ExtensionContext,
+	tasks: TaskManager,
+	rawArgs: unknown,
+	clientGone: () => boolean
+): Promise<string> {
+	try {
+		const config = await readConfig(context);
+		const args = parseEditArgs(rawArgs);
+		const plan = resolveSubmitPlan(configOptions(), editSubmitConfig(config), args, '编辑页');
+		if (plan.overrides.providerId === GRSAI_PROVIDER_ID && !config.apiKey) {
+			return failJson('尚未配置 API Key，请在侧栏设置页填写。');
+		}
+		// 编辑模式不支持视频模型（与编辑页一致：模型列表已滤掉视频模型）
+		if (plan.video) {
+			return failJson(`模型「${plan.overrides.model}」是视频模型，编辑模式不支持视频生成。`);
+		}
+		const precheckError = await precheckEditImages(args.images);
+		if (precheckError) {
+			return failJson(precheckError);
+		}
+		// 复用 EditSession 装载参考图：格式校验、重名/同主名冲突（命名引用会歧义）、data URI 转换与编辑页同一份
+		const session = new EditSession();
+		for (const p of args.images) {
+			const err = await session.addUri(vscode.Uri.file(p).toString());
+			if (err) {
+				return failJson(`${err}（${p}）`);
+			}
+			// 读图可能很慢（网络盘/大图）：每张之后查一次断连，不给已放弃的调用方继续读下去
+			if (clientGone()) {
+				return abandoned();
+			}
+		}
+		// 建卡前最后一道：此刻断开就绝不提交——付费任务必须有人接得住 submit_id
+		if (clientGone()) {
+			return abandoned();
+		}
+		const { task, creation } = await tasks.submitEdit(args.prompt, session.list(), plan.overrides);
+		const creationError = await creation;
+		if (creationError !== null) {
+			return failJson(creationError);
+		}
+		return submittedJson(task, plan);
+	} catch (e) {
+		return failJson(errMsg(e));
+	}
+}
+
+/** 任务夹顶层的媒体产物（绝对路径 + image/video/audio 类型）；任务夹不存在返回 null */
+async function listTaskOutputs(dir: vscode.Uri): Promise<{ path: string; media: MediaType }[] | null> {
+	let files: [string, vscode.FileType][];
+	try {
+		files = await vscode.workspace.fs.readDirectory(dir);
+	} catch {
+		return null;
+	}
+	return files
+		.filter(([name, type]) => type === vscode.FileType.File && isMediaFileName(name))
+		.map(([name]) => name)
+		.sort()
+		.map((name) => ({ path: vscode.Uri.joinPath(dir, name).fsPath, media: mediaTypeOfFileName(name) }));
+}
+
+/**
+ * query_result：进行中（内存实时态）→ querying + 进度/已出产物；已终结 → 磁盘兜底
+ * （meta.json + 盘上产物数判 success/fail，产物给绝对路径 + 媒体类型，部分失败按 fail 报但产物照给）。
+ * 不做 --download_dir：产物本就自动落盘任务夹。
+ */
+async function runQueryResult(tasks: TaskManager, rawArgs: unknown): Promise<string> {
+	const obj = rawArgs && typeof rawArgs === 'object' ? (rawArgs as Record<string, unknown>) : {};
+	const id = normalizeSubmitId(obj.submit_id);
+	if (!id) {
+		return failJson('submit_id 缺失或格式非法（应为 "yyMMdd/HHmmssSSS"）');
+	}
+	const memTask = tasks.list().find((t) => t.folder === id);
+	// 仍活跃才走内存报 querying；已终结但尚未移出列表的走磁盘兜底拿终态
+	if (memTask && isTaskActive(memTask)) {
+		const errors = [...new Set(memTask.jobs.map((j) => j.error).filter((e): e is string => !!e))];
+		return (
+			JSON.stringify({
+				submit_id: id,
+				gen_status: 'querying',
+				progress: aggregateProgress(memTask.jobs),
+				requested: Math.max(memTask.jobs.length, memTask.meta.requested),
+				done: memTask.images.length,
+				failed: memTask.jobs.filter((j) => j.status === 'failed' || j.status === 'violation').length,
+				...(errors.length ? { errors } : {}),
+				outputs: memTask.images.map((img) => ({
+					path: vscode.Uri.parse(img.uri).fsPath,
+					media: img.media ?? 'image',
+				})),
+			}) + '\n'
+		);
+	}
+	const dir = vscode.Uri.joinPath(tasksRoot(), id);
+	const outputs = await listTaskOutputs(dir);
+	if (outputs === null) {
+		return failJson(`任务「${id}」不存在`);
+	}
+	const meta = await readTaskMeta(dir);
+	const title = memTask?.title ?? meta?.title;
+	return (
+		JSON.stringify({
+			submit_id: id,
+			...taskGenStatus(meta?.requested ?? 0, outputs.length),
+			requested: meta?.requested ?? 0,
+			succeeded: outputs.length,
+			...(title ? { title } : {}),
+			outputs,
+		}) + '\n'
+	);
+}
+
+/** list_task：进行中（内存实时态）在前 + 已终结历史（扫盘 meta.json）在后，各自倒序，合并取 limit 条 */
+async function runListTask(tasks: TaskManager, rawArgs: unknown): Promise<string> {
+	const obj = rawArgs && typeof rawArgs === 'object' ? (rawArgs as Record<string, unknown>) : {};
+	let limit = 20;
+	if (obj.limit !== undefined) {
+		if (typeof obj.limit !== 'number' || !Number.isInteger(obj.limit) || obj.limit < 1) {
+			return failJson('limit 须为正整数');
+		}
+		limit = Math.min(obj.limit, 100);
+	}
+	const active = tasks.list().map((t) => ({
+		submit_id: t.folder,
+		gen_status: 'querying',
+		progress: aggregateProgress(t.jobs),
+		model: t.model,
+		ratio: t.meta.aspectRatio,
+		resolution: t.meta.imageSize,
+		requested: Math.max(t.jobs.length, t.meta.requested),
+		succeeded: t.images.length,
+		...(t.title ? { title: t.title } : {}),
+		source: t.meta.source,
+	}));
+	const history = (await listHistory(tasks.activeFolders())).map((t) => {
+		const title = t.meta?.title ?? t.promptName;
+		return {
+			submit_id: t.folder,
+			...taskGenStatus(t.meta?.requested ?? 0, t.images.length),
+			model: t.meta?.model,
+			ratio: t.meta?.aspectRatio,
+			resolution: t.meta?.imageSize,
+			requested: t.meta?.requested ?? 0,
+			succeeded: t.images.length,
+			...(title ? { title } : {}),
+			source: t.meta?.source,
+		};
+	});
+	return JSON.stringify({ gen_status: 'success', tasks: [...active, ...history].slice(0, limit) }) + '\n';
+}
+
+/**
+ * favorite：把一件产物（绝对路径）收进当前收藏夹，可带备注——CLI 核对成图后直接把「筛过的成品」
+ * 送进侧栏收藏页，调用方无需在编辑器里逐张点开。只加不减（addFavorite），重复调用幂等。
+ * path 限当前窗口工作区内：favorites.json 属于本工作区，且 CLI 场景的产物本就在 .image-flow/tasks/ 下；
+ * 这也避免「本机任意进程可往收藏塞任意外部路径」。成功后触发侧栏重推，新收藏即时可见。
+ */
+async function runFavorite(
+	wsFolder: vscode.Uri,
+	onFavoritesChanged: () => Promise<void>,
+	rawArgs: unknown
+): Promise<string> {
+	try {
+		const obj = rawArgs && typeof rawArgs === 'object' ? (rawArgs as Record<string, unknown>) : {};
+		if (!isNonEmptyString(obj.path)) {
+			return failJson('path 缺失或须为非空字符串（产物的绝对路径，取自 query_result 的 outputs）');
+		}
+		if (obj.note !== undefined && typeof obj.note !== 'string') {
+			return failJson('note 须为字符串');
+		}
+		const fsPath = path.resolve(obj.path);
+		if (!isInside(wsFolder.fsPath, fsPath)) {
+			return failJson(`path 不在当前窗口的工作区内：${fsPath}`);
+		}
+		if (!isMediaFileName(path.basename(fsPath))) {
+			return failJson('仅支持收藏图片/视频/音频文件');
+		}
+		const uri = vscode.Uri.file(fsPath);
+		// 必须真实存在且是普通文件：收藏悬空路径会被收藏页的悬空过滤隐藏，CLI 报成功而侧栏看不到，
+		// 徒增困惑；目录也能顶着 .png 名字通过 stat，一并拦掉
+		let statType: vscode.FileType;
+		try {
+			statType = (await vscode.workspace.fs.stat(uri)).type;
+		} catch {
+			return failJson(`文件不存在：${fsPath}`);
+		}
+		if (statType !== vscode.FileType.File) {
+			return failJson(`不是普通文件：${fsPath}`);
+		}
+		// 空白备注视同未提供：CLI 场景没有「清空备注」需求，避免误传空串抹掉已有备注
+		const note = obj.note?.trim() || undefined;
+		let outcome = { collectionId: '', already: false };
+		const data = await mutateFavorites((d) => {
+			const r = addFavorite(d, uri.toString(), note, Date.now());
+			outcome = { collectionId: r.collectionId, already: r.already };
+			return r.data;
+		});
+		// 落库已成功，侧栏重推失败只记日志，不把成功谎报成失败
+		try {
+			await onFavoritesChanged();
+		} catch (e) {
+			log(`CLI favorite 侧栏重推失败：${errMsg(e)}`);
+		}
+		const collection = data.collections.find((c) => c.id === outcome.collectionId)?.name;
+		return (
+			JSON.stringify({
+				gen_status: 'success',
+				path: fsPath,
+				collection,
+				already_favorited: outcome.already,
+				...(note ? { note } : {}),
+			}) + '\n'
+		);
+	} catch (e) {
+		return failJson(errMsg(e));
+	}
+}
+
+/**
+ * list_model：全渠道模型档位直出（configOptions 类型上就不含 baseUrl/apiKey），
+ * 附 current 回显工作台当前选择——调用方不传覆盖时能预判将用什么参数。
+ * 视频模型 video:true 且 imageSizes 实为 video_resolution 档；custom 为可调自定义参数（如视频 duration）。
+ */
+async function runListModel(context: vscode.ExtensionContext): Promise<string> {
+	const config = await readConfig(context);
+	return (
+		JSON.stringify(
+			{
+				gen_status: 'success',
+				current: {
+					provider: config.providerId,
+					model: config.model,
+					ratio: config.aspectRatio,
+					resolution: config.imageSize,
+					generate_num: config.concurrency,
+				},
+				models: configOptions().imageModels,
+			},
+			null,
+			2
+		) + '\n'
+	);
 }

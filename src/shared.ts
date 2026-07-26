@@ -177,6 +177,8 @@ export interface WebviewImage extends TaskImage {
 	thumbKey?: string;
 	/** 该图是否已被收藏（在任一收藏夹中）。后端按 favorites.json 打标，前端只读不比对 */
 	favorited?: boolean;
+	/** 收藏备注（仅收藏页下发）：CLI favorite --note 写入，悬浮提示展示「为何选它」 */
+	note?: string;
 }
 
 export interface WebviewTask {

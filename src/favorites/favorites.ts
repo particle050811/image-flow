@@ -124,6 +124,44 @@ export function toggleFavorite(data: FavoritesData, uri: string, now: number): F
 	};
 }
 
+/**
+ * CLI/程序化收藏（只加不减，与左键 toggle 区分——外部进程重复调用不能把已收藏的图取消掉）：
+ * 已在任一夹则不重复添加（带 note 时更新原项备注），否则带 note 加入当前夹。
+ * 返回落点夹 id 与「本就已收藏」标记，供调用方回显。
+ */
+export function addFavorite(
+	data: FavoritesData,
+	uri: string,
+	note: string | undefined,
+	now: number
+): { data: FavoritesData; collectionId: string; already: boolean } {
+	const holder = data.collections.find((c) => c.items.some((i) => i.uri === uri));
+	if (holder) {
+		const next =
+			note === undefined
+				? data
+				: {
+						...data,
+						collections: data.collections.map((c) => ({
+							...c,
+							items: c.items.map((i) => (i.uri === uri ? { ...i, note } : i)),
+						})),
+					};
+		return { data: next, collectionId: holder.id, already: true };
+	}
+	const active = resolveActive(data);
+	return {
+		data: {
+			...data,
+			collections: data.collections.map((c) =>
+				c.id === active ? { ...c, items: [...c.items, { uri, note, addedAt: now }] } : c
+			),
+		},
+		collectionId: active,
+		already: false,
+	};
+}
+
 /** 右键：移动到指定夹（先从所有夹移除再加入目标夹，保证一图归一组、不重复） */
 export function moveFavorite(data: FavoritesData, uri: string, collectionId: string, now: number): FavoritesData {
 	const removed = removeUri(data, uri);

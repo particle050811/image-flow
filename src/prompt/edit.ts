@@ -1,5 +1,4 @@
 import { parseMediaDecls, buildNameTable, replaceMediaRefs } from './buildPrompt';
-import { editConfigView } from '../ui/config';
 import { joinPrompt, modelInjection } from './inject';
 import { mediaDeclSnippet, namedRefSnippet } from '../refs';
 import { mediaTypeOfFileName } from '../util/images';
@@ -10,19 +9,20 @@ import type { ImageFlowConfig } from '../shared';
  * 正文即工作台 MD 格式，复用生成链路的 replaceMediaRefs——声明被删、命名引用 `[主名]`
  * 替换为 `【@图片N】`，编号按编辑区顺序。再前置编辑模型注入句（不拼工作台预设模板）。
  * 提交（tasks.submitEdit）与预览（sidebarProvider.doEditPreview）共用，保证不漂移。
+ * config 须为 editConfigView 结果（可再叠 CLI 按次覆盖）：注入句按其中生效的模型取，
+ * 覆盖成别的模型时注入句随之切换。
  */
-export function buildEditFinalPrompt(base: ImageFlowConfig, rawPrompt: string, names: string[]): string {
+export function buildEditFinalPrompt(config: ImageFlowConfig, rawPrompt: string, names: string[]): string {
 	// 本地后端只能生成图片：编辑区含音/视频就报错。提交与预览共用此函数，一处守两路。
 	const nonImage = names.filter((n) => mediaTypeOfFileName(n) !== 'image');
 	if (nonImage.length) {
 		throw new Error(`本地后端不支持音视频生成，请从编辑区移除：${nonImage.join('、')}`);
 	}
-	const config = editConfigView(base);
 	const content = prependDecls(rawPrompt, names);
 	const parsed = parseMediaDecls(content);
 	// 编辑区不校验声明是否都被引用（不拦截也不警告）：未被正文引用的图同样按声明顺序上传，只是正文里没有对应 【@图片N】 指向
 	const replaced = replaceMediaRefs(content, buildNameTable(parsed));
-	return joinPrompt([modelInjection(base, config.model), replaced]);
+	return joinPrompt([modelInjection(config, config.model), replaced]);
 }
 
 /**

@@ -1,6 +1,6 @@
 # CONTEXT — 领域术语表
 
-仅收术语与含义，不写实现细节。实现决策见 `docs/superpowers/specs/` 与 ADR。
+仅收术语与含义，不写实现细节。实现决策见 CLAUDE.md 与项目记忆。
 
 ## 术语
 

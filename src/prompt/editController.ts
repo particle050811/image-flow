@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { EditSession } from './editSession';
 import { buildEditFinalPrompt } from './edit';
-import { readConfig } from '../ui/config';
+import { readConfig, editConfigView } from '../ui/config';
 import { GRSAI_PROVIDER_ID, JIMENG_PROVIDER_ID, isJimengVideoModel } from '../backend/providers';
 import { openTextPreview } from '../task/preview';
 import { TaskManager } from '../task/tasks';
@@ -147,7 +147,7 @@ export class EditController {
 		try {
 			const base = await readConfig(this.context);
 			const refs = this.edit.list();
-			const finalPrompt = buildEditFinalPrompt(base, prompt, refs.map((r) => r.name));
+			const finalPrompt = buildEditFinalPrompt(editConfigView(base), prompt, refs.map((r) => r.name));
 			await openTextPreview(finalPrompt);
 		} catch (err: unknown) {
 			this.deps.post({ type: 'error', message: errMsg(err) });

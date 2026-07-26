@@ -320,24 +320,29 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		const data = await pruneMissing(await readFavorites());
 		const favSet = favoriteUriSet(data);
 		const collections: WebviewCollection[] = await Promise.all(
-			data.collections.map(async (c) => ({
-				id: c.id,
-				name: c.name,
-				images: await toWebviewImages(
+			data.collections.map(async (c) => {
+				const images = await toWebviewImages(
 					this.view?.webview,
 					c.items.map((i) => {
 						const name = uriBaseName(vscode.Uri.parse(i.uri));
 						return { name, uri: i.uri, media: mediaTypeOfFileName(name) };
 					}),
 					favSet
-				),
-			}))
+				);
+				// 备注按序回填（toWebviewImages 保序）：悬浮提示展示「为何收藏这张」
+				return {
+					id: c.id,
+					name: c.name,
+					images: images.map((img, idx) => ({ ...img, note: c.items[idx].note })),
+				};
+			})
 		);
 		this.post({ type: 'favorites', collections, activeCollectionId: data.activeCollectionId });
 	}
 
-	/** 收藏发生变化后：收藏页 + 所有带星标的列表都要重推，星标态才会刷新 */
-	private async pushAfterFavoritesChange(): Promise<void> {
+	/** 收藏发生变化后：收藏页 + 所有带星标的列表都要重推，星标态才会刷新。
+	 *  公开给 CLI 桥的 favorite op（extension.ts 接线）：CLI 收藏后侧栏即时可见 */
+	public async pushAfterFavoritesChange(): Promise<void> {
 		await this.pushFavorites();
 		await this.pushHistory();
 		await this.pushPendingTasks();

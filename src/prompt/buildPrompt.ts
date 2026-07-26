@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { mimeOf, mediaTypeOf, type MediaType } from '../util/images';
+import { checkMediaBytes, REF_MEDIA_LIMITS, type MediaSize } from '../util/mediaBytes';
 import { dedupeName } from '../favorites/favorites';
 import { mediaDeclSnippet } from '../refs';
 import { showTransientWarning } from '../util/notify';
@@ -196,6 +197,22 @@ export async function buildPrompt(
 	const unused = findUnreferencedDecls(content, decls);
 	if (unused.length) {
 		showTransientWarning(`以下声明的图片未被引用（检查 [名] 是否与声明名一致）：${unused.join('、')}`);
+	}
+
+	// 读盘前先按 stat 拦超大素材（宽松档，只拦明显传错的文件）：读进来就要转 base64 常驻内存。
+	// stat 不到的（路径写错、文件不存在）在这里跳过，交给下面的读盘循环统一报「读取失败」。
+	const sizes: MediaSize[] = [];
+	for (const relPath of order) {
+		try {
+			const stat = await vscode.workspace.fs.stat(vscode.Uri.joinPath(mdUri, '..', relPath));
+			sizes.push({ name: relPath, size: stat.size });
+		} catch {
+			// 忽略：读盘循环会把它记进 failed
+		}
+	}
+	const oversize = checkMediaBytes(sizes, REF_MEDIA_LIMITS);
+	if (oversize) {
+		throw new Error(oversize);
 	}
 
 	// 按顺序读取每张参考媒体，转 base64
