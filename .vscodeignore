@@ -1,6 +1,7 @@
 .vscode/**
 .vscode-test/**
 .claude/**
+skills/**
 out/**
 node_modules/**
 src/**

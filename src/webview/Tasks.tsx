@@ -160,6 +160,12 @@ function PendingDetail({
 				<span className="task-progress-count">
 					{task.done}/{task.total}
 				</span>
+				{/* 积分（即梦渠道）：已终结 job 实时累加的当前花费，未扣费/非即梦不显示 */}
+				{task.credit !== undefined && (
+					<span className="task-credit" title="当前已消耗的积分（即梦渠道）">
+						耗 {task.credit} 积分
+					</span>
+				)}
 				<span className="task-elapsed">{elapsed}</span>
 			</div>
 			<div className="progress-row">
@@ -192,6 +198,8 @@ function HistoryDetail({
 	const { meta } = task;
 	const avg = averageDuration(meta?.durations);
 	const created = formatCreated(task.folder);
+	// 积分（即梦渠道）：meta.credit 为该任务最终消耗，缺省（非即梦/0 消耗）不显示
+	const credit = meta?.credit;
 	return (
 		<div className="task-detail">
 			<div className="task-detail-head">
@@ -215,12 +223,17 @@ function HistoryDetail({
 				) : (
 					<span>{task.images.length} 张</span>
 				)}
-				{/* 平均耗时与创建时间成组靠右、创建时间最右；任一为空则各自不显示 */}
-				{(avg || created) && (
+				{/* 平均耗时、积分消耗与创建时间成组靠右、创建时间最右；任一为空则各自不显示 */}
+				{(avg || credit || created) && (
 					<span className="task-times">
 						{avg && (
 							<span className="task-avg" title="平均单图生成时间（只统计成功的）">
 								平均耗时 {avg}
+							</span>
+						)}
+						{credit !== undefined && (
+							<span className="task-credit" title="本次生成消耗的积分（即梦渠道）">
+								耗 {credit} 积分
 							</span>
 						)}
 						{created && (

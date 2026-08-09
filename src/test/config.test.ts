@@ -2,12 +2,27 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { editConfigView, readConfig, writeConfig } from '../ui/config';
 import { switchModelParams, modelSizeControl, qualifiedModel, splitQualifiedModel, findImageModel } from '../modelOptions';
-import { buildOptions, BUILTIN_GRSAI, BUILTIN_JIMENG } from '../backend/providers';
+import { buildOptions, BUILTIN_GRSAI, buildJimengProvider, jimengVideoCaps, isValidJimengData } from '../backend/providers';
+import type { JimengModelData } from '../backend/providers';
 import type { ImageFlowConfig } from '../shared';
 import { baseConfig } from './fixtures';
 
 // 内置 grsai 派生的 ConfigOptions，供 modelOptions 各函数测试复用
 const CONFIG_OPTIONS = buildOptions([BUILTIN_GRSAI]);
+
+/** 即梦能力表测试数据（与 media/jimeng-models.jsonc 一致的迷你版，含 seedance2.5） */
+const JIMENG_DATA: JimengModelData = {
+	imageRatios: ['21:9', '16:9', '3:2', '4:3', '1:1', '3:4', '2:3', '9:16'],
+	imageSizes: ['2k', '4k'],
+	imageModels: [{ model: '5.0', label: '即梦生图 5.0' }],
+	videoRatios: ['1:1', '3:4', '16:9', '4:3', '9:16', '21:9'],
+	videoModels: [
+		{ model: 'seedance2.0', label: 'Seedance 2.0', sizes: ['720p'], duration: [4, 15], max: { image: 9, video: 3, audio: 3 }, allowAudioOnly: false },
+		{ model: 'seedance2.0_vip', label: 'Seedance 2.0 VIP', sizes: ['720p', '1080p', '4k'], duration: [4, 15], max: { image: 9, video: 3, audio: 3 }, allowAudioOnly: false },
+		{ model: 'seedance2.5', label: 'Seedance 2.5', sizes: ['480p', '720p'], duration: [4, 30], max: { image: 30, video: 10, audio: 10 }, allowAudioOnly: true },
+	],
+};
+const BUILTIN_JIMENG = buildJimengProvider(JIMENG_DATA);
 
 suite('qualifiedModel', () => {
 	test('拼接与拆分互逆；非法值当作 grsai 裸模型名', () => {
@@ -107,8 +122,66 @@ suite('switchModelParams：即梦视频模型默认参数', () => {
 		const jimengImages = OPTS.imageModels.filter((m) => m.provider === 'jimeng' && !m.video);
 		assert.deepStrictEqual(jimengImages.map((m) => m.model), ['5.0']);
 		const videos = OPTS.imageModels.filter((m) => m.video);
-		assert.ok(videos.length >= 5);
+		assert.ok(videos.length >= 3); // 测试能力表含 2.0 / 2.0_vip / 2.5
 		assert.ok(videos.every((m) => m.maxConcurrency === 4));
+	});
+	test('seedance2.5 分辨率档 480p/720p，时长档放宽到 4-30', () => {
+		const s25 = findImageModel(OPTS, 'jimeng', 'seedance2.5')!;
+		assert.deepStrictEqual(s25.imageSizes, ['480p', '720p']);
+		assert.strictEqual(s25.defaults?.imageSize, '720p');
+		const duration = s25.custom.find((c) => c.key === 'duration')!;
+		assert.deepStrictEqual(duration.options, ['4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30']);
+		assert.strictEqual(duration.default, '5');
+	});
+	test('jimengVideoCaps 按模型查能力片段；非视频/未知模型返回 undefined', () => {
+		assert.deepStrictEqual(jimengVideoCaps(JIMENG_DATA, 'seedance2.5'), {
+			max: { image: 30, video: 10, audio: 10 },
+			allowAudioOnly: true,
+		});
+		assert.deepStrictEqual(jimengVideoCaps(JIMENG_DATA, 'seedance2.0'), {
+			max: { image: 9, video: 3, audio: 3 },
+			allowAudioOnly: false,
+		});
+		assert.strictEqual(jimengVideoCaps(JIMENG_DATA, '5.0'), undefined);
+		assert.strictEqual(jimengVideoCaps(JIMENG_DATA, 'seedance9.9'), undefined);
+	});
+});
+
+suite('isValidJimengData 能力表形状校验', () => {
+	const base = () => JSON.parse(JSON.stringify(JIMENG_DATA)) as Record<string, unknown>;
+	test('合法能力表通过', () => {
+		assert.ok(isValidJimengData(base()));
+	});
+	test('缺数组字段 / 数组含非字符串项判非法', () => {
+		const missing = base();
+		delete missing.imageRatios;
+		assert.ok(!isValidJimengData(missing));
+		const badRatio = base();
+		(badRatio.videoRatios as string[]).push(42 as unknown as string);
+		assert.ok(!isValidJimengData(badRatio));
+	});
+	test('duration 区间倒置（max<min）判非法，避免空档位列表', () => {
+		const inverted = base();
+		((inverted.videoModels as Record<string, unknown>[])[0].duration as number[])[0] = 20;
+		assert.ok(!isValidJimengData(inverted));
+	});
+	test('max 上限缺字段 / 为负数判非法', () => {
+		const noMax = base();
+		delete (noMax.videoModels as Record<string, unknown>[])[0].max;
+		assert.ok(!isValidJimengData(noMax));
+		const negMax = base();
+		((negMax.videoModels as Record<string, unknown>[])[0].max as Record<string, unknown>).image = -1;
+		assert.ok(!isValidJimengData(negMax));
+	});
+	test('allowAudioOnly 非布尔判非法', () => {
+		const bad = base();
+		(bad.videoModels as Record<string, unknown>[])[0].allowAudioOnly = 'yes';
+		assert.ok(!isValidJimengData(bad));
+	});
+	test('sizes 为空数组判非法', () => {
+		const empty = base();
+		((empty.videoModels as Record<string, unknown>[])[0].sizes as string[]).length = 0;
+		assert.ok(!isValidJimengData(empty));
 	});
 });
 

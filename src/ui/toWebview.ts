@@ -77,6 +77,9 @@ export async function toWebviewPendingTask(
 	const submittingJobs = task.jobs.filter((j) => j.status === 'submitting').length;
 	const submitting = Math.min(total, Math.round((submittingJobs * total) / task.jobs.length));
 	const errors = task.jobs.map((j) => j.error).filter((e): e is string => !!e);
+	// 积分（即梦渠道）：已终结 job 的 creditCount 实时累加。进行中即可显示当前花费，
+	// 任务终结转历史时 meta.credit 已有最终值，此处只覆盖进行中的场景
+	const credit = task.jobs.reduce((sum, j) => sum + (j.creditCount ?? 0), 0);
 	return {
 		id: task.id,
 		folder: task.folder,
@@ -93,6 +96,7 @@ export async function toWebviewPendingTask(
 		sync: task.sync,
 		progress: aggregateProgress(task.jobs),
 		startedAt: task.startedAt,
+		...(credit > 0 ? { credit } : {}),
 		errors,
 		images: await toWebviewImages(webview, task.images, favSet),
 	};

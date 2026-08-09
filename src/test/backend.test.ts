@@ -8,7 +8,10 @@ import { buildGenerateContentBody } from '../backend/adapters/geminiGenerate';
 import { mergeCustomParams } from '../backend/adapters/types';
 import {
 	buildOptions,
+	buildJimengProvider,
 	BUILTIN_GRSAI,
+	compareJimengVideo,
+	jimengVideoSeries,
 	parseCustomProvider,
 	paramDefaults,
 	parseJsonc,
@@ -118,6 +121,71 @@ suite('providers', () => {
 		assert.ok(provider.chat.length >= 1);
 		// 模板不再放 grsai 示例（内置渠道已含全部 grsai 模型），首个示例是 OpenAI 兼容同步协议
 		assert.strictEqual(provider.image[0].adapter, 'openai-images');
+	});
+});
+
+suite('jimengVideoSeries / compareJimengVideo（即梦视频模型系列与排序）', () => {
+	test('jimengVideoSeries：剥 seedance 前缀与 _vip 后缀，VIP 与非 VIP 归同一系列', () => {
+		assert.strictEqual(jimengVideoSeries('seedance2.0'), '2.0');
+		assert.strictEqual(jimengVideoSeries('seedance2.0_vip'), '2.0');
+		assert.strictEqual(jimengVideoSeries('seedance2.0fast'), '2.0fast');
+		assert.strictEqual(jimengVideoSeries('seedance2.0fast_vip'), '2.0fast');
+		assert.strictEqual(jimengVideoSeries('seedance2.0mini'), '2.0mini');
+		assert.strictEqual(jimengVideoSeries('seedance2.5'), '2.5');
+	});
+
+	test('compareJimengVideo：未来 2.5 的 mini/fast 变体仍归对应系列（不被 2.5 特判抢走）', () => {
+		// seedance2.5mini 应排进 mini 段（rank 0），而非 2.5 原版段（rank 3）
+		const sorted = ['seedance2.5', 'seedance2.5mini', 'seedance2.0'].sort(compareJimengVideo);
+		assert.deepStrictEqual(sorted, ['seedance2.5mini', 'seedance2.0', 'seedance2.5']);
+	});
+
+	test('compareJimengVideo：系列序 mini→fast→原版→2.5，组内 VIP 在前', () => {
+		const models = ['seedance2.5', 'seedance2.0', 'seedance2.0_vip', 'seedance2.0fast_vip', 'seedance2.0mini', 'seedance2.0fast'];
+		const sorted = [...models].sort(compareJimengVideo);
+		assert.deepStrictEqual(sorted, [
+			'seedance2.0mini',       // mini 系列（无 VIP 版，单行）
+			'seedance2.0fast_vip',   // fast 系列 VIP 在前
+			'seedance2.0fast',
+			'seedance2.0_vip',       // 原版系列 VIP 在前
+			'seedance2.0',
+			'seedance2.5',           // 2.5 系列（无 VIP 版，单行）
+		]);
+	});
+
+	test('buildJimengProvider：视频模型按系列排序后入列（生图模型在前不受影响）', () => {
+		const provider = buildJimengProvider({
+			imageRatios: ['16:9'],
+			imageSizes: ['2k', '4k'],
+			imageModels: [{ model: '5.0', label: '即梦生图 5.0' }],
+			videoRatios: ['16:9'],
+			videoModels: [
+				{ model: 'seedance2.5', label: 'S2.5', sizes: ['720p'], duration: [4, 30], max: { image: 30, video: 10, audio: 10 }, allowAudioOnly: true },
+				{ model: 'seedance2.0', label: 'S2.0', sizes: ['720p'], duration: [4, 15], max: { image: 9, video: 3, audio: 3 }, allowAudioOnly: false },
+				{ model: 'seedance2.0_vip', label: 'S2.0 VIP', sizes: ['720p'], duration: [4, 15], max: { image: 9, video: 3, audio: 3 }, allowAudioOnly: false },
+				{ model: 'seedance2.0mini', label: 'S2.0 Mini', sizes: ['720p'], duration: [4, 15], max: { image: 9, video: 3, audio: 3 }, allowAudioOnly: false },
+				{ model: 'seedance2.0fast', label: 'S2.0 Fast', sizes: ['720p'], duration: [4, 15], max: { image: 9, video: 3, audio: 3 }, allowAudioOnly: false },
+				{ model: 'seedance2.0fast_vip', label: 'S2.0 Fast VIP', sizes: ['720p'], duration: [4, 15], max: { image: 9, video: 3, audio: 3 }, allowAudioOnly: false },
+			],
+		});
+		const videos = provider.image.filter((m) => m.video).map((m) => m.model);
+		// 与 media/jimeng-models.jsonc 的 6 个真实模型全序对齐：mini 单列 → fast 组(VIP 前) → 原版组(VIP 前) → 2.5 单列
+		assert.deepStrictEqual(videos, ['seedance2.0mini', 'seedance2.0fast_vip', 'seedance2.0fast', 'seedance2.0_vip', 'seedance2.0', 'seedance2.5']);
+	});
+
+	test('真实能力表 media/jimeng-models.jsonc 的 6 个视频模型按 compareJimengVideo 全序', () => {
+		const file = path.resolve(__dirname, '../../media/jimeng-models.jsonc');
+		const data = parseJsonc(fs.readFileSync(file, 'utf8')) as { videoModels: { model: string }[] };
+		const models = data.videoModels.map((v) => v.model);
+		// 防 jsonc 增删/改序时排序漂移：真实 6 模型排序后必须是稳定全序
+		assert.deepStrictEqual([...models].sort(compareJimengVideo), [
+			'seedance2.0mini',
+			'seedance2.0fast_vip',
+			'seedance2.0fast',
+			'seedance2.0_vip',
+			'seedance2.0',
+			'seedance2.5',
+		]);
 	});
 });
 

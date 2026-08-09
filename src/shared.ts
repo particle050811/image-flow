@@ -100,6 +100,8 @@ export interface TaskMeta {
 	succeeded: number;
 	/** 每张成功图片各自的生成耗时（ms，按完成顺序）。源数据：平均生成时间由它派生，失败图片不入列 */
 	durations?: number[];
+	/** 本次消耗的积分（即梦渠道）：随 job 终结从 CLI 返回的 credit_count 累加（0 不记录，旧任务无此字段） */
+	credit?: number;
 }
 
 /** 模型可调的一个自定义参数（settings.json 的 custom[] 一项；发请求时塞进 body 的 key=value） */
@@ -241,6 +243,8 @@ export interface PendingJob {
 	progress?: number;
 	/** 本 job 开始提交的时刻（ms）：成功落盘时据此算单图生成耗时；持久化以跨重启续算 */
 	startedAt?: number;
+	/** 本 job 终结时远端返回的积分消耗（即梦 query_result 的 credit_count）；其余渠道/未终结缺省 */
+	creditCount?: number;
 }
 
 /**
@@ -307,6 +311,8 @@ export interface WebviewPendingTask {
 	progress: number;
 	/** 任务首次提交时间（ms），前端据此显示已进行时间（真实墙钟，不随重启重置） */
 	startedAt: number;
+	/** 已终结 job 累加的积分消耗（即梦渠道）：进行中实时累加、未扣费任务缺省，前端据此显示当前花费 */
+	credit?: number;
 	errors: string[];
 	images: WebviewImage[];
 }

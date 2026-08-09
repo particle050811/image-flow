@@ -5,10 +5,11 @@ import * as path from 'path';
 import { mediaTypeOf } from '../../util/images';
 import type { ImageFlowConfig } from '../../shared';
 import { isJimengVideoModel } from '../providers';
+import type { JimengVideoCap } from '../providers';
 
 /** 解析结果：ok = 拿到结构化 JSON；not-logged-in = 明确未登录；unparsed = 找不到合法 JSON */
 export type DreaminaOutput =
-	| { kind: 'ok'; submitId?: string; genStatus?: string; failReason?: string }
+	| { kind: 'ok'; submitId?: string; genStatus?: string; failReason?: string; creditCount?: number }
 	| { kind: 'not-logged-in' }
 	| { kind: 'unparsed'; raw: string };
 
@@ -84,6 +85,8 @@ export function parseDreaminaOutput(stdout: string, stderr = ''): DreaminaOutput
 			submitId: typeof obj.submit_id === 'string' ? obj.submit_id : undefined,
 			genStatus: typeof obj.gen_status === 'string' ? obj.gen_status : undefined,
 			failReason: typeof obj.fail_reason === 'string' ? obj.fail_reason : undefined,
+			// query_result 顶层 credit_count = 该任务实际消耗积分（成功/失败都返回，0 时字段省略）
+			creditCount: typeof obj.credit_count === 'number' && Number.isFinite(obj.credit_count) ? obj.credit_count : undefined,
 		};
 		if (out.submitId !== undefined || out.genStatus !== undefined) {
 			return out;
@@ -93,12 +96,12 @@ export function parseDreaminaOutput(stdout: string, stderr = ''): DreaminaOutput
 	return fallback ?? { kind: 'unparsed', raw: raw.trim() };
 }
 
-/** 全能参考的分类型上限（2026-07-12 `multimodal2video -h` 实测） */
-const MM_LIMITS = { image: 9, video: 3, audio: 3 } as const;
 /** 生图参考图上限（image2image 实测） */
 const I2I_MAX_IMAGES = 10;
 /** generate_num 上限 */
 const GENERATE_NUM_MAX = 10;
+/** 视频模型缺省素材上限（未传入能力数据时的回落值） */
+const DEFAULT_MM_LIMITS = { image: 9, video: 3, audio: 3 } as const;
 
 /** 按扩展名把参考素材路径分到图片/视频/音频三桶（保持正文出现顺序） */
 export function classifyRefs(refPaths: string[]): { images: string[]; videos: string[]; audios: string[] } {
@@ -116,15 +119,18 @@ export function classifyRefs(refPaths: string[]): { images: string[]; videos: st
  * 拼一次即梦提交的 CLI 参数。生图：无参考图走 text2image、有参考图走 image2image，
  * count 映射 generate_num（1-10）；视频（seedance 家族）：全能参考 multimodal2video，
  * 素材按类型分发 --image/--video/--audio。素材数量/类型不匹配时抛错（提交前校验，不扣积分）。
+ * caps 是视频模型能力（素材上限/纯音频许可），来自内置能力表（providerRuntime 下发的 CallContext），
+ * 缺省回落通用值——生图路径不校验 caps。
  */
 export function buildSubmitArgs(
 	config: ImageFlowConfig,
 	prompt: string,
 	refPaths: string[],
-	count: number
+	count: number,
+	caps?: JimengVideoCap
 ): string[] {
 	if (isJimengVideoModel(config.model)) {
-		return buildVideoArgs(config, prompt, refPaths);
+		return buildVideoArgs(config, prompt, refPaths, caps);
 	}
 	return buildImageArgs(config, prompt, refPaths, count);
 }
@@ -157,20 +163,23 @@ function buildImageArgs(
 	return args;
 }
 
-function buildVideoArgs(config: ImageFlowConfig, prompt: string, refPaths: string[]): string[] {
+function buildVideoArgs(config: ImageFlowConfig, prompt: string, refPaths: string[], caps?: JimengVideoCap): string[] {
 	const { images, videos, audios } = classifyRefs(refPaths);
-	if (!images.length && !videos.length) {
+	// 能力表可声明允许纯音频参考（seedance2.5）；缺省要求至少一图或一段视频
+	const allowAudioOnly = caps?.allowAudioOnly ?? false;
+	if (!images.length && !videos.length && !allowAudioOnly) {
 		throw new Error('全能参考需要至少一张图片或一段视频作为参考素材（正文用 ![名](路径) 声明）');
 	}
+	const max = caps?.max ?? DEFAULT_MM_LIMITS;
 	const over: string[] = [];
-	if (images.length > MM_LIMITS.image) {
-		over.push(`图片 ${images.length}/${MM_LIMITS.image}`);
+	if (images.length > max.image) {
+		over.push(`图片 ${images.length}/${max.image}`);
 	}
-	if (videos.length > MM_LIMITS.video) {
-		over.push(`视频 ${videos.length}/${MM_LIMITS.video}`);
+	if (videos.length > max.video) {
+		over.push(`视频 ${videos.length}/${max.video}`);
 	}
-	if (audios.length > MM_LIMITS.audio) {
-		over.push(`音频 ${audios.length}/${MM_LIMITS.audio}`);
+	if (audios.length > max.audio) {
+		over.push(`音频 ${audios.length}/${max.audio}`);
 	}
 	if (over.length) {
 		throw new Error(`全能参考素材超出上限（${over.join('，')}），请精简正文引用`);
@@ -185,7 +194,7 @@ function buildVideoArgs(config: ImageFlowConfig, prompt: string, refPaths: strin
 	for (const p of audios) {
 		args.push(`--audio=${p}`);
 	}
-	// duration 来自模型自定义参数（providers.ts 的 JIMENG_DURATION），缺省 5
+	// duration 来自模型自定义参数（providers.ts 按能力表构建），缺省 5
 	const duration = config.params.duration || '5';
 	args.push(
 		`--prompt=${prompt}`,

@@ -8,7 +8,6 @@ import { getImageAdapter, getChatAdapter } from './adapters';
 import type { ImageAdapter, ChatAdapter, CallContext, ChatContext } from './adapters';
 import {
 	BUILTIN_GRSAI,
-	BUILTIN_JIMENG,
 	GRSAI_PROVIDER_ID,
 	JIMENG_PROVIDER_ID,
 	CUSTOM_PROVIDER_ID,
@@ -16,13 +15,44 @@ import {
 	parseJsonc,
 	buildOptions,
 	pickNamingChat,
+	buildJimengProvider,
+	jimengVideoCaps,
+	isValidJimengData,
+	JIMENG_MINIMAL_MODEL_DATA,
 } from './providers';
-import type { RuntimeProvider } from './providers';
+import type { RuntimeProvider, JimengModelData, JimengVideoCap } from './providers';
 import { settingsFile } from '../storage/storage';
 import { log } from '../util/log';
 
 /** 自定义 Provider 缓存：激活时由 reloadCustomProvider 填充；文件缺失/解析失败为 undefined */
 let cachedCustom: RuntimeProvider | undefined;
+/** 内置即梦 Provider 缓存：由 loadJimengModels 填充（读 media/jimeng-models.jsonc 构建） */
+let builtinJimeng: RuntimeProvider | undefined;
+/** 即梦模型能力表（构建 Provider 的原始数据，供查询 videoCaps） */
+let jimengData: JimengModelData | undefined;
+
+/**
+ * 读扩展内置的 media/jimeng-models.jsonc 构建即梦 Provider 缓存。
+ * 扩展启动时（activate）调用一次；文件缺失/解析失败回落到最小即梦 Provider（仅生图 5.0），
+ * 保证渠道始终可用、不因能力表损坏而丢失整个即梦。
+ */
+export async function loadJimengModels(extensionUri: vscode.Uri): Promise<void> {
+	try {
+		const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(extensionUri, 'media', 'jimeng-models.jsonc'));
+		const raw: unknown = parseJsonc(Buffer.from(bytes).toString('utf8'));
+		// 形状校验：损坏/缺字段的能力表走回落，而不是产出畸形档位（如 duration max<min → 空选项）
+		if (!isValidJimengData(raw)) {
+			throw new Error('能力表形状非法');
+		}
+		jimengData = raw;
+		builtinJimeng = buildJimengProvider(raw);
+	} catch (err) {
+		// 文件缺失/解析失败/形状非法：统一回落到最小即梦 Provider（仅生图 5.0），渠道保持可用
+		jimengData = undefined;
+		builtinJimeng = buildJimengProvider(JIMENG_MINIMAL_MODEL_DATA);
+		log(`即梦能力表加载失败（回落最小配置）：${err instanceof Error ? err.message : String(err)}`);
+	}
+}
 
 /**
  * 读 settings.json → 自定义 Provider 缓存。激活时调一次；切到自定义/打开配置后重读。
@@ -68,12 +98,16 @@ export async function ensureSettingsFile(extensionUri: vscode.Uri): Promise<vsco
 
 /** 请求用 Provider：只接受明确支持的渠道 id，未知值（损坏状态/伪造消息）直接报错，
  *  绝不静默当作 grsai——否则可能把提示词/素材发往非预期渠道。custom 必须有可用配置。 */
+function jimengProvider(): RuntimeProvider {
+	return builtinJimeng ?? { id: JIMENG_PROVIDER_ID, label: '即梦', image: [], chat: [] };
+}
+
 function requiredProvider(providerId: string): RuntimeProvider {
 	if (providerId === GRSAI_PROVIDER_ID) {
 		return BUILTIN_GRSAI;
 	}
 	if (providerId === JIMENG_PROVIDER_ID) {
-		return BUILTIN_JIMENG;
+		return jimengProvider();
 	}
 	if (providerId === CUSTOM_PROVIDER_ID) {
 		if (!cachedCustom) {
@@ -87,7 +121,9 @@ function requiredProvider(providerId: string): RuntimeProvider {
 /** 合并全部可用渠道，构建发往 webview 的 ConfigOptions（不含 url/key） */
 export function configOptions(): ConfigOptions {
 	return buildOptions(
-		cachedCustom ? [BUILTIN_GRSAI, BUILTIN_JIMENG, cachedCustom] : [BUILTIN_GRSAI, BUILTIN_JIMENG]
+		cachedCustom
+			? [BUILTIN_GRSAI, jimengProvider(), cachedCustom]
+			: [BUILTIN_GRSAI, jimengProvider()]
 	);
 }
 
@@ -132,7 +168,13 @@ export function resolveImageCall(config: ImageFlowConfig, opts?: { requireModel?
 	if (provider.id === JIMENG_PROVIDER_ID) {
 		return {
 			adapter: getImageAdapter(m.adapter),
-			ctx: { baseUrl: '', apiKey: '', config: { ...config, apiKey: '', baseUrl: '' } },
+			ctx: {
+				baseUrl: '',
+				apiKey: '',
+				config: { ...config, apiKey: '', baseUrl: '' },
+				// 视频模型能力（素材上限/纯音频许可）：能力表数据经 ctx 下发给 CLI 适配器
+				videoCaps: jimengData ? jimengVideoCaps(jimengData, config.model) : undefined,
+			},
 		};
 	}
 	return {

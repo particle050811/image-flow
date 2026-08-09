@@ -11,7 +11,7 @@ export function settingsFile(): vscode.Uri {
 
 /**
  * CLI 桥 token 文件：~/.image-flow/token（跨工作区全局，纯文本一行）。
- * 首次激活由 cliBridge 生成；壳脚本 scripts/imgflow.mjs 读同一文件。删除该文件后重载窗口即轮换。
+ * 首次激活由 cliBridge 生成；壳脚本 skills/image-flow/imgflow.mjs 读同一文件。删除该文件后重载窗口即轮换。
  */
 export function tokenFile(): vscode.Uri {
 	return vscode.Uri.joinPath(vscode.Uri.file(os.homedir()), '.image-flow', 'token');

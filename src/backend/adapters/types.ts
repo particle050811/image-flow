@@ -3,6 +3,7 @@
 // 纯类型 + 接口定义，具体实现见同目录各 adapter 文件。
 
 import type { ImageFlowConfig } from '../../shared';
+import type { JimengVideoCap } from '../providers';
 
 /**
  * 单个产出结果项：待下载的图片 url、已内联的 base64（含 mime），
@@ -32,11 +33,21 @@ export interface CallContext {
 	 * 轮询链路填充；缺省时 adapter 回落系统临时目录。HTTP 型 adapter 忽略。
 	 */
 	taskDir?: string;
+	/**
+	 * 即梦视频模型能力（素材上限/纯音频许可）。Provider 层解析时按当前模型查能力表填充，
+	 * CLI 型 adapter 用它做提交前校验；缺省回落通用上限。HTTP 型 adapter 忽略。
+	 */
+	videoCaps?: JimengVideoCap;
 }
 
 /** async adapter 提交结果：拿到 jobId 后凭它轮询 */
 export interface SubmitAsync {
 	jobId: string;
+	/**
+	 * 本次消耗的积分（即梦提交响应的 credit_count）：费用在提交瞬间即锁定并告知，
+	 * 0 时字段省略。其余渠道缺省；poll 返回的实际值以 poll 为准覆盖。
+	 */
+	creditCount?: number;
 }
 
 /** sync adapter 提交结果：一次返回（可多张），无需轮询 */
@@ -51,6 +62,8 @@ export interface AdapterJobResult {
 	error?: string;
 	/** running 态的生成进度 0~100（远端返回，可能缺省） */
 	progress?: number;
+	/** 本 job 消耗的积分（即梦 query_result 的 credit_count）：终结态带回，供任务台账累加展示；其余渠道缺省 */
+	creditCount?: number;
 }
 
 /**

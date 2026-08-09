@@ -669,7 +669,16 @@ textarea::placeholder {
 	gap: var(--sp-2);
 }
 
-/* 模型卡片：文字可能较长，居中略高的按钮，选中态同比例卡片（蓝框），不打勾 */
+/* 单模型系列的另一半占位格：与 model-item 等尺寸的透明占位，保持网格对齐。
+   视频系列各行（成对并排 / 单模型占一格）都是 .param-section 的直接子元素，
+   行间距由 param-section 的 flex gap 统一承担，不在此额外加 margin（避免叠加成双倍） */
+.model-grid-gap {
+	padding: 8px 6px;
+	visibility: hidden;
+}
+
+/* 模型卡片：文字可能较长，居中略高的按钮，选中态同比例卡片（蓝框），不打勾。
+   所有模型等大两列排布；视频模型顺序（VIP 前、系列序）由后端下发保证 */
 .model-item {
 	padding: 8px 6px;
 	font-size: var(--fs-body);
@@ -883,9 +892,16 @@ button.secondary {
 }
 
 .task-avg,
-.task-created {
+.task-created,
+.task-credit {
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
+}
+
+/* 积分消耗（即梦渠道）：从淡化的元信息里挑出来，琥珀色强调「花了多少钱」 */
+.task-credit {
+	color: var(--vscode-editorWarning-foreground, #d29922);
+	font-weight: 600;
 }
 
 /* 进度计数 done/total：从淡化的元信息行里挑出来，加粗 + 链接色以醒目 */

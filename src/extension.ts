@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { isPreviewDoc, previewRequestCommand } from './task/preview';
 import { cleanEmptyTaskFolders } from './task/history';
 import { seedModelInjections, readConfig } from './ui/config';
-import { reloadCustomProvider } from './backend/providerRuntime';
+import { reloadCustomProvider, loadJimengModels } from './backend/providerRuntime';
 import { SidebarProvider } from './ui/sidebarProvider';
 import { registerCliBridge } from './ui/cliBridge';
 import { TaskManager } from './task/tasks';
@@ -23,6 +23,10 @@ export async function activate(context: vscode.ExtensionContext) {
 	// 读入自定义 Provider（~/.image-flow/settings.json）缓存：侧栏首读 config 即能拿到自定义模型候选。
 	// 改 settings.json 后需重载窗口生效（无 file watch），切到自定义/打开配置时也会重读。
 	await reloadCustomProvider();
+
+	// 读入内置即梦能力表（media/jimeng-models.jsonc）构建即梦 Provider 缓存：侧栏首读即能拿到即梦模型候选。
+	// 改能力表后需重载窗口生效（无 file watch）。
+	await loadJimengModels(context.extensionUri);
 
 	// 异步任务管理器：提交/轮询/持久化。配合 onStartupFinished 激活，开机即 resume 续拉重启前未完成的任务。
 	const taskManager = new TaskManager(context);

@@ -540,6 +540,9 @@ export class TaskManager {
 			log(`任务 ${task.folder} 持久化失败（忽略）：${errMsg(err)}`);
 		}
 		this.ensureTimer();
+		// 与 pollOnce 同口径：emit 前等积分 meta 落盘完成，避免历史扫描读到无 credit 的 meta 且不再刷新
+		// （混合内联终结：前 job 已轮询终结带积分、后 job 提交失败，积分写入在此排队）
+		await this.metaWrites;
 		this.emit();
 	}
 
@@ -547,11 +550,16 @@ export class TaskManager {
 	private async applySubmitResult(
 		task: PendingTask,
 		job: PendingJob,
-		res: { jobId: string } | { results: ResultItem[] }
+		res: { jobId: string; creditCount?: number } | { results: ResultItem[] }
 	): Promise<void> {
 		if ('jobId' in res) {
 			job.id = res.jobId;
 			job.status = 'running';
+			// 提交响应即带积分（即梦费用提交瞬间锁定）：记账并实时刷新，卡片立现本次消耗。
+			// poll 终结后以实际值为准覆盖（费用口径一致，覆盖无害）
+			if (res.creditCount !== undefined) {
+				job.creditCount = res.creditCount;
+			}
 		} else {
 			await this.storeJobResults(task, job, res.results);
 		}
@@ -669,6 +677,9 @@ export class TaskManager {
 
 		if (changed) {
 			await this.persist();
+			// 等 notifyFinished 里的积分 meta 落盘完成再刷新侧栏：emit 会触发历史扫盘读 meta.json，
+			// 不等待会让刚终结的卡片短暂缺积分（writeMeta 走串行链，返回即整链排空）
+			await this.metaWrites;
 			this.emit();
 		}
 		// 无论本轮是否有状态变更，都重新评估定时器，以便运行满 10 分钟时从快轮询切到慢轮询
@@ -678,6 +689,13 @@ export class TaskManager {
 	/** 任务终结时弹通知：全成功报喜、部分/全失败呈现错误。通知带「查看」按钮，点击跳到任务栏看该任务 */
 	private notifyFinished(task: PendingTask): void {
 		const failed = task.jobs.filter((j) => j.status === 'failed' || j.status === 'violation');
+		// 积分（即梦渠道）：把终结 job 携带的 creditCount 累进台账。任务终结后即移出进行中列表，
+		// 只能在这里（移除前）落盘——失败任务同样记（远端已扣费），全为 0/缺省则不加字段留空
+		const credit = task.jobs.reduce((sum, j) => sum + (j.creditCount ?? 0), 0);
+		if (credit > 0) {
+			task.meta.credit = credit;
+			void this.writeMeta(task);
+		}
 		// 通知名：generate 的 title 建卡即为 md 名；edit 在 AI 命名返回前终结时 title 缺失，
 		// 回退「编辑任务」而非裸时间戳文件夹名，文案更可读
 		const name = task.title || (task.kind === 'edit' ? '编辑任务' : task.folder);
@@ -736,19 +754,32 @@ export class TaskManager {
 		// taskDir：CLI 型 adapter 把成品下载到任务夹 download/ 子目录（同盘 rename、残片随任务夹回收）
 		const result = await adapter.poll({ ...ctx, taskDir: vscode.Uri.parse(task.dir).fsPath }, job.id!);
 		if (result.status === 'running') {
+			// 下载重试等 running 态：轮询结果可能已带实际积分（jimengCli 下载失败时透传终态 credit_count），
+			// 覆盖提交期的估计值——即使后续下载一直失败到任务超时，已扣费也按实际值入账
+			if (result.creditCount !== undefined) {
+				job.creditCount = result.creditCount;
+			}
 			// 进度有变化才算「变更」，驱动侧栏刷新；无变化则不触发整轮 emit，避免空刷
 			if (typeof result.progress === 'number' && result.progress !== job.progress) {
 				job.progress = result.progress;
 				return true;
 			}
-			return false;
+			// 仅积分透传（无进度变化）也标记为变更：让侧栏实时刷新已扣积分
+			return result.creditCount !== undefined;
 		}
 		if (result.status === 'failed' || result.status === 'violation') {
 			job.status = result.status;
 			job.error = result.error;
+			// 失败任务同样记积分：即梦远端已扣费，credit_count 如实入账（失败扣费不是 bug，是该展示的成本）。
+			// poll 未带回实际值（如登录失效等本地终结失败）时保留提交时已锁定的积分，绝不抹掉已知扣费。
+			// 注意：creditCount 赋值与 persist() 之间隔 storeJobResults 的 await 窗口（仅 succeeded 分支），
+			// 该窗口崩溃会丢此 job 积分——与 succeeded 状态同窗口，属基线崩溃语义，概率极低，勿据此优化 persist 时机
+			job.creditCount = result.creditCount ?? job.creditCount;
 			return true;
 		}
-		// succeeded：落盘到任务文件夹（用创建时记下的绝对 Uri，与当前窗口工作区无关）
+		// succeeded：先记实际积分再落盘——落盘可能抛错（磁盘满/权限）走任务终结路径，
+		// 若先落盘再赋值，抛错会让已取得的实际积分丢失（Codex 复核确认），任务超时后保留提交期估计值
+		job.creditCount = result.creditCount ?? job.creditCount;
 		await this.storeJobResults(task, job, result.results);
 		return true;
 	}

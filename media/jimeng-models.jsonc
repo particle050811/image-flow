@@ -1,0 +1,67 @@
+// 即梦（dreamina CLI）内置模型能力表。
+// 档位为 `dreamina <cmd> -h` 实测值；只在前端渲染档位，后端不收敛（memory backend-no-capability-clamp）。
+// 改模型/档位后重载窗口生效（扩展启动时读入缓存）。
+{
+	// 生图比例档位（text2image / image2image 同一套）
+	"imageRatios": ["21:9", "16:9", "3:2", "4:3", "1:1", "3:4", "2:3", "9:16"],
+	// 生图分辨率档位（image2image 不支持 3.x，全部支持 2k/4k）
+	"imageSizes": ["2k", "4k"],
+	// 生图模型
+	"imageModels": [
+		{ "model": "5.0", "label": "即梦生图 5.0" }
+	],
+	// 视频（全能参考 multimodal2video）比例档位
+	"videoRatios": ["1:1", "3:4", "16:9", "4:3", "9:16", "21:9"],
+	// 视频模型：sizes = video_resolution 档位；duration = [min, max] 秒（闭区间）；
+	// max = 全能参考分类型素材上限；allowAudioOnly = 是否允许纯音频参考（seedance2.5 专属）
+	"videoModels": [
+		{
+			"model": "seedance2.0",
+			"label": "Seedance 2.0",
+			"sizes": ["720p"],
+			"duration": [4, 15],
+			"max": { "image": 9, "video": 3, "audio": 3 },
+			"allowAudioOnly": false
+		},
+		{
+			"model": "seedance2.0fast",
+			"label": "Seedance 2.0 Fast",
+			"sizes": ["720p"],
+			"duration": [4, 15],
+			"max": { "image": 9, "video": 3, "audio": 3 },
+			"allowAudioOnly": false
+		},
+		{
+			"model": "seedance2.0_vip",
+			"label": "Seedance 2.0 VIP",
+			"sizes": ["720p", "1080p", "4k"],
+			"duration": [4, 15],
+			"max": { "image": 9, "video": 3, "audio": 3 },
+			"allowAudioOnly": false
+		},
+		{
+			"model": "seedance2.0fast_vip",
+			"label": "Seedance 2.0 Fast VIP",
+			"sizes": ["720p"],
+			"duration": [4, 15],
+			"max": { "image": 9, "video": 3, "audio": 3 },
+			"allowAudioOnly": false
+		},
+		{
+			"model": "seedance2.0mini",
+			"label": "Seedance 2.0 Mini",
+			"sizes": ["720p"],
+			"duration": [4, 15],
+			"max": { "image": 9, "video": 3, "audio": 3 },
+			"allowAudioOnly": false
+		},
+		{
+			"model": "seedance2.5",
+			"label": "Seedance 2.5",
+			"sizes": ["480p", "720p"],
+			"duration": [4, 30],
+			"max": { "image": 30, "video": 10, "audio": 10 },
+			"allowAudioOnly": true
+		}
+	]
+}

@@ -158,7 +158,7 @@ export const jimengCli: ImageAdapter = {
 			throw new Error('即梦调用缺少参考素材文件路径（refPaths），这是内部接线错误');
 		}
 		const bin = await findDreamina();
-		const args = buildSubmitArgs(ctx.config, prompt, refPaths, count);
+		const args = buildSubmitArgs(ctx.config, prompt, refPaths, count, ctx.videoCaps);
 		const timeout = isJimengVideoModel(ctx.config.model) ? SUBMIT_TIMEOUT_VIDEO : SUBMIT_TIMEOUT_IMAGE;
 		const out = await run(bin, args, timeout);
 		const parsed = requireOk(parseDreaminaOutput(out.stdout, out.stderr), '即梦提交');
@@ -168,7 +168,9 @@ export const jimengCli: ImageAdapter = {
 		if (!parsed.submitId) {
 			throw new Error(`即梦提交未返回 submit_id：${out.stdout.slice(0, 500)}`);
 		}
-		return { jobId: parsed.submitId };
+		// 提交响应带 credit_count（费用提交瞬间锁定）：透传给调用方立即可展示，不必等轮询。
+		// 0 积分任务字段省略，此时 creditCount 为 undefined，与 poll 侧口径一致
+		return { jobId: parsed.submitId, ...(parsed.creditCount !== undefined ? { creditCount: parsed.creditCount } : {}) };
 	},
 
 	async poll(ctx: CallContext, jobId: string): Promise<AdapterJobResult> {
@@ -198,6 +200,7 @@ export const jimengCli: ImageAdapter = {
 				status: 'failed',
 				results: [],
 				error: withComplianceHint(parsed.failReason || '即梦生成失败（gen_status=fail）'),
+				creditCount: parsed.creditCount,
 			};
 		}
 		if (parsed.genStatus !== 'success') {
@@ -207,7 +210,9 @@ export const jimengCli: ImageAdapter = {
 		// 下载根优先用任务夹 download/ 子目录（与最终落盘同盘、saveResults rename 原子、
 		// 残片随任务夹生命周期回收且不进顶层产物扫描），无 taskDir（如脱离 TaskManager 的直调）回落系统临时目录。
 		// 目录固定为 per-job 路径且每轮清空重下：重试不攒残片，半截大文件也会被下轮覆盖清掉。
-		// 远端已成功（已扣费），下载阶段任何失败一律按瞬时错误抛出让下轮重试，绝不把已生成的结果永久判死。
+		// 远端已成功（已扣费），下载阶段任何失败一律按瞬时错误处理让下轮重试，绝不把已生成的结果永久判死。
+		// 但已取得的实际积分（终态查询的 credit_count）必须随 running 立即透传，不随下载结果丢失——
+		// 否则下载持续失败直至任务超时时，台账会错误保留提交期的估计值（Codex 复核确认）。
 		const downloadDir = ctx.taskDir
 			? path.join(ctx.taskDir, 'download', jobId)
 			: path.join(os.tmpdir(), 'image-flow-jimeng', jobId);
@@ -227,23 +232,25 @@ export const jimengCli: ImageAdapter = {
 			);
 		} catch (err) {
 			await fs.rm(downloadDir, { recursive: true, force: true }).catch(() => {});
-			throw new TransientError(`即梦成品下载失败（下轮重试）：${err instanceof Error ? err.message : String(err)}`);
+			return { status: 'running', results: [], creditCount: parsed.creditCount };
 		}
 		// 复验下载输出仍为 success：run() 会放行「非零退出但 stdout 完整」的情况，
 		// 若 CLI 下载中途出错（部分文件已落地），不能因目录非空就当批量全齐
 		const downloadParsed = parseDreaminaOutput(downloadOut.stdout, downloadOut.stderr);
 		if (downloadParsed.kind !== 'ok' || downloadParsed.genStatus !== 'success') {
 			await fs.rm(downloadDir, { recursive: true, force: true }).catch(() => {});
-			throw new TransientError('即梦成品下载输出异常，可能未下载完整（下轮重试）');
+			// 下载失败但首次终态查询已拿到实际积分：随 running 透传，不让下轮重试/超时丢失已扣费
+			return { status: 'running', results: [], creditCount: parsed.creditCount };
 		}
 		const files = await collectMediaFiles(downloadDir);
 		if (!files.length) {
 			// 下载命令“成功”但目录为空同样按瞬时处理：可能是 CLI 输出异常，重试无害（任务有 30 分钟兜底）
 			await fs.rm(downloadDir, { recursive: true, force: true }).catch(() => {});
-			throw new TransientError('即梦任务已成功但本轮未下载到成品文件（下轮重试）');
+			return { status: 'running', results: [], creditCount: downloadParsed.creditCount ?? parsed.creditCount };
 		}
 		const results: ResultItem[] = files.map((p) => ({ kind: 'file', path: p }));
-		return { status: 'succeeded', results };
+		// 积分以复验输出为准（下载阶段输出同样是终态查询，credit_count 理论一致），复验缺失时回落首次查询值
+		return { status: 'succeeded', results, creditCount: downloadParsed.creditCount ?? parsed.creditCount };
 	},
 };
 

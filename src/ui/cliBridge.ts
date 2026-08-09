@@ -39,7 +39,7 @@ import { errMsg } from '../util/errors';
 
 /**
  * 「给 AI 自动调用」的命令入口：因库列表/任务态存在扩展主进程、独立进程读不到，
- * 改由 scripts/imgflow.mjs 这层 CLI 壳桥接——扩展激活时在 127.0.0.1 的固定候选端口段
+ * 改由 skills/image-flow/imgflow.mjs 这层 CLI 壳桥接——扩展激活时在 127.0.0.1 的固定候选端口段
  * （47870~47879）依次试绑 HTTP 服务，壳按同一顺序扫描端口直连 POST {token, op, md|cwd, args}，
  * 这里在扩展主进程内跑逻辑（有 vscode API + workspaceState），响应体即结果。
  * op 分两类：md 类（list/fix/preview/submit）与 cwd 类（edit/query_result/list_task/list_model/favorite）。
@@ -53,7 +53,7 @@ import { errMsg } from '../util/errors';
  * 不进任何仓库；本机单用户场景不做挑战-响应等更重的防护）。
  */
 
-/** 候选端口段（与 scripts/imgflow.mjs 约定一致）：依次试绑，绑上哪个用哪个 */
+/** 候选端口段（与 skills/image-flow/imgflow.mjs 约定一致）：依次试绑，绑上哪个用哪个 */
 const PORT_START = 47870;
 const PORT_COUNT = 10;
 /** 响应标识头：壳凭此区分「本扩展的服务」与「端口被复用后的陌生进程」 */
@@ -703,6 +703,7 @@ async function runQueryResult(tasks: TaskManager, rawArgs: unknown): Promise<str
 	// 仍活跃才走内存报 querying；已终结但尚未移出列表的走磁盘兜底拿终态
 	if (memTask && isTaskActive(memTask)) {
 		const errors = [...new Set(memTask.jobs.map((j) => j.error).filter((e): e is string => !!e))];
+		const credit = memTask.jobs.reduce((sum, j) => sum + (j.creditCount ?? 0), 0);
 		return (
 			JSON.stringify({
 				submit_id: id,
@@ -711,6 +712,7 @@ async function runQueryResult(tasks: TaskManager, rawArgs: unknown): Promise<str
 				requested: Math.max(memTask.jobs.length, memTask.meta.requested),
 				done: memTask.images.length,
 				failed: memTask.jobs.filter((j) => j.status === 'failed' || j.status === 'violation').length,
+				...(credit > 0 ? { credit } : {}),
 				...(errors.length ? { errors } : {}),
 				outputs: memTask.images.map((img) => ({
 					path: vscode.Uri.parse(img.uri).fsPath,
@@ -726,12 +728,15 @@ async function runQueryResult(tasks: TaskManager, rawArgs: unknown): Promise<str
 	}
 	const meta = await readTaskMeta(dir);
 	const title = memTask?.title ?? meta?.title;
+	// meta.credit 由 pollOnce 终结时写入（await metaWrites 保证先于侧栏刷新）；CLI 查询与它并发时
+	// 可能极窄地读到尚无 credit 的 meta（最终一致）——任务已终结、产出正确，仅积分瞬时缺省，可接受
 	return (
 		JSON.stringify({
 			submit_id: id,
 			...taskGenStatus(meta?.requested ?? 0, outputs.length),
 			requested: meta?.requested ?? 0,
 			succeeded: outputs.length,
+			...(meta?.credit ? { credit: meta.credit } : {}),
 			...(title ? { title } : {}),
 			outputs,
 		}) + '\n'
@@ -748,18 +753,22 @@ async function runListTask(tasks: TaskManager, rawArgs: unknown): Promise<string
 		}
 		limit = Math.min(obj.limit, 100);
 	}
-	const active = tasks.list().map((t) => ({
-		submit_id: t.folder,
-		gen_status: 'querying',
-		progress: aggregateProgress(t.jobs),
-		model: t.model,
-		ratio: t.meta.aspectRatio,
-		resolution: t.meta.imageSize,
-		requested: Math.max(t.jobs.length, t.meta.requested),
-		succeeded: t.images.length,
-		...(t.title ? { title: t.title } : {}),
-		source: t.meta.source,
-	}));
+	const active = tasks.list().map((t) => {
+		const credit = t.jobs.reduce((sum, j) => sum + (j.creditCount ?? 0), 0);
+		return {
+			submit_id: t.folder,
+			gen_status: 'querying',
+			progress: aggregateProgress(t.jobs),
+			model: t.model,
+			ratio: t.meta.aspectRatio,
+			resolution: t.meta.imageSize,
+			requested: Math.max(t.jobs.length, t.meta.requested),
+			succeeded: t.images.length,
+			...(credit > 0 ? { credit } : {}),
+			...(t.title ? { title: t.title } : {}),
+			source: t.meta.source,
+		};
+	});
 	const history = (await listHistory(tasks.activeFolders())).map((t) => {
 		const title = t.meta?.title ?? t.promptName;
 		return {
@@ -770,6 +779,7 @@ async function runListTask(tasks: TaskManager, rawArgs: unknown): Promise<string
 			resolution: t.meta?.imageSize,
 			requested: t.meta?.requested ?? 0,
 			succeeded: t.images.length,
+			...(t.meta?.credit ? { credit: t.meta.credit } : {}),
 			...(title ? { title } : {}),
 			source: t.meta?.source,
 		};

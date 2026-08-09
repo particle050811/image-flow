@@ -3,6 +3,7 @@
 import * as assert from 'assert';
 import { parseDreaminaOutput, buildSubmitArgs, classifyRefs } from '../backend/adapters/jimengCliLogic';
 import { isJimengVideoModel } from '../backend/providers';
+import type { JimengVideoCap } from '../backend/providers';
 import { baseConfig } from './fixtures';
 import type { ImageFlowConfig } from '../shared';
 
@@ -25,6 +26,24 @@ suite('jimengCliLogic parseDreaminaOutput', () => {
 		assert.strictEqual(out.kind, 'ok');
 		assert.strictEqual((out as { submitId?: string }).submitId, '550e8400-e29b');
 		assert.strictEqual((out as { genStatus?: string }).genStatus, 'querying');
+	});
+
+	test('解析 query_result 顶层的 credit_count（成功/失败均返回；0 或缺失时不带出）', () => {
+		// 视频任务成功：credit_count 顶置返回
+		const ok = parseDreaminaOutput('{"submit_id":"x","gen_status":"success","credit_count":368}');
+		assert.strictEqual((ok as { creditCount?: number }).creditCount, 368);
+		// 视频任务失败：同样带出消耗（远端已扣费）
+		const fail = parseDreaminaOutput('{"submit_id":"x","gen_status":"fail","fail_reason":"x","credit_count":20}');
+		assert.strictEqual((fail as { creditCount?: number }).creditCount, 20);
+		// 图片 2k（0 消耗）：字段省略，creditCount 应为 undefined
+		const zero = parseDreaminaOutput('{"submit_id":"x","gen_status":"success"}');
+		assert.strictEqual((zero as { creditCount?: number }).creditCount, undefined);
+		// 显式 credit_count: 0（如 2k 生图命中免费额度）：保留 0，由上层 credit>0 守卫统一跳过
+		const explicitZero = parseDreaminaOutput('{"submit_id":"x","gen_status":"success","credit_count":0}');
+		assert.strictEqual((explicitZero as { creditCount?: number }).creditCount, 0);
+		// 非数字/字符串 credit_count 不误收
+		const junk = parseDreaminaOutput('{"submit_id":"x","gen_status":"success","credit_count":"368"}');
+		assert.strictEqual((junk as { creditCount?: number }).creditCount, undefined);
 	});
 
 	test('解析失败态并带出 fail_reason', () => {
@@ -128,6 +147,38 @@ suite('jimengCliLogic buildSubmitArgs 视频（全能参考）', () => {
 		assert.throws(() => buildSubmitArgs(videoConfig(), 'p', images10, 1), /图片 10\/9/);
 		const videos4 = ['D:\\a.png', 'D:\\1.mp4', 'D:\\2.mp4', 'D:\\3.mp4', 'D:\\4.mp4'];
 		assert.throws(() => buildSubmitArgs(videoConfig(), 'p', videos4, 1), /视频 4\/3/);
+	});
+});
+
+suite('jimengCliLogic buildSubmitArgs 视频（seedance2.5 放宽）', () => {
+	const video25 = () =>
+		jimengConfig({ model: 'seedance2.5', aspectRatio: '16:9', imageSize: '720p', params: { duration: '10' } });
+	// seedance2.5 的能力片段（与 media/jimeng-models.jsonc 一致）：纯音频许可 + 放宽上限
+	const caps25: JimengVideoCap = { max: { image: 30, video: 10, audio: 10 }, allowAudioOnly: true };
+	// 旧 seedance 家族基线（纯音频应被拒）
+	const legacyVideo = () => jimengConfig({ model: 'seedance2.0', aspectRatio: '16:9', imageSize: '720p' });
+
+	test('seedance2.5 允许纯音频参考（其余家族拒绝）', () => {
+		const args = buildSubmitArgs(video25(), 'p', ['D:\\bgm.mp3'], 1, caps25);
+		assert.strictEqual(args[0], 'multimodal2video');
+		assert.ok(args.includes('--audio=D:\\bgm.mp3'));
+		assert.ok(args.includes('--model_version=seedance2.5'));
+		// 旧模型纯音频仍报错（不传 caps 回落默认上限）
+		assert.throws(() => buildSubmitArgs(legacyVideo(), 'p', ['D:\\bgm.mp3'], 1), /至少一张图片或一段视频/);
+	});
+
+	test('seedance2.5 素材上限放宽到 图30/视频10/音频10', () => {
+		const images31 = Array.from({ length: 31 }, (_, i) => `D:\\${i}.png`);
+		assert.throws(() => buildSubmitArgs(video25(), 'p', images31, 1, caps25), /图片 31\/30/);
+		// 图 30 张不报错
+		const images30 = Array.from({ length: 30 }, (_, i) => `D:\\${i}.png`);
+		assert.doesNotThrow(() => buildSubmitArgs(video25(), 'p', images30, 1, caps25));
+		// 视频 10 个 + 音频 10 个不报错；11 个报错
+		const videos10 = Array.from({ length: 10 }, (_, i) => `D:\\${i}.mp4`);
+		const audios10 = Array.from({ length: 10 }, (_, i) => `D:\\${i}.mp3`);
+		assert.doesNotThrow(() => buildSubmitArgs(video25(), 'p', [...videos10, ...audios10], 1, caps25));
+		const videos11 = Array.from({ length: 11 }, (_, i) => `D:\\${i}.mp4`);
+		assert.throws(() => buildSubmitArgs(video25(), 'p', videos11, 1, caps25), /视频 11\/10/);
 	});
 });
 

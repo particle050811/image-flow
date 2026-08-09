@@ -1,6 +1,7 @@
 import { type ReactNode, useState, useRef, useEffect } from 'react';
 import type { CustomParam, WebviewImageModel } from '../shared';
 import { qualifiedModel } from '../modelOptions';
+import { jimengVideoSeries } from '../backend/providers';
 
 /** 带标签的字段容器；className 可叠加（如参数行里给自定义参数列单独配宽度） */
 export function Field({
@@ -124,6 +125,10 @@ function usePopover() {
 /**
  * 「模型」弹层：与「参数」弹层同风格的面板，按渠道分节、每行两个模型卡片，
  * 选中项蓝框高亮（同比例卡片的选中态）。点选后关闭（单选一次完成）。
+ * 视频模型按系列分组渲染：同系列的成对模型（VIP + 非 VIP）并排一行占两格，
+ * 单模型系列（如 mini / 2.5）只占一格（该行另一半留空）——不横跨整行。
+ * 系列顺序（mini→fast→原版→2.5、组内 VIP 在前）由后端 buildJimengProvider 保证，
+ * 本组件仅按系列键分组展示，不重排。
  */
 export function ModelSelect({
 	label,
@@ -164,30 +169,56 @@ export function ModelSelect({
 				</button>
 				{open && (
 					<div className="ratio-pop param-pop model-pop" role="dialog" aria-label={label}>
-						{groups.map((g) => (
-							<div className="param-section" key={g.label}>
-								<div className="param-title">{g.label}</div>
-								<div className="model-grid">
-									{g.items.map((m) => {
-										const selected = m.provider === provider && m.model === model;
-										return (
-											<button
-												key={qualifiedModel(m.provider, m.model)}
-												type="button"
-												aria-pressed={selected}
-												className={`param-chip model-item${selected ? ' selected' : ''}`}
-												onClick={() => {
-													onChange(qualifiedModel(m.provider, m.model));
-													setOpen(false);
-												}}
-											>
-												{m.label}
-											</button>
-										);
-									})}
+						{groups.map((g) => {
+							// 视频模型按系列分组成行：同系列两张并排、单张只占一格。
+							// 用「每行 2 个」的模型网格，单模型系列占一列（另一列留空），不跨行。
+							// 非视频模型（生图/自定义）保持原两列流式排布。
+							const videoItems = g.items.filter((m) => m.video);
+							const staticItems = g.items.filter((m) => !m.video);
+							const videoRows: WebviewImageModel[][] = [];
+							for (const m of videoItems) {
+								const series = jimengVideoSeries(m.model);
+								const row = videoRows.find((r) => jimengVideoSeries(r[0].model) === series);
+								if (row && row.length < 2) {
+									row.push(m);
+								} else {
+									videoRows.push([m]);
+								}
+							}
+							const renderItem = (m: WebviewImageModel) => {
+								const selected = m.provider === provider && m.model === model;
+								return (
+									<button
+										key={qualifiedModel(m.provider, m.model)}
+										type="button"
+										aria-pressed={selected}
+										className={`param-chip model-item${selected ? ' selected' : ''}`}
+										onClick={() => {
+											onChange(qualifiedModel(m.provider, m.model));
+											setOpen(false);
+										}}
+									>
+										{m.label}
+									</button>
+								);
+							};
+							return (
+								<div className="param-section" key={g.label}>
+									<div className="param-title">{g.label}</div>
+									{staticItems.length > 0 && (
+										<div className="model-grid">
+											{staticItems.map((m) => renderItem(m))}
+										</div>
+									)}
+									{videoRows.map((row) => (
+										<div className="model-grid" key={row[0].model}>
+											{row.map((m) => renderItem(m))}
+											{row.length === 1 && <span className="model-grid-gap" />}
+										</div>
+									))}
 								</div>
-							</div>
-						))}
+							);
+						})}
 					</div>
 				)}
 			</div>

@@ -96,71 +96,188 @@ export const BUILTIN_GRSAI: RuntimeProvider = {
 };
 
 // —— 内置即梦（官方 dreamina CLI，鉴权在 CLI 侧，无 baseUrl/apiKey）—— //
-// 档位为 2026-07-12 `dreamina <cmd> -h` 实测值。只在前端渲染档位，后端不收敛（memory backend-no-capability-clamp）。
-
-/** 生图比例档位（text2image / image2image 同一套） */
-const JIMENG_IMAGE_RATIOS = ['21:9', '16:9', '3:2', '4:3', '1:1', '3:4', '2:3', '9:16'];
-/** 生图分辨率档位：仅收 4.x/5.0 模型（image2image 不支持 3.x），全部支持 2k/4k */
-const JIMENG_IMAGE_SIZES = ['2k', '4k'];
-/** 全能参考（multimodal2video）比例档位 */
-const JIMENG_VIDEO_RATIOS = ['1:1', '3:4', '16:9', '4:3', '9:16', '21:9'];
-/** 视频时长档位（秒），multimodal2video 支持 4-15s；作为自定义参数下发前端渲染 */
-const JIMENG_DURATION: CustomParam = {
-	key: 'duration',
-	label: '时长（秒）',
-	options: Array.from({ length: 12 }, (_, i) => String(i + 4)),
-	default: '5',
-};
+// 模型能力表来自 media/jimeng-models.jsonc（providerRuntime 启动读入缓存，见 builtinJimeng）。
+// 档位为 `dreamina <cmd> -h` 实测值。只在前端渲染档位，后端不收敛（memory backend-no-capability-clamp）。
 
 /** 判断即梦模型是否为视频模型（seedance 家族走全能参考 multimodal2video） */
 export function isJimengVideoModel(model: string): boolean {
 	return model.startsWith('seedance');
 }
 
-function jimengImage(version: string): RuntimeImageModel {
-	return {
-		model: version,
-		label: `即梦生图 ${version}`,
+/** 即梦生图模型能力（jimeng-models.jsonc 的 imageModels 项） */
+export interface JimengImageSpec {
+	model: string;
+	label: string;
+}
+
+/** 即梦视频模型能力片段：全能参考分类型素材上限 + 是否允许纯音频参考（供 CLI 适配器提交前校验） */
+export interface JimengVideoCap {
+	max: { image: number; video: number; audio: number };
+	allowAudioOnly: boolean;
+}
+
+/** 即梦视频模型能力（jimeng-models.jsonc 的 videoModels 项） */
+export interface JimengVideoSpec {
+	model: string;
+	label: string;
+	/** video_resolution 档位 */
+	sizes: string[];
+	/** 时长区间（秒，闭区间） */
+	duration: [number, number];
+	/** 全能参考分类型素材上限 */
+	max: { image: number; video: number; audio: number };
+	/** 是否允许纯音频参考（seedance2.5 专属） */
+	allowAudioOnly: boolean;
+}
+
+/** 即梦模型能力表（media/jimeng-models.jsonc 全量） */
+export interface JimengModelData {
+	imageRatios: string[];
+	imageSizes: string[];
+	imageModels: JimengImageSpec[];
+	videoRatios: string[];
+	videoModels: JimengVideoSpec[];
+}
+
+/** 按模型查视频能力片段；非视频模型/未知模型返回 undefined（适配器回落通用值） */
+export function jimengVideoCaps(data: JimengModelData, model: string): JimengVideoCap | undefined {
+	const v = data.videoModels.find((x) => x.model === model);
+	return v ? { max: v.max, allowAudioOnly: v.allowAudioOnly } : undefined;
+}
+
+/** 时长区间 → 秒档位列表 */
+function durationOptions([min, max]: [number, number]): string[] {
+	return Array.from({ length: max - min + 1 }, (_, i) => String(min + i));
+}
+
+/**
+ * 即梦视频模型的系列键：剥掉 seedance 前缀与 _vip 后缀，同系列的 VIP 与非 VIP 归到一组。
+ * 例：seedance2.0_vip → 2.0、seedance2.0fast_vip → 2.0fast、seedance2.0mini → 2.0mini。
+ */
+export function jimengVideoSeries(model: string): string {
+	return model.replace(/^seedance/i, '').replace(/_vip$/, '');
+}
+
+/** 系列展示序：mini → fast → 原版 → 2.5（2.5 无 mini/fast 后缀，单列末尾）。
+ *  先查通用变体（mini/fast）再查版本特例（2.5），未来若出 seedance2.5mini 之类
+ *  变体也会归入对应 mini/fast 系列而非误判成 2.5 原版。 */
+function seriesRank(series: string): number {
+	if (series.includes('mini')) {
+		return 0;
+	}
+	if (series.includes('fast')) {
+		return 1;
+	}
+	if (series.startsWith('2.5')) {
+		return 3;
+	}
+	return 2;
+}
+
+/** 即梦视频模型排序：系列序 mini→fast→原版→2.5，组内 VIP（_vip 后缀）在前 */
+export function compareJimengVideo(a: string, b: string): number {
+	const d = seriesRank(jimengVideoSeries(a)) - seriesRank(jimengVideoSeries(b));
+	if (d !== 0) {
+		return d;
+	}
+	return (a.endsWith('_vip') ? 0 : 1) - (b.endsWith('_vip') ? 0 : 1);
+}
+
+/** 从能力表数据构建即梦 Provider（纯函数，可直测） */
+export function buildJimengProvider(data: JimengModelData): RuntimeProvider {
+	const image: RuntimeImageModel[] = data.imageModels.map((m) => ({
+		model: m.model,
+		label: m.label,
 		adapter: 'jimeng-cli',
-		aspectRatios: JIMENG_IMAGE_RATIOS,
-		imageSizes: JIMENG_IMAGE_SIZES,
+		aspectRatios: data.imageRatios,
+		imageSizes: data.imageSizes,
 		maxConcurrency: DEFAULT_MAX_CONCURRENCY,
 		custom: [],
-	};
+	}));
+	// 视频模型按系列排序（VIP 组内在前）：前端弹层按此顺序渲染，便于选择
+	const sortedVideos = [...data.videoModels].sort((a, b) => compareJimengVideo(a.model, b.model));
+	for (const v of sortedVideos) {
+		const duration: CustomParam = {
+			key: 'duration',
+			label: '时长（秒）',
+			options: durationOptions(v.duration),
+			default: '5',
+		};
+		image.push({
+			model: v.model,
+			label: v.label,
+			adapter: 'jimeng-cli',
+			aspectRatios: data.videoRatios,
+			// 复用分辨率档位下拉渲染 video_resolution
+			imageSizes: v.sizes,
+			// 视频生成昂贵：并发限 1~4，默认 720p / 16:9 / 并发 1
+			maxConcurrency: 4,
+			video: true,
+			defaults: { aspectRatio: '16:9', imageSize: '720p', concurrency: 1 },
+			custom: [duration],
+		});
+	}
+	return { id: JIMENG_PROVIDER_ID, label: JIMENG_LABEL, image, chat: [] };
 }
 
-function jimengVideo(model: string, label: string, resolutions: string[]): RuntimeImageModel {
-	return {
-		model,
-		label,
-		adapter: 'jimeng-cli',
-		aspectRatios: JIMENG_VIDEO_RATIOS,
-		// 复用分辨率档位下拉渲染 video_resolution
-		imageSizes: resolutions,
-		// 视频生成昂贵：并发限 1~4，默认 720p / 16:9 / 并发 1
-		maxConcurrency: 4,
-		video: true,
-		defaults: { aspectRatio: '16:9', imageSize: '720p', concurrency: 1 },
-		custom: [JIMENG_DURATION],
-	};
-}
-
-/** 内置即梦 Provider：模型固定，鉴权走本机 dreamina CLI 登录态，无 url/key、无对话模型 */
-export const BUILTIN_JIMENG: RuntimeProvider = {
-	id: JIMENG_PROVIDER_ID,
-	label: JIMENG_LABEL,
-	image: [
-		// 生图只保留 5.0（旧版本模型按产品决策砍掉；3.x 本就因不支持 image2image 不收）
-		jimengImage('5.0'),
-		// 视频（全能参考）：仅 2.0_vip 支持 1080p/4k，其余固定 720p
-		jimengVideo('seedance2.0', 'Seedance 2.0', ['720p']),
-		jimengVideo('seedance2.0fast', 'Seedance 2.0 Fast', ['720p']),
-		jimengVideo('seedance2.0_vip', 'Seedance 2.0 VIP', ['720p', '1080p', '4k']),
-		jimengVideo('seedance2.0fast_vip', 'Seedance 2.0 Fast VIP', ['720p']),
-		jimengVideo('seedance2.0mini', 'Seedance 2.0 Mini', ['720p']),
-	],
-	chat: [],
+/** 能力表损坏/缺失时的回落数据：仅生图 5.0，渠道保持可用 */
+export const JIMENG_MINIMAL_MODEL_DATA: JimengModelData = {
+	imageRatios: ['21:9', '16:9', '3:2', '4:3', '1:1', '3:4', '2:3', '9:16'],
+	imageSizes: ['2k', '4k'],
+	imageModels: [{ model: '5.0', label: '即梦生图 5.0' }],
+	videoRatios: [],
+	videoModels: [],
 };
+
+/** 校验能力表形状：数组字段、每个视频模型的 duration 区间合法（min≤max）、上限全为正数 */
+export function isValidJimengData(raw: unknown): raw is JimengModelData {
+	if (!raw || typeof raw !== 'object') {
+		return false;
+	}
+	const o = raw as Record<string, unknown>;
+	const isStrArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+	if (!isStrArray(o.imageRatios) || !isStrArray(o.imageSizes) || !isStrArray(o.videoRatios)) {
+		return false;
+	}
+	const isModel = (v: unknown): boolean => {
+		if (!v || typeof v !== 'object') {
+			return false;
+		}
+		const m = v as Record<string, unknown>;
+		if (typeof m.model !== 'string' || !m.model || typeof m.label !== 'string' || !m.label) {
+			return false;
+		}
+		return true;
+	};
+	if (!Array.isArray(o.imageModels) || !o.imageModels.every(isModel)) {
+		return false;
+	}
+	if (!Array.isArray(o.videoModels) || !o.videoModels.every((v) => {
+		if (!isModel(v)) {
+			return false;
+		}
+		const vm = v as Record<string, unknown>;
+		if (!isStrArray(vm.sizes) || vm.sizes.length === 0) {
+			return false;
+		}
+		const dur = vm.duration;
+		if (!Array.isArray(dur) || dur.length !== 2 || typeof dur[0] !== 'number' || typeof dur[1] !== 'number' || dur[0] > dur[1]) {
+			return false;
+		}
+		const max = vm.max as Record<string, unknown> | undefined;
+		if (!max || typeof max.image !== 'number' || typeof max.video !== 'number' || typeof max.audio !== 'number' ||
+			max.image < 0 || max.video < 0 || max.audio < 0) {
+			return false;
+		}
+		if (typeof vm.allowAudioOnly !== 'boolean') {
+			return false;
+		}
+		return true;
+	})) {
+		return false;
+	}
+	return true;
+}
 
 // —— settings.json 解析 —— //
 
